@@ -15,7 +15,6 @@ int main(int argc, const char* argv[])
     string input = argv[2];
     string output = argv[4];
     cerr << "Mode: " << mode << ", Input: " << input << ", Output: " << output << endl;
-
     ofstream ofs(output);
     return 0;
 }
