@@ -15,7 +15,7 @@ Project name: the YESOD compiler.
     - ast.*: AST node definitions for SysY language. (Incomplete)
     - parser.*: Parser for SysY language, generates AST from tokens. (Incomplete)
 - CTest Tests (test/):
-  - lexer_test.cpp: Tests for the lexer.
+  - currently empty.
 - Documentation (doc/):
   - koopaIR.md: Documentation for Koopa IR text format.
   - sysy.md: Documentation for the SysY language.

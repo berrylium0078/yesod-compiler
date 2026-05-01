@@ -55,3 +55,15 @@ target_link_libraries(compiler core)
 
 # Test target(s)
 enable_testing()
+
+add_executable(parser_test test/parser_test.cpp)
+set_target_properties(parser_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(parser_test core)
+
+add_test(NAME parser_test COMMAND parser_test)
+
+add_executable(koopa_generator_test test/koopa_generator_test.cpp)
+set_target_properties(koopa_generator_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(koopa_generator_test core)
+
+add_test(NAME koopa_generator_test COMMAND koopa_generator_test)
