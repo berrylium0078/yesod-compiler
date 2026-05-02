@@ -51,11 +51,15 @@ The authoritative frontend design inputs are:
     - AST payload constraints for identifiers, number literals, keywords, and operators
     - integrated lexical handling at parser boundaries
     - malformed inputs and recovery behavior
-19. Where recovery is observable, assert both the intended diagnostic category and that parsing makes forward progress to the documented synchronization point.
-20. If comments or whitespace are skipped instead of emitted as nodes, document that choice and keep it consistent with `doc/sysy-peg.md` and the AST constraints above.
-21. Update CMake or test registration only as needed to build and run the parser tests.
-22. Fix synchronization at the root cause. Do not weaken tests to preserve parser behavior that contradicts `doc/sysy-peg.md`.
-23. Validate the result with the narrowest available build and test steps for the touched frontend slice.
+19. Update tests incrementally. When a new grammar or AST feature is added, preserve the earlier test groups unless the feature introduces an intentional breaking change that makes the old expectation invalid.
+20. Treat previously existing test groups as baseline compatibility checks. If the current workspace no longer contains them, inspect git history to recover the earlier basic coverage before extending the suite.
+21. Organize tests into separate files by AST or feature-update group instead of accumulating all cases into a single monolithic test file. For example, keep basic, unary-operator, and binary-operator coverage in distinct test files when those are the current feature groups.
+22. When adding a new feature group, add a new focused test file for that group and leave existing group files intact except for necessary compatibility adjustments caused by intentional breaking changes.
+23. Where recovery is observable, assert both the intended diagnostic category and that parsing makes forward progress to the documented synchronization point.
+24. If comments or whitespace are skipped instead of emitted as nodes, document that choice and keep it consistent with `doc/sysy-peg.md` and the AST constraints above.
+25. Update CMake or test registration only as needed to build and run the parser tests.
+26. Fix synchronization at the root cause. Do not weaken tests to preserve parser behavior that contradicts `doc/sysy-peg.md`.
+27. Validate the result with the narrowest available build and test steps for the touched frontend slice.
 
 ## Output Format
 
@@ -102,7 +106,7 @@ Include:
 
 ### 5. Test Changes
 
-Summarize the parser tests you added or updated and what behavior each group covers.
+Summarize the parser tests you added or updated, how the test files are grouped, which older groups were preserved, and what behavior each group covers.
 
 ### 6. Validation
 
@@ -116,6 +120,8 @@ List only unresolved blockers, documented ambiguities, or intentionally deferred
 
 - Start from the controlling grammar and recovery rules in `doc/sysy-peg.md`, then step outward to the nearest AST and parser code that implements them.
 - Preserve unaffected productions, AST shapes, and tests when they already match the document.
+- Prefer extending the existing test suite incrementally over rewriting it wholesale. Recover earlier baseline tests from git history when needed so new feature work does not erase prior coverage.
+- Split tests by feature or AST evolution group. If the grammar grows from basic to unary to binary expressions, keep those groups in separate files rather than folding them back into one file.
 - Prefer parser-internal helpers that make memoization, ordered choice, and recovery explicit over generic control flow that hides PEG behavior.
 - Keep diagnostic categories aligned with the document's labels or recovery intent. If the document names a missing delimiter or malformed construct, reuse that distinction in code and tests.
 - If a production admits trivia but the implementation discards it, make that choice explicit in the AST and test expectations rather than leaving it implicit.

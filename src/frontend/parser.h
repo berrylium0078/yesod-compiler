@@ -18,9 +18,11 @@ enum class DiagnosticKind {
     expectedInteger,
     expectedKeyword,
     expectedSymbol,
-    missingRParen,
+    missingFuncRParen,
     malformedStmtHead,
     malformedReturnValue,
+    malformedPrimaryExp,
+    missingPrimaryRParen,
     missingSemicolon,
     missingRBrace,
     trailingInput,
@@ -67,6 +69,20 @@ private:
     [[nodiscard]] ParseResult<FuncTypeKeyword> parseFuncType(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<Block>> parseBlock(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<StmtNode>> parseStmt(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<Exp>> parseExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<LOrExp>> parseLOrExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<LAndExp>> parseLAndExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<EqExp>> parseEqExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<RelExp>> parseRelExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<AddExp>> parseAddExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<MulExp>> parseMulExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<PrimaryExp>> parsePrimaryExp(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<UnaryExp>> parseUnaryExp(int32_t offset);
+    [[nodiscard]] ParseResult<UnaryOpKeyword> parseUnaryOp(int32_t offset);
+    [[nodiscard]] ParseResult<MulOpKeyword> parseMulOp(int32_t offset);
+    [[nodiscard]] ParseResult<AddOpKeyword> parseAddOp(int32_t offset);
+    [[nodiscard]] ParseResult<RelOpKeyword> parseRelOp(int32_t offset);
+    [[nodiscard]] ParseResult<EqOpKeyword> parseEqOp(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<Number>> parseNumber(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<Identifier>> parseIdent(int32_t offset);
 
@@ -76,7 +92,8 @@ private:
     [[nodiscard]] ParseResult<int32_t> parseDecimalConst(int32_t offset);
 
     [[nodiscard]] int32_t skipTrivia(int32_t offset) const;
-    [[nodiscard]] int32_t recoverToRParen(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToFuncHeaderEnd(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToExprRParen(int32_t offset) const;
     [[nodiscard]] int32_t recoverToStmtBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToBlockEnd(int32_t offset) const;
     [[nodiscard]] bool isAtEnd(int32_t offset) const;
@@ -85,6 +102,7 @@ private:
     [[nodiscard]] bool hasKeywordBoundary(int32_t offset) const;
     [[nodiscard]] KeywordMatch matchKeyword(int32_t offset, std::string_view keyword) const;
     [[nodiscard]] KeywordMatch matchSymbol(int32_t offset, char symbol) const;
+    [[nodiscard]] KeywordMatch matchSymbol(int32_t offset, std::string_view symbol) const;
     [[nodiscard]] ParseResult<int32_t> parseBaseInteger(
         int32_t offset,
         int base,
@@ -104,6 +122,20 @@ private:
     std::unordered_map<int32_t, ParseResult<FuncTypeKeyword>> m_funcTypeMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<Block>>> m_blockMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<StmtNode>>> m_stmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<Exp>>> m_expMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<LOrExp>>> m_lOrExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<LAndExp>>> m_lAndExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<EqExp>>> m_eqExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<RelExp>>> m_relExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<AddExp>>> m_addExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<MulExp>>> m_mulExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<PrimaryExp>>> m_primaryExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<UnaryExp>>> m_unaryExpMemo;
+    std::unordered_map<int32_t, ParseResult<UnaryOpKeyword>> m_unaryOpMemo;
+    std::unordered_map<int32_t, ParseResult<MulOpKeyword>> m_mulOpMemo;
+    std::unordered_map<int32_t, ParseResult<AddOpKeyword>> m_addOpMemo;
+    std::unordered_map<int32_t, ParseResult<RelOpKeyword>> m_relOpMemo;
+    std::unordered_map<int32_t, ParseResult<EqOpKeyword>> m_eqOpMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<Number>>> m_numberMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<Identifier>>> m_identMemo;
 };

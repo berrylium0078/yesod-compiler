@@ -1,91 +1,20 @@
-#include <cstdlib>
+#include "parser_test_support.h"
 
-#include <iostream>
-#include <memory>
-#include <string>
-#include <type_traits>
-#include <utility>
-#include <variant>
-
-#include "frontend/ast.h"
-#include "frontend/parser.h"
-
-using yesod::frontend::CompUnit;
-using yesod::frontend::Diagnostic;
-using yesod::frontend::DiagnosticKind;
-using yesod::frontend::FuncDef;
-using yesod::frontend::FuncTypeKeyword;
-using yesod::frontend::Identifier;
-using yesod::frontend::Number;
-using yesod::frontend::ParseOutput;
-using yesod::frontend::Parser;
-using yesod::frontend::ReturnStmt;
-using yesod::frontend::StmtNode;
+using namespace yesod::test_support::parser;
 
 namespace {
 
-static_assert(std::is_same_v<decltype(std::declval<Identifier>().m_name), std::string>);
-static_assert(std::is_same_v<decltype(std::declval<Number>().m_value), int32_t>);
-static_assert(std::is_same_v<decltype(std::declval<FuncDef>().m_funcType), FuncTypeKeyword>);
-static_assert(std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 1);
-
-[[noreturn]] void fail(const std::string& message) {
-    std::cerr << "parser_test failure: " << message << std::endl;
-    std::exit(1);
-}
-
-void require(bool condition, const std::string& message) {
-    if (!condition) {
-        fail(message);
-    }
-}
-
-ParseOutput parseSource(const std::string& source) {
-    Parser parser(source);
-    return parser.parse();
-}
-
-std::shared_ptr<CompUnit> parseRoot(const std::string& source) {
-    auto output = parseSource(source);
-    if (!output.success()) {
-        std::string message = "expected parse success";
-        if (!output.m_diagnostics.empty()) {
-            message += ": ";
-            message += output.m_diagnostics.front().m_message;
-        }
-        fail(message);
-    }
-    return output.m_root;
-}
-
-std::shared_ptr<ReturnStmt> extractReturnStmt(const std::shared_ptr<StmtNode>& stmtNode_nn) {
-    std::shared_ptr<ReturnStmt> returnStmt;
-    std::visit(
-        [&](const auto& stmtAlt) {
-            returnStmt = stmtAlt;
-        },
-        stmtNode_nn->m_stmt);
-    require(returnStmt != nullptr, "expected return statement variant");
-    return returnStmt;
-}
-
-const Diagnostic& firstDiagnostic(const ParseOutput& output) {
-    require(!output.m_diagnostics.empty(), "expected at least one diagnostic");
-    return output.m_diagnostics.front();
-}
-
 void testMinimalFunctionParse() {
-    const std::string source = "int main(){return 42;}";
-    const auto root_nn = parseRoot(source);
+    const auto root_nn = parseRoot("int main(){return 42;}");
+    const auto returnStmt_nn = extractReturnStmt(root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
 
     require(root_nn->m_startOffset == 0, "root start offset should be the first token");
     require(root_nn->m_funcDef_nn->m_funcType == FuncTypeKeyword::intKeyword, "function type should use enum keyword");
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "main", "identifier payload should only store text");
     require(root_nn->m_funcDef_nn->m_block_nn->m_statements.size() == 1, "block should contain the single documented statement");
-
-    const auto returnStmt_nn = extractReturnStmt(root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
-    require(returnStmt_nn->m_value_nn->m_value == 42, "number literal should parse decimal values");
-    require(returnStmt_nn->m_value_nn->m_startOffset == 18, "number start offset should match source byte offset");
+    require(returnStmt_nn->m_startOffset == 11, "statement start offset should point to the return keyword");
+    require(returnStmt_nn->m_exp_nn->m_startOffset == 18, "expression start offset should match source byte offset");
+    require(evaluateExp(*returnStmt_nn->m_exp_nn) == 42, "number literal should parse decimal values");
 }
 
 void testWhitespaceIsSkippedBetweenTokens() {
@@ -96,7 +25,7 @@ void testWhitespaceIsSkippedBetweenTokens() {
     require(root_nn->m_startOffset == 3, "leading whitespace should be skipped before the first token");
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "spaced_name", "identifier should survive trivia skipping");
     require(returnStmt_nn->m_startOffset == 27, "statement start offset should point to the return keyword");
-    require(returnStmt_nn->m_value_nn->m_value == 7, "number should parse after trivia");
+    require(evaluateExp(*returnStmt_nn->m_exp_nn) == 7, "number should parse after trivia");
 }
 
 void testCommentsAreSkippedBetweenTokens() {
@@ -110,7 +39,7 @@ void testCommentsAreSkippedBetweenTokens() {
     const auto returnStmt_nn = extractReturnStmt(root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
 
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "main", "comments should be skipped instead of entering the AST");
-    require(returnStmt_nn->m_value_nn->m_value == 42, "number should parse across comments");
+    require(evaluateExp(*returnStmt_nn->m_exp_nn) == 42, "number should parse across comments");
 }
 
 void testIntegerLiteralForms() {
@@ -118,15 +47,15 @@ void testIntegerLiteralForms() {
     const auto octalRoot_nn = parseRoot("int o(){return 052;}");
     const auto hexadecimalRoot_nn = parseRoot("int h(){return 0X2a;}");
 
-    require(extractReturnStmt(decimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_value_nn->m_value == 42, "decimal literal should parse");
-    require(extractReturnStmt(octalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_value_nn->m_value == 42, "octal literal should parse");
-    require(extractReturnStmt(hexadecimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_value_nn->m_value == 42, "hexadecimal literal should parse");
+    require(evaluateExp(*extractReturnStmt(decimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_exp_nn) == 42, "decimal literal should parse");
+    require(evaluateExp(*extractReturnStmt(octalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_exp_nn) == 42, "octal literal should parse");
+    require(evaluateExp(*extractReturnStmt(hexadecimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())->m_exp_nn) == 42, "hexadecimal literal should parse");
 }
 
 void testHexOrderedChoiceWinsBeforeOctal() {
     const auto root_nn = parseRoot("int hex(){return 0x2a;}");
     const auto returnStmt_nn = extractReturnStmt(root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
-    require(returnStmt_nn->m_value_nn->m_value == 42, "0x2a must parse as a hexadecimal literal, not octal zero plus trailing input");
+    require(evaluateExp(*returnStmt_nn->m_exp_nn) == 42, "0x2a must parse as a hexadecimal literal, not octal zero plus trailing input");
 }
 
 void testMalformedInputsFailWithFocusedDiagnostics() {
@@ -145,10 +74,10 @@ void testMalformedInputsFailWithFocusedDiagnostics() {
     require(missingBrace.m_root != nullptr, "missing closing brace should recover at EOF and still build the root");
     require(firstDiagnostic(missingBrace).m_kind == DiagnosticKind::missingRBrace, "missing closing brace should report the PEG recovery label");
 
-    const auto missingRParen = parseSource("int main( {return 1;}");
-    require(!missingRParen.success(), "missing ')' should produce a recovery diagnostic");
-    require(missingRParen.m_root != nullptr, "missing ')' should recover before the block and still build the root");
-    require(firstDiagnostic(missingRParen).m_kind == DiagnosticKind::missingRParen, "missing ')' should report the PEG recovery label");
+    const auto missingFuncRParen = parseSource("int main( {return 1;}");
+    require(!missingFuncRParen.success(), "missing ')' should produce a recovery diagnostic");
+    require(missingFuncRParen.m_root != nullptr, "missing ')' should recover before the block and still build the root");
+    require(firstDiagnostic(missingFuncRParen).m_kind == DiagnosticKind::missingFuncRParen, "missing ')' should report the PEG recovery label");
 
     const auto malformedStmtHead = parseSource("int main(){nope}");
     require(!malformedStmtHead.success(), "malformed statement head should fail");
