@@ -9,8 +9,10 @@
 #include "koopa/mykoopa.h"
 
 namespace {
+using namespace yesod::koopa;
 
-std::string readTextFile(const std::string& path) {
+std::string readTextFile(const std::string& path)
+{
     std::ifstream inputStream(path);
     if (!inputStream) {
         throw std::runtime_error("failed to open input file: " + path);
@@ -21,17 +23,20 @@ std::string readTextFile(const std::string& path) {
     return buffer.str();
 }
 
-void printDiagnostics(const yesod::frontend::ParseOutput& parseOutput) {
+void printDiagnostics(const yesod::frontend::ParseOutput& parseOutput)
+{
     for (const auto& diagnostic : parseOutput.m_diagnostics) {
         std::cerr << "parse error at offset " << diagnostic.m_offset << ": "
                   << diagnostic.m_message << std::endl;
     }
 }
 
-bool writeKoopaProgramToFile(const ::koopa::Program& program, const std::string& path) {
-    auto rawProgram = ::koopa::Program::dumpRaw(&program);
+bool writeKoopaProgramToFile(const Program& program, const std::string& path)
+{
+    auto rawProgram = Program::dumpRaw(&program);
     koopa_program_t koopaProgram = nullptr;
-    if (koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram) != KOOPA_EC_SUCCESS) {
+    if (koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram)
+        != KOOPA_EC_SUCCESS) {
         return false;
     }
 
@@ -40,11 +45,13 @@ bool writeKoopaProgramToFile(const ::koopa::Program& program, const std::string&
     return dumpResult == KOOPA_EC_SUCCESS;
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, const char* argv[]) {
+int main(int argc, const char* argv[])
+{
     if (argc != 5 || std::string(argv[3]) != "-o") {
-        std::cerr << "Usage: " << argv[0] << " <mode> <input> -o <output>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <mode> <input> -o <output>"
+                  << std::endl;
         return 1;
     }
 
@@ -66,8 +73,9 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
-        yesod::koopa_ir::Generator generator;
-        std::unique_ptr<::koopa::Program> program(generator.generate(*parseOutput.m_root));
+        Generator generator;
+        std::unique_ptr<Program> program(
+            generator.generate(*parseOutput.m_root));
         if (!writeKoopaProgramToFile(*program, outputPath)) {
             std::cerr << "failed to generate koopa IR" << std::endl;
             return 1;

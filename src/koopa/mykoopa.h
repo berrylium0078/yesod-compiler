@@ -9,7 +9,7 @@
 
 #include "koopa.h"
 
-namespace koopa {
+namespace yesod::koopa {
 using std::map;
 using std::pair;
 using std::string;
@@ -167,7 +167,8 @@ class ArrayType : public Type {
     {
         if (Other.isArrayType()) {
             const ArrayType& OtherArray = dynamic_cast<const ArrayType&>(Other);
-            return *getElementType() == *OtherArray.getElementType() && getNumElements() == OtherArray.getNumElements();
+            return *getElementType() == *OtherArray.getElementType()
+                && getNumElements() == OtherArray.getNumElements();
         } else {
             return false;
         }
@@ -207,7 +208,8 @@ class PointerType : public Type {
     bool operator==(const Type& Other) const
     {
         if (Other.isPointerType()) {
-            const PointerType& OtherPointer = dynamic_cast<const PointerType&>(Other);
+            const PointerType& OtherPointer
+                = dynamic_cast<const PointerType&>(Other);
             return *getPointeeType() == *OtherPointer.getPointeeType();
         } else {
             return false;
@@ -249,8 +251,7 @@ class FunctionType : public Type {
         }
         return Entry;
     }
-    static FunctionType* get(Type* ResultType,
-        const vector<Type*>&& ParamTypes)
+    static FunctionType* get(Type* ResultType, const vector<Type*>&& ParamTypes)
     {
         return get(ResultType, ParamTypes);
     }
@@ -258,11 +259,13 @@ class FunctionType : public Type {
     bool operator==(const Type& Other) const
     {
         if (Other.isFunctionType()) {
-            const FunctionType& OtherFunction = dynamic_cast<const FunctionType&>(Other);
+            const FunctionType& OtherFunction
+                = dynamic_cast<const FunctionType&>(Other);
             if (*getResultType() == *OtherFunction.getResultType()) {
                 if (getNumParams() == OtherFunction.getNumParams()) {
                     for (size_t i = 0; i != getNumParams(); ++i) {
-                        if (!(*getParamType(i) == *OtherFunction.getParamType(i))) {
+                        if (!(*getParamType(i)
+                                == *OtherFunction.getParamType(i))) {
                             return false;
                         }
                     }
@@ -342,17 +345,26 @@ class Value {
     bool isZeroInitValue() const { return getTag() == KOOPA_RVT_ZERO_INIT; }
     bool isUndefValue() const { return getTag() == KOOPA_RVT_UNDEF; }
     bool isAggregateValue() const { return getTag() == KOOPA_RVT_AGGREGATE; }
-    bool isFuncArgRefValue() const { return getTag() == KOOPA_RVT_FUNC_ARG_REF; }
+    bool isFuncArgRefValue() const
+    {
+        return getTag() == KOOPA_RVT_FUNC_ARG_REF;
+    }
     bool isBlockArgRefValue() const
     {
         return getTag() == KOOPA_RVT_BLOCK_ARG_REF;
     }
     bool isAllocValue() const { return getTag() == KOOPA_RVT_ALLOC; }
-    bool isGlobalAllocValue() const { return getTag() == KOOPA_RVT_GLOBAL_ALLOC; }
+    bool isGlobalAllocValue() const
+    {
+        return getTag() == KOOPA_RVT_GLOBAL_ALLOC;
+    }
     bool isLoadValue() const { return getTag() == KOOPA_RVT_LOAD; }
     bool isStoreValue() const { return getTag() == KOOPA_RVT_STORE; }
     bool isGetPtrValue() const { return getTag() == KOOPA_RVT_GET_PTR; }
-    bool isGetElemPtrValue() const { return getTag() == KOOPA_RVT_GET_ELEM_PTR; }
+    bool isGetElemPtrValue() const
+    {
+        return getTag() == KOOPA_RVT_GET_ELEM_PTR;
+    }
     bool isBinaryValue() const { return getTag() == KOOPA_RVT_BINARY; }
     bool isBranchValue() const { return getTag() == KOOPA_RVT_BRANCH; }
     bool isJumpValue() const { return getTag() == KOOPA_RVT_JUMP; }
@@ -474,7 +486,8 @@ class AggregateValue : public Value {
 
     static AggregateValue* get(vector<Value*>&& Elements, Type* VType)
     {
-        assert(VType->isArrayType() && "aggregate value should have array type");
+        assert(
+            VType->isArrayType() && "aggregate value should have array type");
         return new AggregateValue(std::move(Elements), VType);
     }
     static AggregateValue* get(const vector<Value*>& Elements, Type* VType)
@@ -579,7 +592,8 @@ class GlobalAllocValue : public Value {
 
     static GlobalAllocValue* get(Value* InitVal, string&& Name = "")
     {
-        assert(InitVal->canBeInitializer() && "the init val of global alloc value must be initializer");
+        assert(InitVal->canBeInitializer()
+            && "the init val of global alloc value must be initializer");
         return new GlobalAllocValue(InitVal, std::move(Name));
     }
 
@@ -608,7 +622,8 @@ class LoadValue : public Value {
 
     static LoadValue* get(Value* Source, string&& Name = "")
     {
-        assert(Source->getVType()->isPointerType() && "the source of load value should have pointer type");
+        assert(Source->getVType()->isPointerType()
+            && "the source of load value should have pointer type");
         return new LoadValue(Source, std::move(Name));
     }
 
@@ -638,9 +653,12 @@ class StoreValue : public Value {
 
     static StoreValue* get(Value* Val, Value* Destination)
     {
-        assert(Destination->getVType()->isPointerType() && "the destination of store value should have pointer type");
-        Type* PointeeType = dynamic_cast<PointerType*>(Destination->getVType())->getPointeeType();
-        assert(*PointeeType == *Val->getVType() && "the value of store value should have compatible type");
+        assert(Destination->getVType()->isPointerType()
+            && "the destination of store value should have pointer type");
+        Type* PointeeType = dynamic_cast<PointerType*>(Destination->getVType())
+                                ->getPointeeType();
+        assert(*PointeeType == *Val->getVType()
+            && "the value of store value should have compatible type");
         return new StoreValue(Val, Destination);
     }
 
@@ -670,8 +688,10 @@ class GetPtrValue : public Value {
 
     static GetPtrValue* get(Value* Source, Value* Index, string&& Name = "")
     {
-        assert(Source->getVType()->isPointerType() && "the source of getptr value should have pointer type");
-        assert(Index->getVType()->isInt32Type() && "the index of getptr value should have integer type");
+        assert(Source->getVType()->isPointerType()
+            && "the source of getptr value should have pointer type");
+        assert(Index->getVType()->isInt32Type()
+            && "the index of getptr value should have integer type");
         return new GetPtrValue(Source, Index, std::move(Name));
     }
 
@@ -686,8 +706,7 @@ class GetElemPtrValue : public Value {
     Value* Index;
 
     GetElemPtrValue(Value* Source, Value* Index, string&& Name)
-        : Value(
-              KOOPA_RVT_GET_ELEM_PTR,
+        : Value(KOOPA_RVT_GET_ELEM_PTR,
               PointerType::get(dynamic_cast<ArrayType*>(
                   dynamic_cast<PointerType*>(Source->getVType())
                       ->getPointeeType())
@@ -707,10 +726,16 @@ class GetElemPtrValue : public Value {
 
     static GetElemPtrValue* get(Value* Source, Value* Index, string&& Name = "")
     {
-        assert(Source->getVType()->isPointerType() && "the source of getelemptr value should have pointer-of-array type");
-        Type* PointeeType = dynamic_cast<PointerType*>(Source->getVType())->getPointeeType();
-        assert(PointeeType->isArrayType() && "the source of getelemptr value should have pointer-of-array type");
-        assert(Index->getVType()->isInt32Type() && "the index of getelemptr value should have integer type");
+        assert(Source->getVType()->isPointerType()
+            && "the source of getelemptr value should have pointer-of-array "
+               "type");
+        Type* PointeeType
+            = dynamic_cast<PointerType*>(Source->getVType())->getPointeeType();
+        assert(PointeeType->isArrayType()
+            && "the source of getelemptr value should have pointer-of-array "
+               "type");
+        assert(Index->getVType()->isInt32Type()
+            && "the index of getelemptr value should have integer type");
         return new GetElemPtrValue(Source, Index, std::move(Name));
     }
 
@@ -741,10 +766,11 @@ class BinaryValue : public Value {
     Value* getLhs() const { return Lhs; }
     Value* getRhs() const { return Rhs; }
 
-    static BinaryValue* get(koopa_raw_binary_op Op, Value* Lhs, Value* Rhs,
-        string&& Name)
+    static BinaryValue* get(
+        koopa_raw_binary_op Op, Value* Lhs, Value* Rhs, string&& Name)
     {
-        assert(Lhs->getVType()->isInt32Type() && Rhs->getVType()->isInt32Type() && "the lhs and rhs of binary value should have integer type");
+        assert(Lhs->getVType()->isInt32Type() && Rhs->getVType()->isInt32Type()
+            && "the lhs and rhs of binary value should have integer type");
         return new BinaryValue(Op, Lhs, Rhs, std::move(Name));
     }
     static BinaryValue* getNotEqual(Value* Lhs, Value* Rhs, string&& Name = "")
@@ -763,8 +789,8 @@ class BinaryValue : public Value {
     {
         return get(KOOPA_RBO_LT, Lhs, Rhs, std::move(Name));
     }
-    static BinaryValue* getGreaterEqual(Value* Lhs, Value* Rhs,
-        string&& Name = "")
+    static BinaryValue* getGreaterEqual(
+        Value* Lhs, Value* Rhs, string&& Name = "")
     {
         return get(KOOPA_RBO_GE, Lhs, Rhs, std::move(Name));
     }
@@ -792,8 +818,8 @@ class BinaryValue : public Value {
     {
         return get(KOOPA_RBO_MOD, Lhs, Rhs, std::move(Name));
     }
-    static BinaryValue* getBitwiseAnd(Value* Lhs, Value* Rhs,
-        string&& Name = "")
+    static BinaryValue* getBitwiseAnd(
+        Value* Lhs, Value* Rhs, string&& Name = "")
     {
         return get(KOOPA_RBO_AND, Lhs, Rhs, std::move(Name));
     }
@@ -801,8 +827,8 @@ class BinaryValue : public Value {
     {
         return get(KOOPA_RBO_OR, Lhs, Rhs, std::move(Name));
     }
-    static BinaryValue* getBitwiseXor(Value* Lhs, Value* Rhs,
-        string&& Name = "")
+    static BinaryValue* getBitwiseXor(
+        Value* Lhs, Value* Rhs, string&& Name = "")
     {
         return get(KOOPA_RBO_XOR, Lhs, Rhs, std::move(Name));
     }
@@ -857,8 +883,8 @@ class BranchValue : public Value {
     Value* getFalseArg(size_t i) const { return FalseArgs[i]; }
     const vector<Value*>& falseArgs() const { return FalseArgs; }
 
-    static BranchValue* get(Value*, BasicBlock*, vector<Value*>&&,
-        BasicBlock*, vector<Value*>&&);
+    static BranchValue* get(
+        Value*, BasicBlock*, vector<Value*>&&, BasicBlock*, vector<Value*>&&);
     static BranchValue* get(Value* Condition, BasicBlock* TrueBB,
         const vector<Value*>& TrueArgs, BasicBlock* FalseBB,
         const vector<Value*>& FalseArgs)
@@ -921,8 +947,8 @@ class CallValue : public Value {
     const vector<Value*>& args() const { return Args; }
 
     static CallValue* get(Function*, vector<Value*>&&, string&& = "");
-    static CallValue* get(Function* Callee, const vector<Value*>& Args,
-        const string& Name = "")
+    static CallValue* get(
+        Function* Callee, const vector<Value*>& Args, const string& Name = "")
     {
         return get(Callee, vector<Value*>(Args), string(Name));
     }
@@ -1031,14 +1057,13 @@ class BasicBlock {
     static BasicBlock* get(bool IsEntry, vector<Value*>&& Params,
         vector<Value*>&& Insts, string&& Name = "")
     {
-        BasicBlock* BB = new BasicBlock(IsEntry, std::move(Params),
-            std::move(Insts), std::move(Name));
+        BasicBlock* BB = new BasicBlock(
+            IsEntry, std::move(Params), std::move(Insts), std::move(Name));
         BB->validate();
         return BB;
     }
     static BasicBlock* get(bool IsEntry, const vector<Value*>& Params,
-        const vector<Value*>& Insts,
-        const string& Name = "")
+        const vector<Value*>& Insts, const string& Name = "")
     {
         return get(IsEntry, vector<Value*>(Params), vector<Value*>(Insts),
             string(Name));
@@ -1099,14 +1124,13 @@ class Function {
     static Function* get(Type* FuncType, vector<Value*>&& Params,
         vector<BasicBlock*>&& BBs, string&& Name = "")
     {
-        Function* Func = new Function(FuncType, std::move(Params), std::move(BBs),
-            std::move(Name));
+        Function* Func = new Function(
+            FuncType, std::move(Params), std::move(BBs), std::move(Name));
         Func->validate();
         return Func;
     }
     static Function* get(Type* FuncType, const vector<Value*>& Params,
-        const vector<BasicBlock*>& BBs,
-        const string& Name = "")
+        const vector<BasicBlock*>& BBs, const string& Name = "")
     {
         return get(FuncType, vector<Value*>(Params), vector<BasicBlock*>(BBs),
             string(Name));
@@ -1164,13 +1188,13 @@ class Program {
         vector<Value*>&& Vals, vector<Function*>&& Funcs)
     {
         for (Value* Val : Vals) {
-            assert(Val->isGlobalAllocValue() && "global value should be global alloc");
+            assert(Val->isGlobalAllocValue()
+                && "global value should be global alloc");
         }
         return new Program(Builder, std::move(Vals), std::move(Funcs));
     }
     static Program* get(koopa_raw_program_builder_t Builder,
-        const vector<Value*>& Vals,
-        const vector<Function*>& Funcs)
+        const vector<Value*>& Vals, const vector<Function*>& Funcs)
     {
         return get(Builder, vector<Value*>(Vals), vector<Function*>(Funcs));
     }
@@ -1178,7 +1202,8 @@ class Program {
     static Program* create() { return get(nullptr, {}, {}); }
     void pushVal(Value* Val)
     {
-        assert(Val->isGlobalAllocValue() && "global value should be global alloc");
+        assert(
+            Val->isGlobalAllocValue() && "global value should be global alloc");
         Vals.push_back(Val);
     }
     void pushFunc(Function* Func) { Funcs.push_back(Func); }

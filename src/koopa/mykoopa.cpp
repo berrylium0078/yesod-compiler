@@ -1,6 +1,6 @@
 #include "mykoopa.h"
 
-namespace koopa {
+namespace yesod::koopa {
 void Int32Type::accept(TypeVisitor& visitor) { visitor.visitInt32(*this); }
 void UnitType::accept(TypeVisitor& visitor) { visitor.visitUnit(*this); }
 void ArrayType::accept(TypeVisitor& visitor) { visitor.visitArray(*this); }
@@ -44,15 +44,16 @@ Type* Type::fromRaw(koopa_raw_type_t RawType)
             Entry = UnitType::get();
             break;
         case KOOPA_RTT_ARRAY:
-            Entry = ArrayType::get(fromRaw(RawType->data.array.base),
-                RawType->data.array.len);
+            Entry = ArrayType::get(
+                fromRaw(RawType->data.array.base), RawType->data.array.len);
             break;
         case KOOPA_RTT_POINTER:
             Entry = PointerType::get(fromRaw(RawType->data.pointer.base));
             break;
         case KOOPA_RTT_FUNCTION: {
             Type* ResultType = fromRaw(RawType->data.function.ret);
-            vector<Type*>& ParamTypes = fromSlice(RawType->data.function.params);
+            vector<Type*>& ParamTypes
+                = fromSlice(RawType->data.function.params);
             Entry = FunctionType::get(ResultType, ParamTypes);
             break;
         }
@@ -212,7 +213,8 @@ Value* Value::fromRaw(koopa_raw_value_t RawValue)
             Entry = UndefValue::get(Type::fromRaw(RawValue->ty));
             break;
         case KOOPA_RVT_AGGREGATE:
-            Entry = AggregateValue::get(fromSlice(RawValue->kind.data.aggregate.elems),
+            Entry = AggregateValue::get(
+                fromSlice(RawValue->kind.data.aggregate.elems),
                 Type::fromRaw(RawValue->ty));
             break;
         case KOOPA_RVT_FUNC_ARG_REF:
@@ -220,20 +222,23 @@ Value* Value::fromRaw(koopa_raw_value_t RawValue)
                 Type::fromRaw(RawValue->ty));
             break;
         case KOOPA_RVT_BLOCK_ARG_REF:
-            Entry = BlockArgRefValue::get(RawValue->kind.data.block_arg_ref.index,
-                Type::fromRaw(RawValue->ty));
+            Entry
+                = BlockArgRefValue::get(RawValue->kind.data.block_arg_ref.index,
+                    Type::fromRaw(RawValue->ty));
             break;
         case KOOPA_RVT_ALLOC:
-            Entry = AllocValue::get(Type::fromRaw(RawValue->ty->data.pointer.base),
+            Entry = AllocValue::get(
+                Type::fromRaw(RawValue->ty->data.pointer.base),
                 std::move(Name));
             break;
         case KOOPA_RVT_GLOBAL_ALLOC:
             Entry = GlobalAllocValue::get(
-                fromRaw(RawValue->kind.data.global_alloc.init), std::move(Name));
+                fromRaw(RawValue->kind.data.global_alloc.init),
+                std::move(Name));
             break;
         case KOOPA_RVT_LOAD:
-            Entry = LoadValue::get(fromRaw(RawValue->kind.data.load.src),
-                std::move(Name));
+            Entry = LoadValue::get(
+                fromRaw(RawValue->kind.data.load.src), std::move(Name));
             break;
         case KOOPA_RVT_STORE:
             Entry = StoreValue::get(fromRaw(RawValue->kind.data.store.value),
@@ -241,13 +246,13 @@ Value* Value::fromRaw(koopa_raw_value_t RawValue)
             break;
         case KOOPA_RVT_GET_PTR:
             Entry = GetPtrValue::get(fromRaw(RawValue->kind.data.get_ptr.src),
-                fromRaw(RawValue->kind.data.get_ptr.index),
-                std::move(Name));
+                fromRaw(RawValue->kind.data.get_ptr.index), std::move(Name));
             break;
         case KOOPA_RVT_GET_ELEM_PTR:
             Entry = GetElemPtrValue::get(
                 fromRaw(RawValue->kind.data.get_elem_ptr.src),
-                fromRaw(RawValue->kind.data.get_elem_ptr.index), std::move(Name));
+                fromRaw(RawValue->kind.data.get_elem_ptr.index),
+                std::move(Name));
             break;
         case KOOPA_RVT_BINARY:
             Entry = BinaryValue::get(
@@ -256,8 +261,7 @@ Value* Value::fromRaw(koopa_raw_value_t RawValue)
                 fromRaw(RawValue->kind.data.binary.rhs), std::move(Name));
             break;
         case KOOPA_RVT_BRANCH:
-            Entry = BranchValue::get(
-                fromRaw(RawValue->kind.data.branch.cond),
+            Entry = BranchValue::get(fromRaw(RawValue->kind.data.branch.cond),
                 BasicBlock::fromRaw(false, RawValue->kind.data.branch.true_bb),
                 fromSlice(RawValue->kind.data.branch.true_args),
                 BasicBlock::fromRaw(false, RawValue->kind.data.branch.false_bb),
@@ -269,14 +273,16 @@ Value* Value::fromRaw(koopa_raw_value_t RawValue)
                 fromSlice(RawValue->kind.data.jump.args));
             break;
         case KOOPA_RVT_CALL:
-            Entry = CallValue::get(Function::fromRaw(RawValue->kind.data.call.callee),
+            Entry = CallValue::get(
+                Function::fromRaw(RawValue->kind.data.call.callee),
                 fromSlice(RawValue->kind.data.call.args), Name);
             break;
         case KOOPA_RVT_RETURN:
             if (RawValue->kind.data.ret.value == nullptr) {
                 Entry = ReturnValue::get(nullptr);
             } else {
-                Entry = ReturnValue::get(fromRaw(RawValue->kind.data.ret.value));
+                Entry
+                    = ReturnValue::get(fromRaw(RawValue->kind.data.ret.value));
             }
             break;
         default:
@@ -396,21 +402,24 @@ koopa_raw_value_t BinaryValue::dumpRawImpl() const
 }
 
 BranchValue* BranchValue::get(Value* Condition, BasicBlock* TrueBB,
-    vector<Value*>&& TrueArgs, BasicBlock* FalseBB,
-    vector<Value*>&& FalseArgs)
+    vector<Value*>&& TrueArgs, BasicBlock* FalseBB, vector<Value*>&& FalseArgs)
 {
-    assert(Condition->getVType()->isInt32Type() && "the condition of branch value should have integer type");
-    assert(!TrueBB->isEntry() && !FalseBB->isEntry() && "branch value should not jump to entry block");
+    assert(Condition->getVType()->isInt32Type()
+        && "the condition of branch value should have integer type");
+    assert(!TrueBB->isEntry() && !FalseBB->isEntry()
+        && "branch value should not jump to entry block");
     assert(TrueBB->getNumParams() == TrueArgs.size() && "arity should match");
     for (size_t i = 0; i != TrueBB->getNumParams(); ++i) {
-        assert(*TrueBB->getParam(i)->getVType() == *TrueArgs[i]->getVType() && "signature should match");
+        assert(*TrueBB->getParam(i)->getVType() == *TrueArgs[i]->getVType()
+            && "signature should match");
     }
     assert(FalseBB->getNumParams() == FalseArgs.size() && "arity should match");
     for (size_t i = 0; i != FalseBB->getNumParams(); ++i) {
-        assert(*FalseBB->getParam(i)->getVType() == *FalseArgs[i]->getVType() && "signature should match");
+        assert(*FalseBB->getParam(i)->getVType() == *FalseArgs[i]->getVType()
+            && "signature should match");
     }
-    return new BranchValue(Condition, TrueBB, std::move(TrueArgs), FalseBB,
-        std::move(FalseArgs));
+    return new BranchValue(
+        Condition, TrueBB, std::move(TrueArgs), FalseBB, std::move(FalseArgs));
 }
 
 koopa_raw_value_t BranchValue::dumpRawImpl() const
@@ -429,7 +438,8 @@ JumpValue* JumpValue::get(BasicBlock* TargetBB, vector<Value*>&& Args)
     assert(!TargetBB->isEntry() && "jump value should not jump to entry block");
     assert(TargetBB->getNumParams() == Args.size() && "arity should match");
     for (size_t i = 0; i != TargetBB->getNumParams(); ++i) {
-        assert(*TargetBB->getParam(i)->getVType() == *Args[i]->getVType() && "signature should match");
+        assert(*TargetBB->getParam(i)->getVType() == *Args[i]->getVType()
+            && "signature should match");
     }
     return new JumpValue(TargetBB, std::move(Args));
 }
@@ -443,8 +453,7 @@ koopa_raw_value_t JumpValue::dumpRawImpl() const
 }
 
 CallValue::CallValue(Function* Callee, vector<Value*>&& Args, string&& Name)
-    : Value(
-          KOOPA_RVT_CALL,
+    : Value(KOOPA_RVT_CALL,
           dynamic_cast<FunctionType*>(Callee->getFuncType())->getResultType(),
           std::move(Name))
     , Callee(Callee)
@@ -452,13 +461,15 @@ CallValue::CallValue(Function* Callee, vector<Value*>&& Args, string&& Name)
 {
 }
 
-CallValue* CallValue::get(Function* Callee, vector<Value*>&& Args,
-    string&& Name)
+CallValue* CallValue::get(
+    Function* Callee, vector<Value*>&& Args, string&& Name)
 {
-    assert(Callee->getFuncType()->isFunctionType() && "the callee of call value should have function type");
+    assert(Callee->getFuncType()->isFunctionType()
+        && "the callee of call value should have function type");
     assert(Callee->getNumParams() == Args.size() && "arity should match");
     for (size_t i = 0; i != Callee->getNumParams(); ++i) {
-        assert(*Callee->getParam(i)->getVType() == *Args[i]->getVType() && "signature should match");
+        assert(*Callee->getParam(i)->getVType() == *Args[i]->getVType()
+            && "signature should match");
     }
     return new CallValue(Callee, std::move(Args), std::move(Name));
 }
@@ -485,9 +496,11 @@ koopa_raw_value_t ReturnValue::dumpRawImpl() const
 void BasicBlock::validate() const
 {
     assert(insts().size() > 0 && "basic block should not be empty");
-    assert(insts().back()->canTerminateBlock() && "basic block should end with terminator");
+    assert(insts().back()->canTerminateBlock()
+        && "basic block should end with terminator");
     for (size_t i = 0; i < insts().size() - 1; ++i) {
-        assert(!getInst(i)->canTerminateBlock() && "basic block should contain only one terminator");
+        assert(!getInst(i)->canTerminateBlock()
+            && "basic block should contain only one terminator");
     }
 }
 
@@ -518,8 +531,8 @@ koopa_raw_basic_block_t BasicBlock::dumpRaw(const BasicBlock* BB)
     return Entry;
 }
 
-void BasicBlock::dumpSlice(koopa_raw_slice_t& Slice,
-    const vector<BasicBlock*>& Vec)
+void BasicBlock::dumpSlice(
+    koopa_raw_slice_t& Slice, const vector<BasicBlock*>& Vec)
 {
     Slice.kind = KOOPA_RSIK_BASIC_BLOCK;
     Slice.len = Vec.size();
@@ -551,7 +564,8 @@ vector<BasicBlock*>& BasicBlock::fromSlice(const koopa_raw_slice_t& Slice)
         vector<BasicBlock*>& Entry = Memo[{ Slice.buffer, Slice.len }];
         Entry.resize(Slice.len);
         for (size_t i = 0; i != Slice.len; ++i) {
-            Entry[i] = fromRaw(i == 0, (koopa_raw_basic_block_t)Slice.buffer[i]);
+            Entry[i]
+                = fromRaw(i == 0, (koopa_raw_basic_block_t)Slice.buffer[i]);
         }
         return Entry;
     } else {
@@ -561,11 +575,13 @@ vector<BasicBlock*>& BasicBlock::fromSlice(const koopa_raw_slice_t& Slice)
 
 void Function::validate() const
 {
-    assert(getFuncType()->isFunctionType() && "function should have function type");
+    assert(getFuncType()->isFunctionType()
+        && "function should have function type");
     FunctionType* FType = dynamic_cast<FunctionType*>(getFuncType());
     assert(FType->getNumParams() == getNumParams() && "arity should match");
     for (size_t i = 0; i < FType->getNumParams(); ++i) {
-        assert(*FType->getParamType(i) == *getParam(i)->getVType() && "signature should match");
+        assert(*FType->getParamType(i) == *getParam(i)->getVType()
+            && "signature should match");
     }
     assert(getNumBBs() > 0 && "function body should not be empty");
     for (BasicBlock* BB : bbs()) {
@@ -601,8 +617,7 @@ koopa_raw_function_t Function::dumpRaw(const Function* Func)
     return Entry;
 }
 
-void Function::dumpSlice(koopa_raw_slice_t& Slice,
-    const vector<Function*>& Vec)
+void Function::dumpSlice(koopa_raw_slice_t& Slice, const vector<Function*>& Vec)
 {
     Slice.kind = KOOPA_RSIK_FUNCTION;
     Slice.len = Vec.size();
@@ -648,7 +663,8 @@ Program* Program::validate()
     }
     koopa_raw_program_t RawProg = dumpRaw(this);
     koopa_program_t Prog;
-    assert(koopa_generate_raw_to_koopa(&RawProg, &Prog) == KOOPA_EC_SUCCESS && "koopa validation is not passed");
+    assert(koopa_generate_raw_to_koopa(&RawProg, &Prog) == KOOPA_EC_SUCCESS
+        && "koopa validation is not passed");
     koopa_dump_to_stdout(Prog);
     koopa_raw_program_builder_t Builder = koopa_new_raw_program_builder();
     RawProg = koopa_build_raw_program(Builder, Prog);
@@ -664,8 +680,8 @@ koopa_raw_program_t Program::dumpRaw(const Program* Prog)
     return RawProg;
 }
 
-Program* Program::fromRaw(koopa_raw_program_builder_t Builder,
-    koopa_raw_program_t RawProg)
+Program* Program::fromRaw(
+    koopa_raw_program_builder_t Builder, koopa_raw_program_t RawProg)
 {
     return get(Builder, Value::fromSlice(RawProg.values),
         Function::fromSlice(RawProg.funcs));
