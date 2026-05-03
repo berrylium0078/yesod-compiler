@@ -18,8 +18,8 @@ class Generator {
   private:
     [[nodiscard]] Function* generateFuncDef(
         const frontend::semantic::FuncDef& funcDef) const;
-    [[nodiscard]] BasicBlock* generateBlock(
-        const frontend::semantic::Block& block, int32_t& nextTempId,
+    void generateBlock(const frontend::semantic::Block& block,
+        BasicBlock& basicBlock, BasicBlock& endBlock, int32_t& nextTempId,
         std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
         std::unordered_set<std::string>& usedSymbolNames)
         const;
@@ -62,6 +62,8 @@ class Generator {
         int32_t& nextTempId) const;
     [[nodiscard]] Value* generateNumber(
         const frontend::semantic::Number& number) const;
+    [[nodiscard]] bool blockHasTerminator(const BasicBlock& basicBlock) const;
+    void finalizeBasicBlock(BasicBlock& basicBlock, BasicBlock& endBlock) const;
     [[nodiscard]] std::string makeUniqueLocalName(
         const frontend::semantic::Symbol& symbol,
         std::unordered_set<std::string>& usedSymbolNames) const;

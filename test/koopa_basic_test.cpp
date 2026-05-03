@@ -20,11 +20,30 @@ void testGeneratorBuildsExpectedWrapperObjects()
         "minimal function should not emit parameters");
 
     const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
     require(basicBlock->getNumInsts() == 1,
         "literal return should only contain the return instruction");
+    require(endBlock->getNumInsts() == 1,
+        "guard end block should contain only the synthesized default return");
 
     const auto* returnValue = requireReturn(basicBlock->getInst(0));
     requireInteger(returnValue->getVal(), 42);
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
+}
+
+void testEmptyFunctionFallsThroughToGuardReturn()
+{
+    auto program = generateProgram("int main(){/*I am empty*/}");
+    const auto* function = requireOnlyFunction(*program);
+    const auto* entryBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
+
+    require(entryBlock->getNumInsts() == 1,
+        "empty function body should synthesize a jump to the guard block");
+    (void)requireJump(entryBlock->getInst(0), endBlock);
+    require(endBlock->getNumInsts() == 1,
+        "guard end block should contain only the synthesized default return");
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testGeneratedProgramValidatesWithKoopa()
@@ -44,6 +63,7 @@ void testGeneratedProgramValidatesWithKoopa()
 int main()
 {
     testGeneratorBuildsExpectedWrapperObjects();
+    testEmptyFunctionFallsThroughToGuardReturn();
     testGeneratedProgramValidatesWithKoopa();
     return 0;
 }

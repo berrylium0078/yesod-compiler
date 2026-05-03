@@ -57,26 +57,35 @@ Function* Generator::generateFuncDef(
         = Function::create(FunctionType::get(lowerFuncType(funcDef.m_funcType),
                                std::vector<Type*> {}),
             makeFunctionName(funcDef.m_identifier));
-    function->pushBB(generateBlock(requireNode(funcDef.m_block_nn,
-                              "function definition is missing a block"),
-        nextTempId, storageBySymbol, usedSymbolNames));
+    auto* entryBlock = BasicBlock::createEntry("%entry");
+    auto* endBlock = BasicBlock::createNonEntry("%end");
+    generateBlock(requireNode(funcDef.m_block_nn,
+                      "function definition is missing a block"),
+        *entryBlock, *endBlock, nextTempId, storageBySymbol, usedSymbolNames);
+    finalizeBasicBlock(*entryBlock, *endBlock);
+    endBlock->pushInst(ReturnValue::get(IntegerValue::get(0)));
+    entryBlock->validate();
+    endBlock->validate();
+    function->pushBB(entryBlock);
+    function->pushBB(endBlock);
     function->validate();
     return function;
 }
 
-BasicBlock* Generator::generateBlock(const frontend::semantic::Block& block,
-    int32_t& nextTempId,
+void Generator::generateBlock(const frontend::semantic::Block& block,
+    BasicBlock& basicBlock, BasicBlock& endBlock, int32_t& nextTempId,
     std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
     std::unordered_set<std::string>& usedSymbolNames)
     const
 {
-    auto* basicBlock = BasicBlock::createEntry("%entry");
     for (const auto& blockItem : block.m_blockItems) {
+        if (blockHasTerminator(basicBlock)) {
+            break;
+        }
         generateBlockItem(requireNode(blockItem, "block contains a null item"),
-            *basicBlock, nextTempId, storageBySymbol, usedSymbolNames);
+            basicBlock, nextTempId, storageBySymbol, usedSymbolNames);
     }
-    basicBlock->validate();
-    return basicBlock;
+    finalizeBasicBlock(basicBlock, endBlock);
 }
 
 void Generator::generateBlockItem(
@@ -86,6 +95,10 @@ void Generator::generateBlockItem(
     std::unordered_set<std::string>& usedSymbolNames)
     const
 {
+    if (blockHasTerminator(basicBlock)) {
+        return;
+    }
+
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
@@ -173,6 +186,9 @@ void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
                 const auto& nestedBlock
                     = requireNode(stmtAlt, "block statement is null");
                 for (const auto& blockItem : nestedBlock.m_blockItems) {
+                    if (blockHasTerminator(basicBlock)) {
+                        break;
+                    }
                     generateBlockItem(requireNode(
                                           blockItem,
                                           "nested block contains a null item"),
@@ -390,6 +406,22 @@ BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
 Value* Generator::generateNumber(const frontend::semantic::Number& number) const
 {
     return IntegerValue::get(number.m_value);
+}
+
+bool Generator::blockHasTerminator(const BasicBlock& basicBlock) const
+{
+    return basicBlock.getNumInsts() > 0
+        && basicBlock.getInst(basicBlock.getNumInsts() - 1)->canTerminateBlock();
+}
+
+void Generator::finalizeBasicBlock(
+    BasicBlock& basicBlock, BasicBlock& endBlock) const
+{
+    if (blockHasTerminator(basicBlock)) {
+        return;
+    }
+
+    basicBlock.pushInst(JumpValue::get(&endBlock, {}));
 }
 
 std::string Generator::makeUniqueLocalName(

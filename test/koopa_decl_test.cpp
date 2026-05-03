@@ -8,10 +8,14 @@ void testVarDeclarationAssignmentAndReturnLowering()
 {
     auto program = generateProgram(
         "int main(){int value = 1; value = value + 2; return value;}");
-    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+    const auto* function = requireOnlyFunction(*program);
+    const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 7,
         "var declaration and assignment should emit alloc/store/load/add/store/load/return");
+    require(endBlock->getNumInsts() == 1,
+        "guard end block should contain only the synthesized default return");
 
     const auto* allocValue = requireAlloc(basicBlock->getInst(0), "%value");
 
@@ -35,6 +39,7 @@ void testVarDeclarationAssignmentAndReturnLowering()
         = requireLoad(basicBlock->getInst(5), allocValue, "%3");
     require(requireReturn(basicBlock->getInst(6))->getVal() == returnLoad,
         "return should use a freshly loaded variable value");
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testDeclarationProgramValidatesWithKoopa()
@@ -55,10 +60,13 @@ void testShadowedNamesGetUniqueKoopaStorage()
 {
     auto program = generateProgram(
         "int main(){int x = 1; {x; int x = 2; x;} {int x = 3; x;} x; return x;}");
-    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+    const auto* function = requireOnlyFunction(*program);
+    const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 12,
         "shadowed scope example should emit unique storage for both inner blocks and keep outer loads distinct");
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 
     const auto* outerAlloc = requireAlloc(basicBlock->getInst(0), "%x");
     const auto* outerInitStore = requireStore(basicBlock->getInst(1), outerAlloc);

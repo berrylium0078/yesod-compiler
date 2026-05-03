@@ -7,31 +7,40 @@ namespace {
 void testArithmeticPrecedenceLowering()
 {
     auto program = generateProgram("int main(){return 1 + 2 * 3;}");
-    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+    const auto* function = requireOnlyFunction(*program);
+    const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 1,
         "constant arithmetic should fold to a literal return");
     requireInteger(requireReturn(basicBlock->getInst(0))->getVal(), 7);
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testComparisonAndEqualityLowering()
 {
     auto program = generateProgram("int main(){return 1 + 2 * 3 <= 7 == 1;}");
-    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+    const auto* function = requireOnlyFunction(*program);
+    const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 1,
         "constant comparison chain should fold to a literal return");
     requireInteger(requireReturn(basicBlock->getInst(0))->getVal(), 1);
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testLogicalOperatorsBooleanizeOperands()
 {
     auto program = generateProgram("int main(){return 2 && 0 || 5;}");
-    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+    const auto* function = requireOnlyFunction(*program);
+    const auto* basicBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 1,
         "constant logical expressions should fold to a literal return");
     requireInteger(requireReturn(basicBlock->getInst(0))->getVal(), 1);
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testGeneratedProgramValidatesWithKoopa()

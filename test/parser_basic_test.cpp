@@ -87,6 +87,13 @@ void testIntegerLiteralForms()
         "hexadecimal literal should parse");
 }
 
+    void testEmptyBlockParses()
+    {
+        const auto root_nn = parseRoot("int main(){/*I am empty*/}");
+        require(root_nn->m_funcDef_nn->m_block_nn->m_blockItems.empty(),
+        "block grammar should allow zero block items");
+    }
+
 void testHexOrderedChoiceWinsBeforeOctal()
 {
     const auto root_nn = parseRoot("int hex(){return 0x2a;}");
@@ -175,6 +182,7 @@ int main()
     testWhitespaceIsSkippedBetweenTokens();
     testCommentsAreSkippedBetweenTokens();
     testIntegerLiteralForms();
+    testEmptyBlockParses();
     testHexOrderedChoiceWinsBeforeOctal();
     testMalformedInputsFailWithFocusedDiagnostics();
     testOutOfRangeIntegerFails();

@@ -73,12 +73,23 @@ inline const Function* requireOnlyFunction(const Program& program)
 
 inline const BasicBlock* requireEntryBlock(const Function& function)
 {
-    require(function.getNumBBs() == 1, "expected one basic block");
+    require(function.getNumBBs() == 2,
+        "expected entry block plus synthesized guard end block");
     const auto* basicBlock = function.getBB(0);
-    require(
-        basicBlock->isEntry(), "single basic block should be the entry block");
+    require(basicBlock->isEntry(), "first basic block should be the entry block");
     require(basicBlock->getName() == "%entry",
         "entry block should use the documented label");
+    return basicBlock;
+}
+
+inline const BasicBlock* requireEndBlock(const Function& function)
+{
+    require(function.getNumBBs() == 2,
+        "expected entry block plus synthesized guard end block");
+    const auto* basicBlock = function.getBB(1);
+    require(!basicBlock->isEntry(), "guard end block should not be the entry block");
+    require(basicBlock->getName() == "%end",
+        "guard end block should use the documented label");
     return basicBlock;
 }
 
@@ -153,6 +164,20 @@ inline const ReturnValue* requireReturn(const Value* value)
     const auto* returnValue = dynamic_cast<const ReturnValue*>(value);
     require(returnValue != nullptr, "expected return instruction cast");
     return returnValue;
+}
+
+inline const JumpValue* requireJump(
+    const Value* value, const BasicBlock* expectedTarget)
+{
+    require(value != nullptr, "expected jump value");
+    require(value->isJumpValue(), "expected jump instruction");
+    const auto* jumpValue = dynamic_cast<const JumpValue*>(value);
+    require(jumpValue != nullptr, "expected jump instruction cast");
+    require(jumpValue->getTargetBB() == expectedTarget,
+        "jump instruction should target the expected basic block");
+    require(jumpValue->getNumArgs() == 0,
+        "current subset should not emit block arguments on jumps");
+    return jumpValue;
 }
 
 } // namespace yesod::test_support::koopa
