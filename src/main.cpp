@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 
+#include "backend/riscv.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
@@ -54,6 +55,18 @@ bool writeKoopaProgramToFile(const Program& program, const std::string& path)
     return dumpResult == KOOPA_EC_SUCCESS;
 }
 
+bool writeRiscvProgramToFile(const Program& program, const std::string& path)
+{
+    std::ofstream outputStream(path);
+    if (!outputStream) {
+        return false;
+    }
+
+    yesod::backend::RiscvGenerator generator;
+    generator.generate(program, outputStream);
+    return outputStream.good();
+}
+
 } // namespace
 
 int main(int argc, const char* argv[])
@@ -68,7 +81,7 @@ int main(int argc, const char* argv[])
     const std::string inputPath = argv[2];
     const std::string outputPath = argv[4];
 
-    if (mode != "-koopa") {
+    if (mode != "-koopa" && mode != "-riscv") {
         std::cerr << "unsupported mode: " << mode << std::endl;
         return 1;
     }
@@ -93,9 +106,16 @@ int main(int argc, const char* argv[])
         Generator generator;
         std::unique_ptr<Program> program(
             generator.generate(*semanticOutput.m_root));
-        if (!writeKoopaProgramToFile(*program, outputPath)) {
-            std::cerr << "failed to generate koopa IR" << std::endl;
-            return 1;
+        if (mode == "-koopa") {
+            if (!writeKoopaProgramToFile(*program, outputPath)) {
+                std::cerr << "failed to generate koopa IR" << std::endl;
+                return 1;
+            }
+        } else {
+            if (!writeRiscvProgramToFile(*program, outputPath)) {
+                std::cerr << "failed to generate RISC-V assembly" << std::endl;
+                return 1;
+            }
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << std::endl;

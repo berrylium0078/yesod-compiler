@@ -115,3 +115,8 @@ add_executable(koopa_decl_test test/koopa_decl_test.cpp)
 set_target_properties(koopa_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(koopa_decl_test core)
 add_test(NAME koopa_decl_test COMMAND koopa_decl_test)
+
+add_executable(backend_riscv_test test/backend_riscv_test.cpp)
+set_target_properties(backend_riscv_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(backend_riscv_test core)
+add_test(NAME backend_riscv_test COMMAND backend_riscv_test)
