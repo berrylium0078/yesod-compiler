@@ -19,10 +19,15 @@ enum class DiagnosticKind {
     expectedKeyword,
     expectedSymbol,
     missingFuncRParen,
+    malformedBlockItem,
+    malformedDeclItem,
+    missingDeclSemicolon,
     malformedStmtHead,
+    malformedAssignValue,
     malformedReturnValue,
     malformedPrimaryExp,
     missingPrimaryRParen,
+    missingAssignSemicolon,
     missingSemicolon,
     missingRBrace,
     trailingInput,
@@ -71,7 +76,32 @@ class Parser {
     [[nodiscard]] ParseResult<FuncTypeKeyword> parseFuncType(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<Block>> parseBlock(
         int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<BlockItemNode>> parseBlockItem(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<DeclNode>> parseDecl(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ConstDecl>> parseConstDecl(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<VarDecl>> parseVarDecl(
+        int32_t offset);
+    [[nodiscard]] ParseResult<BTypeKeyword> parseBType(int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ConstDef>> parseConstDef(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ConstInitVal>> parseConstInitVal(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<VarDef>> parseVarDef(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<InitVal>> parseInitVal(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ConstExp>> parseConstExp(
+        int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<StmtNode>> parseStmt(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<AssignStmt>> parseAssignStmt(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ExpStmt>> parseExpStmt(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ReturnStmt>> parseReturnStmt(
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<Exp>> parseExp(int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<LOrExp>> parseLOrExp(
@@ -90,6 +120,7 @@ class Parser {
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<UnaryExp>> parseUnaryExp(
         int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<LVal>> parseLVal(int32_t offset);
     [[nodiscard]] ParseResult<UnaryOpKeyword> parseUnaryOp(int32_t offset);
     [[nodiscard]] ParseResult<MulOpKeyword> parseMulOp(int32_t offset);
     [[nodiscard]] ParseResult<AddOpKeyword> parseAddOp(int32_t offset);
@@ -108,7 +139,9 @@ class Parser {
     [[nodiscard]] int32_t skipTrivia(int32_t offset) const;
     [[nodiscard]] int32_t recoverToFuncHeaderEnd(int32_t offset) const;
     [[nodiscard]] int32_t recoverToExprRParen(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToDeclBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToStmtBoundary(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToBlockItemBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToBlockEnd(int32_t offset) const;
     [[nodiscard]] bool isAtEnd(int32_t offset) const;
     [[nodiscard]] bool isIdentifierStart(char ch) const;
@@ -139,8 +172,33 @@ class Parser {
     std::unordered_map<int32_t, ParseResult<FuncTypeKeyword>> m_funcTypeMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<Block>>>
         m_blockMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<BlockItemNode>>>
+        m_blockItemMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<DeclNode>>>
+        m_declMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ConstDecl>>>
+        m_constDeclMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<VarDecl>>>
+        m_varDeclMemo;
+    std::unordered_map<int32_t, ParseResult<BTypeKeyword>> m_bTypeMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ConstDef>>>
+        m_constDefMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ConstInitVal>>>
+        m_constInitValMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<VarDef>>>
+        m_varDefMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<InitVal>>>
+        m_initValMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ConstExp>>>
+        m_constExpMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<StmtNode>>>
         m_stmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<AssignStmt>>>
+        m_assignStmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ExpStmt>>>
+        m_expStmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ReturnStmt>>>
+        m_returnStmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<Exp>>> m_expMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<LOrExp>>>
         m_lOrExpMemo;
@@ -158,6 +216,7 @@ class Parser {
         m_primaryExpMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<UnaryExp>>>
         m_unaryExpMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<LVal>>> m_lValMemo;
     std::unordered_map<int32_t, ParseResult<UnaryOpKeyword>> m_unaryOpMemo;
     std::unordered_map<int32_t, ParseResult<MulOpKeyword>> m_mulOpMemo;
     std::unordered_map<int32_t, ParseResult<AddOpKeyword>> m_addOpMemo;

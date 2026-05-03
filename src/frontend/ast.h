@@ -24,6 +24,10 @@ enum class FuncTypeKeyword {
     intKeyword,
 };
 
+enum class BTypeKeyword {
+    intKeyword,
+};
+
 enum class UnaryOpKeyword {
     plus,
     minus,
@@ -70,6 +74,21 @@ struct AddExp;
 struct MulExp;
 struct PrimaryExp;
 struct UnaryExp;
+struct LVal;
+struct ConstExp;
+struct ConstInitVal;
+struct InitVal;
+struct ConstDef;
+struct VarDef;
+struct ConstDecl;
+struct VarDecl;
+struct DeclNode;
+struct AssignStmt;
+struct ExpStmt;
+struct ReturnStmt;
+struct StmtNode;
+struct BlockItemNode;
+struct Block;
 
 struct Identifier final : AstNode {
     Identifier(int32_t startOffset, std::string name)
@@ -91,8 +110,19 @@ struct Number final : AstNode {
     int32_t m_value;
 };
 
+struct LVal final : AstNode {
+    LVal(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn)
+        : AstNode(startOffset)
+        , m_identifier_nn(std::move(identifier_nn))
+    {
+    }
+
+    std::shared_ptr<Identifier> m_identifier_nn;
+};
+
 struct PrimaryExp final : AstNode {
-    using Kind = std::variant<std::shared_ptr<Exp>, std::shared_ptr<Number>>;
+    using Kind = std::variant<std::shared_ptr<Exp>, std::shared_ptr<LVal>,
+        std::shared_ptr<Number>>;
 
     PrimaryExp(int32_t startOffset, Kind kind)
         : AstNode(startOffset)
@@ -216,6 +246,123 @@ struct Exp final : AstNode {
     std::shared_ptr<LOrExp> m_lOrExp_nn;
 };
 
+struct ConstExp final : AstNode {
+    ConstExp(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
+        : AstNode(startOffset)
+        , m_exp_nn(std::move(exp_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_exp_nn;
+};
+
+struct ConstInitVal final : AstNode {
+    ConstInitVal(int32_t startOffset, std::shared_ptr<ConstExp> constExp_nn)
+        : AstNode(startOffset)
+        , m_constExp_nn(std::move(constExp_nn))
+    {
+    }
+
+    std::shared_ptr<ConstExp> m_constExp_nn;
+};
+
+struct InitVal final : AstNode {
+    InitVal(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
+        : AstNode(startOffset)
+        , m_exp_nn(std::move(exp_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_exp_nn;
+};
+
+struct ConstDef final : AstNode {
+    ConstDef(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn,
+        std::shared_ptr<ConstInitVal> constInitVal_nn)
+        : AstNode(startOffset)
+        , m_identifier_nn(std::move(identifier_nn))
+        , m_constInitVal_nn(std::move(constInitVal_nn))
+    {
+    }
+
+    std::shared_ptr<Identifier> m_identifier_nn;
+    std::shared_ptr<ConstInitVal> m_constInitVal_nn;
+};
+
+struct VarDef final : AstNode {
+    VarDef(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn,
+        std::shared_ptr<InitVal> initVal_nn)
+        : AstNode(startOffset)
+        , m_identifier_nn(std::move(identifier_nn))
+        , m_initVal_nn(std::move(initVal_nn))
+    {
+    }
+
+    std::shared_ptr<Identifier> m_identifier_nn;
+    std::shared_ptr<InitVal> m_initVal_nn;
+};
+
+struct ConstDecl final : AstNode {
+    ConstDecl(int32_t startOffset, BTypeKeyword bType,
+        std::vector<std::shared_ptr<ConstDef>> constDefs)
+        : AstNode(startOffset)
+        , m_bType(bType)
+        , m_constDefs(std::move(constDefs))
+    {
+    }
+
+    BTypeKeyword m_bType;
+    std::vector<std::shared_ptr<ConstDef>> m_constDefs;
+};
+
+struct VarDecl final : AstNode {
+    VarDecl(int32_t startOffset, BTypeKeyword bType,
+        std::vector<std::shared_ptr<VarDef>> varDefs)
+        : AstNode(startOffset)
+        , m_bType(bType)
+        , m_varDefs(std::move(varDefs))
+    {
+    }
+
+    BTypeKeyword m_bType;
+    std::vector<std::shared_ptr<VarDef>> m_varDefs;
+};
+
+using Decl = std::variant<std::shared_ptr<ConstDecl>, std::shared_ptr<VarDecl>>;
+
+struct DeclNode final : AstNode {
+    DeclNode(int32_t startOffset, Decl decl)
+        : AstNode(startOffset)
+        , m_decl(std::move(decl))
+    {
+    }
+
+    Decl m_decl;
+};
+
+struct AssignStmt final : AstNode {
+    AssignStmt(int32_t startOffset, std::shared_ptr<LVal> lVal_nn,
+        std::shared_ptr<Exp> exp_nn)
+        : AstNode(startOffset)
+        , m_lVal_nn(std::move(lVal_nn))
+        , m_exp_nn(std::move(exp_nn))
+    {
+    }
+
+    std::shared_ptr<LVal> m_lVal_nn;
+    std::shared_ptr<Exp> m_exp_nn;
+};
+
+struct ExpStmt final : AstNode {
+    ExpStmt(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
+        : AstNode(startOffset)
+        , m_exp_nn(std::move(exp_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_exp_nn;
+};
+
 struct ReturnStmt final : AstNode {
     ReturnStmt(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
         : AstNode(startOffset)
@@ -226,7 +373,8 @@ struct ReturnStmt final : AstNode {
     std::shared_ptr<Exp> m_exp_nn;
 };
 
-using Stmt = std::variant<std::shared_ptr<ReturnStmt>>;
+using Stmt = std::variant<std::shared_ptr<AssignStmt>, std::shared_ptr<Block>,
+    std::shared_ptr<ReturnStmt>, std::shared_ptr<ExpStmt>>;
 
 struct StmtNode final : AstNode {
     StmtNode(int32_t startOffset, Stmt stmt)
@@ -238,15 +386,27 @@ struct StmtNode final : AstNode {
     Stmt m_stmt;
 };
 
-struct Block final : AstNode {
-    Block(
-        int32_t startOffset, std::vector<std::shared_ptr<StmtNode>> statements)
+using BlockItem = std::variant<std::shared_ptr<DeclNode>, std::shared_ptr<StmtNode>>;
+
+struct BlockItemNode final : AstNode {
+    BlockItemNode(int32_t startOffset, BlockItem blockItem)
         : AstNode(startOffset)
-        , m_statements(std::move(statements))
+        , m_blockItem(std::move(blockItem))
     {
     }
 
-    std::vector<std::shared_ptr<StmtNode>> m_statements;
+    BlockItem m_blockItem;
+};
+
+struct Block final : AstNode {
+    Block(int32_t startOffset,
+        std::vector<std::shared_ptr<BlockItemNode>> blockItems)
+        : AstNode(startOffset)
+        , m_blockItems(std::move(blockItems))
+    {
+    }
+
+    std::vector<std::shared_ptr<BlockItemNode>> m_blockItems;
 };
 
 struct FuncDef final : AstNode {

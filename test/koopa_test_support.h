@@ -10,6 +10,7 @@
 
 #include "frontend/ast.h"
 #include "frontend/parser.h"
+#include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
 #include "koopa/mykoopa.h"
 
@@ -18,6 +19,7 @@ namespace yesod::test_support::koopa {
 using yesod::frontend::CompUnit;
 using yesod::frontend::ParseOutput;
 using yesod::frontend::Parser;
+using yesod::frontend::SemanticAnalyzer;
 using namespace yesod::koopa;
 
 static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_funcDef_nn),
@@ -53,8 +55,14 @@ inline std::shared_ptr<CompUnit> parseRoot(const std::string& source)
 
 inline std::unique_ptr<Program> generateProgram(const std::string& source)
 {
+    SemanticAnalyzer semanticAnalyzer;
+    const auto semanticOutput = semanticAnalyzer.analyze(*parseRoot(source));
+    if (!semanticOutput.success()) {
+        fail("expected semantic success before Koopa generation");
+    }
+
     Generator generator;
-    return std::unique_ptr<Program>(generator.generate(*parseRoot(source)));
+    return std::unique_ptr<Program>(generator.generate(*semanticOutput.m_root));
 }
 
 inline const Function* requireOnlyFunction(const Program& program)
@@ -98,6 +106,44 @@ inline const BinaryValue* requireBinary(const Value* value,
     require(binaryValue->getName() == expectedName,
         "binary instruction should use the expected temporary name");
     return binaryValue;
+}
+
+inline const AllocValue* requireAlloc(
+    const Value* value, const std::string& expectedName)
+{
+    require(value != nullptr, "expected alloc value");
+    require(value->isAllocValue(), "expected alloc instruction");
+    const auto* allocValue = dynamic_cast<const AllocValue*>(value);
+    require(allocValue != nullptr, "expected alloc instruction cast");
+    require(allocValue->getName() == expectedName,
+        "alloc instruction should preserve the expected storage name");
+    return allocValue;
+}
+
+inline const LoadValue* requireLoad(
+    const Value* value, const Value* expectedSource, const std::string& expectedName)
+{
+    require(value != nullptr, "expected load value");
+    require(value->isLoadValue(), "expected load instruction");
+    const auto* loadValue = dynamic_cast<const LoadValue*>(value);
+    require(loadValue != nullptr, "expected load instruction cast");
+    require(loadValue->getSource() == expectedSource,
+        "load instruction should read from the expected storage");
+    require(loadValue->getName() == expectedName,
+        "load instruction should use the expected temporary name");
+    return loadValue;
+}
+
+inline const StoreValue* requireStore(
+    const Value* value, const Value* expectedDestination)
+{
+    require(value != nullptr, "expected store value");
+    require(value->isStoreValue(), "expected store instruction");
+    const auto* storeValue = dynamic_cast<const StoreValue*>(value);
+    require(storeValue != nullptr, "expected store instruction cast");
+    require(storeValue->getDestination() == expectedDestination,
+        "store instruction should target the expected storage");
+    return storeValue;
 }
 
 inline const ReturnValue* requireReturn(const Value* value)

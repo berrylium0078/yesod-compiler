@@ -24,7 +24,13 @@ static_assert(
     std::is_same_v<decltype(std::declval<Number>().m_value), int32_t>);
 static_assert(std::is_same_v<decltype(std::declval<FuncDef>().m_funcType),
     FuncTypeKeyword>);
+static_assert(std::is_same_v<decltype(std::declval<ConstDecl>().m_bType),
+    BTypeKeyword>);
 static_assert(std::is_same_v<decltype(std::declval<ReturnStmt>().m_exp_nn),
+    std::shared_ptr<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn),
+    std::shared_ptr<LVal>>);
+static_assert(std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn),
     std::shared_ptr<Exp>>);
 static_assert(std::is_enum_v<UnaryOpKeyword>);
 static_assert(std::is_enum_v<MulOpKeyword>);
@@ -32,8 +38,13 @@ static_assert(std::is_enum_v<AddOpKeyword>);
 static_assert(std::is_enum_v<RelOpKeyword>);
 static_assert(std::is_enum_v<EqOpKeyword>);
 static_assert(
-    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 1);
-static_assert(std::variant_size_v<PrimaryExp::Kind> == 2);
+    std::variant_size_v<decltype(std::declval<DeclNode>().m_decl)> == 2);
+static_assert(
+    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 4);
+static_assert(
+    std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
+    == 2);
+static_assert(std::variant_size_v<PrimaryExp::Kind> == 3);
 static_assert(std::variant_size_v<UnaryExp::Kind> == 2);
 
 [[noreturn]] inline void fail(const std::string& message)
@@ -131,14 +142,169 @@ inline const PrimaryExp& requirePrimaryExp(
     return *primaryExp_nn;
 }
 
+inline const LVal& requireLVal(const std::shared_ptr<LVal>& lVal_nn)
+{
+    require(lVal_nn != nullptr, "expected lvalue node");
+    return *lVal_nn;
+}
+
+inline std::shared_ptr<BlockItemNode> requireBlockItem(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    require(blockItemNode_nn != nullptr, "expected block item node");
+    return blockItemNode_nn;
+}
+
+inline std::shared_ptr<StmtNode> extractStmtNode(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    std::shared_ptr<StmtNode> stmtNode;
+    std::visit(
+        [&](const auto& blockItemAlt) {
+            using AltType = std::decay_t<decltype(blockItemAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<StmtNode>>) {
+                stmtNode = blockItemAlt;
+            }
+        },
+        requireBlockItem(blockItemNode_nn)->m_blockItem);
+    require(stmtNode != nullptr, "expected statement block item variant");
+    return stmtNode;
+}
+
+inline std::shared_ptr<DeclNode> extractDeclNode(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    std::shared_ptr<DeclNode> declNode;
+    std::visit(
+        [&](const auto& blockItemAlt) {
+            using AltType = std::decay_t<decltype(blockItemAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<DeclNode>>) {
+                declNode = blockItemAlt;
+            }
+        },
+        requireBlockItem(blockItemNode_nn)->m_blockItem);
+    require(declNode != nullptr, "expected declaration block item variant");
+    return declNode;
+}
+
 inline std::shared_ptr<ReturnStmt> extractReturnStmt(
     const std::shared_ptr<StmtNode>& stmtNode_nn)
 {
     std::shared_ptr<ReturnStmt> returnStmt;
-    std::visit([&](const auto& stmtAlt) { returnStmt = stmtAlt; },
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<ReturnStmt>>) {
+                returnStmt = stmtAlt;
+            }
+        },
         stmtNode_nn->m_stmt);
     require(returnStmt != nullptr, "expected return statement variant");
     return returnStmt;
+}
+
+inline std::shared_ptr<ReturnStmt> extractReturnStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractReturnStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<AssignStmt> extractAssignStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<AssignStmt> assignStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<AssignStmt>>) {
+                assignStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(assignStmt != nullptr, "expected assignment statement variant");
+    return assignStmt;
+}
+
+inline std::shared_ptr<AssignStmt> extractAssignStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractAssignStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<ExpStmt> extractExpStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<ExpStmt> expStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<ExpStmt>>) {
+                expStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(expStmt != nullptr, "expected expression statement variant");
+    return expStmt;
+}
+
+inline std::shared_ptr<ExpStmt> extractExpStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractExpStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<Block> extractBlockStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<Block> block;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<Block>>) {
+                block = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(block != nullptr, "expected block statement variant");
+    return block;
+}
+
+inline std::shared_ptr<Block> extractBlockStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractBlockStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<ConstDecl> extractConstDecl(
+    const std::shared_ptr<DeclNode>& declNode_nn)
+{
+    std::shared_ptr<ConstDecl> constDecl;
+    std::visit(
+        [&](const auto& declAlt) {
+            using AltType = std::decay_t<decltype(declAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<ConstDecl>>) {
+                constDecl = declAlt;
+            }
+        },
+        declNode_nn->m_decl);
+    require(constDecl != nullptr, "expected const declaration variant");
+    return constDecl;
+}
+
+inline std::shared_ptr<VarDecl> extractVarDecl(
+    const std::shared_ptr<DeclNode>& declNode_nn)
+{
+    std::shared_ptr<VarDecl> varDecl;
+    std::visit(
+        [&](const auto& declAlt) {
+            using AltType = std::decay_t<decltype(declAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<VarDecl>>) {
+                varDecl = declAlt;
+            }
+        },
+        declNode_nn->m_decl);
+    require(varDecl != nullptr, "expected var declaration variant");
+    return varDecl;
 }
 
 inline int32_t evaluateExp(const Exp& exp);
@@ -286,6 +452,9 @@ inline int32_t evaluatePrimaryExp(const PrimaryExp& primaryExp)
             using AltType = std::decay_t<decltype(primaryAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<Exp>>) {
                 return evaluateExp(requireExp(primaryAlt));
+            } else if constexpr (std::is_same_v<AltType,
+                                     std::shared_ptr<LVal>>) {
+                fail("cannot evaluate lvalue-backed primary expression");
             } else {
                 return primaryAlt->m_value;
             }

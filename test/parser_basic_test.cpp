@@ -8,7 +8,7 @@ void testMinimalFunctionParse()
 {
     const auto root_nn = parseRoot("int main(){return 42;}");
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(root_nn->m_startOffset == 0,
         "root start offset should be the first token");
@@ -16,7 +16,7 @@ void testMinimalFunctionParse()
         "function type should use enum keyword");
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "main",
         "identifier payload should only store text");
-    require(root_nn->m_funcDef_nn->m_block_nn->m_statements.size() == 1,
+    require(root_nn->m_funcDef_nn->m_block_nn->m_blockItems.size() == 1,
         "block should contain the single documented statement");
     require(returnStmt_nn->m_startOffset == 11,
         "statement start offset should point to the return keyword");
@@ -32,7 +32,7 @@ void testWhitespaceIsSkippedBetweenTokens()
         = "\n \tint spaced_name ( )\n{\n  return\t7 ;\n}\n";
     const auto root_nn = parseRoot(source);
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(root_nn->m_startOffset == 3,
         "leading whitespace should be skipped before the first token");
@@ -55,7 +55,7 @@ void testCommentsAreSkippedBetweenTokens()
 
     const auto root_nn = parseRoot(source);
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "main",
         "comments should be skipped instead of entering the AST");
@@ -70,18 +70,18 @@ void testIntegerLiteralForms()
     const auto hexadecimalRoot_nn = parseRoot("int h(){return 0X2a;}");
 
     require(evaluateExp(*extractReturnStmt(
-                decimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())
+                decimalRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 42,
         "decimal literal should parse");
     require(evaluateExp(*extractReturnStmt(
-                octalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())
+                octalRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 42,
         "octal literal should parse");
     require(
         evaluateExp(*extractReturnStmt(
-            hexadecimalRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())
+            hexadecimalRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front())
                          ->m_exp_nn)
             == 42,
         "hexadecimal literal should parse");
@@ -91,7 +91,7 @@ void testHexOrderedChoiceWinsBeforeOctal()
 {
     const auto root_nn = parseRoot("int hex(){return 0x2a;}");
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == 42,
         "0x2a must parse as a hexadecimal literal, not octal zero plus "
         "trailing input");
@@ -142,7 +142,7 @@ void testMalformedInputsFailWithFocusedDiagnostics()
     require(
         !malformedStmtHead.success(), "malformed statement head should fail");
     require(firstDiagnostic(malformedStmtHead).m_kind
-            == DiagnosticKind::malformedStmtHead,
+            == DiagnosticKind::malformedBlockItem,
         "malformed statement head should report the PEG recovery label");
 
     const auto malformedReturnValue = parseSource("int main(){return ;}");

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "frontend/parser.h"
+#include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
 #include "koopa/mykoopa.h"
 
@@ -27,6 +28,14 @@ void printDiagnostics(const yesod::frontend::ParseOutput& parseOutput)
 {
     for (const auto& diagnostic : parseOutput.m_diagnostics) {
         std::cerr << "parse error at offset " << diagnostic.m_offset << ": "
+                  << diagnostic.m_message << std::endl;
+    }
+}
+
+void printDiagnostics(const yesod::frontend::SemanticOutput& semanticOutput)
+{
+    for (const auto& diagnostic : semanticOutput.m_diagnostics) {
+        std::cerr << "semantic error at offset " << diagnostic.m_offset << ": "
                   << diagnostic.m_message << std::endl;
     }
 }
@@ -73,9 +82,17 @@ int main(int argc, const char* argv[])
             return 1;
         }
 
+        yesod::frontend::SemanticAnalyzer semanticAnalyzer;
+        const auto semanticOutput
+            = semanticAnalyzer.analyze(*parseOutput.m_root);
+        if (!semanticOutput.success()) {
+            printDiagnostics(semanticOutput);
+            return 1;
+        }
+
         Generator generator;
         std::unique_ptr<Program> program(
-            generator.generate(*parseOutput.m_root));
+            generator.generate(*semanticOutput.m_root));
         if (!writeKoopaProgramToFile(*program, outputPath)) {
             std::cerr << "failed to generate koopa IR" << std::endl;
             return 1;

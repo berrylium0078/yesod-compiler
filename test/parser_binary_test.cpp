@@ -12,7 +12,7 @@ void testBinaryTriviaIsSkippedAtParserBoundaries()
           "}\n";
     const auto root_nn = parseRoot(source);
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(root_nn->m_startOffset == 2,
         "leading trivia should be skipped before the first token");
@@ -26,32 +26,32 @@ void testPrecedenceAndAssociativity()
 {
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int p(){return 1 + 2 * 3 == 7 || 0;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 1,
         "multiplicative precedence should bind tighter than additive, then "
         "equality, then logical or");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int a(){return 8 - 3 - 2;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 3,
         "additive expressions should associate left to right");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int m(){return 20 / 5 / 2;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 2,
         "multiplicative expressions should associate left to right");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int r(){return 1 < 2 == 1;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 1,
         "relational expressions should bind tighter than equality");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int l(){return 0 || 2 && 0 || 5;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 1,
         "logical and should bind tighter than logical or");
@@ -64,7 +64,7 @@ void testOrderedChoiceSensitiveOperators()
         requireLAndExp(
             requireLOrExp(
                 extractReturnStmt(
-                    relRoot_nn->m_funcDef_nn->m_block_nn->m_statements.front())
+                    relRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front())
                     ->m_exp_nn->m_lOrExp_nn)
                 .m_head_nn)
             .m_head_nn)

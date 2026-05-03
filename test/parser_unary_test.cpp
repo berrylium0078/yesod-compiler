@@ -8,25 +8,25 @@ void testUnaryOperatorsAndParentheses()
 {
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int plus(){return +42;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 42,
         "unary plus should parse");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int minus(){return -42;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == -42,
         "unary minus should parse");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int bang(){return !0;}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 1,
         "logical not should parse");
     require(evaluateExp(*extractReturnStmt(
                 parseRoot("int nested(){return -(+42);}")
-                    ->m_funcDef_nn->m_block_nn->m_statements.front())
+                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == -42,
         "nested unary expressions should parse recursively");
@@ -39,7 +39,7 @@ void testUnaryTriviaAndParenthesizedPrimary()
                                "}\n";
     const auto root_nn = parseRoot(source);
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_statements.front());
+        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == -42,
         "unary expression should parse across comments and whitespace");
@@ -77,7 +77,7 @@ void testUnaryRecoveryDiagnostics()
         "primary-expression delimiter diagnostic");
     require(
         evaluateExp(*extractReturnStmt(missingPrimaryRParen.m_root->m_funcDef_nn
-                                           ->m_block_nn->m_statements.front())
+                                           ->m_block_nn->m_blockItems.front())
                          ->m_exp_nn)
             == 1,
         "missing ')' recovery should preserve the inner expression value");

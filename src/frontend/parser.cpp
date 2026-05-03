@@ -34,7 +34,20 @@ ParseOutput Parser::parse()
     m_funcDefMemo.clear();
     m_funcTypeMemo.clear();
     m_blockMemo.clear();
+    m_blockItemMemo.clear();
+    m_declMemo.clear();
+    m_constDeclMemo.clear();
+    m_varDeclMemo.clear();
+    m_bTypeMemo.clear();
+    m_constDefMemo.clear();
+    m_constInitValMemo.clear();
+    m_varDefMemo.clear();
+    m_initValMemo.clear();
+    m_constExpMemo.clear();
     m_stmtMemo.clear();
+    m_assignStmtMemo.clear();
+    m_expStmtMemo.clear();
+    m_returnStmtMemo.clear();
     m_expMemo.clear();
     m_lOrExpMemo.clear();
     m_lAndExpMemo.clear();
@@ -44,6 +57,7 @@ ParseOutput Parser::parse()
     m_mulExpMemo.clear();
     m_primaryExpMemo.clear();
     m_unaryExpMemo.clear();
+    m_lValMemo.clear();
     m_unaryOpMemo.clear();
     m_mulOpMemo.clear();
     m_addOpMemo.clear();
@@ -252,45 +266,515 @@ ParseResult<std::shared_ptr<Block>> Parser::parseBlock(int32_t offset)
         return failure;
     }
 
-    const auto stmt = parseStmt(openBrace.m_nextOffset);
-    if (!stmt.m_success) {
-        recordCommittedFailure(skipTrivia(openBrace.m_nextOffset),
-            DiagnosticKind::malformedStmtHead, "malformed statement head");
-        const auto failure = ParseResult<std::shared_ptr<Block>> {
+    std::vector<std::shared_ptr<BlockItemNode>> blockItems;
+    auto nextOffset = openBrace.m_nextOffset;
+
+    while (true) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        const auto closeBrace = matchSymbol(normalizedOffset, '}');
+        if (closeBrace.m_success) {
+            const auto result = ParseResult<std::shared_ptr<Block>> {
+                .m_success = true,
+                .m_nextOffset = closeBrace.m_nextOffset,
+                .m_value = std::make_shared<Block>(
+                    openBrace.m_startOffset, std::move(blockItems)),
+            };
+            m_blockMemo.emplace(offset, result);
+            return result;
+        }
+
+        if (isAtEnd(normalizedOffset)) {
+            recordCommittedFailure(normalizedOffset, DiagnosticKind::missingRBrace,
+                "missing '}' at end of block");
+            const auto recoveredResult = ParseResult<std::shared_ptr<Block>> {
+                .m_success = true,
+                .m_nextOffset = normalizedOffset,
+                .m_value = std::make_shared<Block>(
+                    openBrace.m_startOffset, std::move(blockItems)),
+            };
+            m_blockMemo.emplace(offset, recoveredResult);
+            return recoveredResult;
+        }
+
+        const auto blockItem = parseBlockItem(normalizedOffset);
+        if (blockItem.m_success) {
+            blockItems.push_back(blockItem.m_value);
+            nextOffset = blockItem.m_nextOffset;
+            continue;
+        }
+
+        recordCommittedFailure(normalizedOffset,
+            DiagnosticKind::malformedBlockItem, "malformed block item");
+        nextOffset = recoverToBlockItemBoundary(normalizedOffset + 1);
+    }
+}
+
+ParseResult<std::shared_ptr<BlockItemNode>> Parser::parseBlockItem(int32_t offset)
+{
+    if (const auto memoIt = m_blockItemMemo.find(offset);
+        memoIt != m_blockItemMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto decl = parseDecl(normalizedOffset);
+    if (decl.m_success) {
+        const auto result = ParseResult<std::shared_ptr<BlockItemNode>> {
+            .m_success = true,
+            .m_nextOffset = decl.m_nextOffset,
+            .m_value = std::make_shared<BlockItemNode>(normalizedOffset,
+                BlockItem { decl.m_value }),
+        };
+        m_blockItemMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto stmt = parseStmt(normalizedOffset);
+    if (stmt.m_success) {
+        const auto result = ParseResult<std::shared_ptr<BlockItemNode>> {
+            .m_success = true,
+            .m_nextOffset = stmt.m_nextOffset,
+            .m_value = std::make_shared<BlockItemNode>(normalizedOffset,
+                BlockItem { stmt.m_value }),
+        };
+        m_blockItemMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<std::shared_ptr<BlockItemNode>> {
+        .m_success = false,
+        .m_nextOffset = normalizedOffset,
+        .m_value = nullptr,
+    };
+    m_blockItemMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<std::shared_ptr<DeclNode>> Parser::parseDecl(int32_t offset)
+{
+    if (const auto memoIt = m_declMemo.find(offset); memoIt != m_declMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto constDecl = parseConstDecl(normalizedOffset);
+    if (constDecl.m_success) {
+        const auto result = ParseResult<std::shared_ptr<DeclNode>> {
+            .m_success = true,
+            .m_nextOffset = constDecl.m_nextOffset,
+            .m_value = std::make_shared<DeclNode>(normalizedOffset,
+                Decl { constDecl.m_value }),
+        };
+        m_declMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto varDecl = parseVarDecl(normalizedOffset);
+    if (varDecl.m_success) {
+        const auto result = ParseResult<std::shared_ptr<DeclNode>> {
+            .m_success = true,
+            .m_nextOffset = varDecl.m_nextOffset,
+            .m_value = std::make_shared<DeclNode>(normalizedOffset,
+                Decl { varDecl.m_value }),
+        };
+        m_declMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<std::shared_ptr<DeclNode>> {
+        .m_success = false,
+        .m_nextOffset = normalizedOffset,
+        .m_value = nullptr,
+    };
+    m_declMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<std::shared_ptr<ConstDecl>> Parser::parseConstDecl(int32_t offset)
+{
+    if (const auto memoIt = m_constDeclMemo.find(offset);
+        memoIt != m_constDeclMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "const");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstDecl>> {
             .m_success = false,
-            .m_nextOffset = recoverToStmtBoundary(openBrace.m_nextOffset),
+            .m_nextOffset = skipTrivia(offset),
             .m_value = nullptr,
         };
-        m_blockMemo.emplace(offset, failure);
+        m_constDeclMemo.emplace(offset, failure);
         return failure;
     }
 
-    const auto closeBrace = matchSymbol(stmt.m_nextOffset, '}');
-    if (!closeBrace.m_success) {
-        recordCommittedFailure(skipTrivia(stmt.m_nextOffset),
-            DiagnosticKind::missingRBrace, "missing '}' at end of block");
-        const auto recoveryOffset = recoverToBlockEnd(stmt.m_nextOffset);
-        std::vector<std::shared_ptr<StmtNode>> statements;
-        statements.push_back(stmt.m_value);
-        const auto recoveredResult = ParseResult<std::shared_ptr<Block>> {
-            .m_success = true,
-            .m_nextOffset = recoveryOffset,
-            .m_value = std::make_shared<Block>(
-                openBrace.m_startOffset, std::move(statements)),
+    const auto bType = parseBType(keyword.m_nextOffset);
+    if (!bType.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstDecl>> {
+            .m_success = false,
+            .m_nextOffset = bType.m_nextOffset,
+            .m_value = nullptr,
         };
-        m_blockMemo.emplace(offset, recoveredResult);
+        m_constDeclMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    std::vector<std::shared_ptr<ConstDef>> constDefs;
+    auto nextOffset = bType.m_nextOffset;
+
+    const auto firstConstDef = parseConstDef(nextOffset);
+    if (firstConstDef.m_success) {
+        constDefs.push_back(firstConstDef.m_value);
+        nextOffset = firstConstDef.m_nextOffset;
+    } else {
+        recordCommittedFailure(skipTrivia(nextOffset),
+            DiagnosticKind::malformedDeclItem, "malformed declaration item");
+        nextOffset = recoverToDeclBoundary(nextOffset);
+    }
+
+    while (true) {
+        const auto comma = matchSymbol(nextOffset, ',');
+        if (!comma.m_success) {
+            break;
+        }
+
+        const auto constDef = parseConstDef(comma.m_nextOffset);
+        if (constDef.m_success) {
+            constDefs.push_back(constDef.m_value);
+            nextOffset = constDef.m_nextOffset;
+            continue;
+        }
+
+        recordCommittedFailure(skipTrivia(comma.m_nextOffset),
+            DiagnosticKind::malformedDeclItem, "malformed declaration item");
+        nextOffset = recoverToDeclBoundary(comma.m_nextOffset);
+        if (!matchSymbol(nextOffset, ',').m_success) {
+            break;
+        }
+    }
+
+    const auto semicolon = matchSymbol(nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(nextOffset),
+            DiagnosticKind::missingDeclSemicolon,
+            "missing ';' after declaration");
+        auto recoveredOffset = recoverToDeclBoundary(nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<std::shared_ptr<ConstDecl>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = std::make_shared<ConstDecl>(keyword.m_startOffset,
+                bType.m_value, std::move(constDefs)),
+        };
+        m_constDeclMemo.emplace(offset, recoveredResult);
         return recoveredResult;
     }
 
-    std::vector<std::shared_ptr<StmtNode>> statements;
-    statements.push_back(stmt.m_value);
-    const auto result = ParseResult<std::shared_ptr<Block>> {
+    const auto result = ParseResult<std::shared_ptr<ConstDecl>> {
         .m_success = true,
-        .m_nextOffset = closeBrace.m_nextOffset,
-        .m_value = std::make_shared<Block>(
-            openBrace.m_startOffset, std::move(statements)),
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<ConstDecl>(keyword.m_startOffset,
+            bType.m_value, std::move(constDefs)),
     };
-    m_blockMemo.emplace(offset, result);
+    m_constDeclMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<VarDecl>> Parser::parseVarDecl(int32_t offset)
+{
+    if (const auto memoIt = m_varDeclMemo.find(offset);
+        memoIt != m_varDeclMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto bType = parseBType(normalizedOffset);
+    if (!bType.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<VarDecl>> {
+            .m_success = false,
+            .m_nextOffset = normalizedOffset,
+            .m_value = nullptr,
+        };
+        m_varDeclMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    std::vector<std::shared_ptr<VarDef>> varDefs;
+    auto nextOffset = bType.m_nextOffset;
+
+    const auto firstVarDef = parseVarDef(nextOffset);
+    if (firstVarDef.m_success) {
+        varDefs.push_back(firstVarDef.m_value);
+        nextOffset = firstVarDef.m_nextOffset;
+    } else {
+        recordCommittedFailure(skipTrivia(nextOffset),
+            DiagnosticKind::malformedDeclItem, "malformed declaration item");
+        nextOffset = recoverToDeclBoundary(nextOffset);
+    }
+
+    while (true) {
+        const auto comma = matchSymbol(nextOffset, ',');
+        if (!comma.m_success) {
+            break;
+        }
+
+        const auto varDef = parseVarDef(comma.m_nextOffset);
+        if (varDef.m_success) {
+            varDefs.push_back(varDef.m_value);
+            nextOffset = varDef.m_nextOffset;
+            continue;
+        }
+
+        recordCommittedFailure(skipTrivia(comma.m_nextOffset),
+            DiagnosticKind::malformedDeclItem, "malformed declaration item");
+        nextOffset = recoverToDeclBoundary(comma.m_nextOffset);
+        if (!matchSymbol(nextOffset, ',').m_success) {
+            break;
+        }
+    }
+
+    const auto semicolon = matchSymbol(nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(nextOffset),
+            DiagnosticKind::missingDeclSemicolon,
+            "missing ';' after declaration");
+        auto recoveredOffset = recoverToDeclBoundary(nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<std::shared_ptr<VarDecl>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = std::make_shared<VarDecl>(normalizedOffset,
+                bType.m_value, std::move(varDefs)),
+        };
+        m_varDeclMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<VarDecl>> {
+        .m_success = true,
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<VarDecl>(normalizedOffset, bType.m_value,
+            std::move(varDefs)),
+    };
+    m_varDeclMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<BTypeKeyword> Parser::parseBType(int32_t offset)
+{
+    if (const auto memoIt = m_bTypeMemo.find(offset); memoIt != m_bTypeMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "int");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<BTypeKeyword> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = BTypeKeyword::intKeyword,
+        };
+        m_bTypeMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<BTypeKeyword> {
+        .m_success = true,
+        .m_nextOffset = keyword.m_nextOffset,
+        .m_value = BTypeKeyword::intKeyword,
+    };
+    m_bTypeMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ConstDef>> Parser::parseConstDef(int32_t offset)
+{
+    if (const auto memoIt = m_constDefMemo.find(offset);
+        memoIt != m_constDefMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto identifier = parseIdent(offset);
+    if (!identifier.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstDef>> {
+            .m_success = false,
+            .m_nextOffset = identifier.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_constDefMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto assign = matchSymbol(identifier.m_nextOffset, '=');
+    if (!assign.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstDef>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(identifier.m_nextOffset),
+            .m_value = nullptr,
+        };
+        m_constDefMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto constInitVal = parseConstInitVal(assign.m_nextOffset);
+    if (!constInitVal.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstDef>> {
+            .m_success = false,
+            .m_nextOffset = constInitVal.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_constDefMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<ConstDef>> {
+        .m_success = true,
+        .m_nextOffset = constInitVal.m_nextOffset,
+        .m_value = std::make_shared<ConstDef>(identifier.m_value->m_startOffset,
+            identifier.m_value, constInitVal.m_value),
+    };
+    m_constDefMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ConstInitVal>> Parser::parseConstInitVal(int32_t offset)
+{
+    if (const auto memoIt = m_constInitValMemo.find(offset);
+        memoIt != m_constInitValMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto constExp = parseConstExp(offset);
+    if (!constExp.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstInitVal>> {
+            .m_success = false,
+            .m_nextOffset = constExp.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_constInitValMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<ConstInitVal>> {
+        .m_success = true,
+        .m_nextOffset = constExp.m_nextOffset,
+        .m_value = std::make_shared<ConstInitVal>(constExp.m_value->m_startOffset,
+            constExp.m_value),
+    };
+    m_constInitValMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<VarDef>> Parser::parseVarDef(int32_t offset)
+{
+    if (const auto memoIt = m_varDefMemo.find(offset);
+        memoIt != m_varDefMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto identifier = parseIdent(offset);
+    if (!identifier.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<VarDef>> {
+            .m_success = false,
+            .m_nextOffset = identifier.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_varDefMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto assign = matchSymbol(identifier.m_nextOffset, '=');
+    if (!assign.m_success) {
+        const auto result = ParseResult<std::shared_ptr<VarDef>> {
+            .m_success = true,
+            .m_nextOffset = identifier.m_nextOffset,
+            .m_value = std::make_shared<VarDef>(identifier.m_value->m_startOffset,
+                identifier.m_value, nullptr),
+        };
+        m_varDefMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto initVal = parseInitVal(assign.m_nextOffset);
+    if (!initVal.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<VarDef>> {
+            .m_success = false,
+            .m_nextOffset = initVal.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_varDefMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<VarDef>> {
+        .m_success = true,
+        .m_nextOffset = initVal.m_nextOffset,
+        .m_value = std::make_shared<VarDef>(identifier.m_value->m_startOffset,
+            identifier.m_value, initVal.m_value),
+    };
+    m_varDefMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<InitVal>> Parser::parseInitVal(int32_t offset)
+{
+    if (const auto memoIt = m_initValMemo.find(offset); memoIt != m_initValMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto exp = parseExp(offset);
+    if (!exp.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<InitVal>> {
+            .m_success = false,
+            .m_nextOffset = exp.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_initValMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<InitVal>> {
+        .m_success = true,
+        .m_nextOffset = exp.m_nextOffset,
+        .m_value = std::make_shared<InitVal>(exp.m_value->m_startOffset,
+            exp.m_value),
+    };
+    m_initValMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ConstExp>> Parser::parseConstExp(int32_t offset)
+{
+    if (const auto memoIt = m_constExpMemo.find(offset);
+        memoIt != m_constExpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto exp = parseExp(offset);
+    if (!exp.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ConstExp>> {
+            .m_success = false,
+            .m_nextOffset = exp.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_constExpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<ConstExp>> {
+        .m_success = true,
+        .m_nextOffset = exp.m_nextOffset,
+        .m_value = std::make_shared<ConstExp>(exp.m_value->m_startOffset,
+            exp.m_value),
+    };
+    m_constExpMemo.emplace(offset, result);
     return result;
 }
 
@@ -301,14 +785,240 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
         return memoIt->second;
     }
 
+    const auto normalizedOffset = skipTrivia(offset);
+    if (!isAtEnd(normalizedOffset) && isIdentifierStart(m_source[normalizedOffset])) {
+        const auto assignStmt = parseAssignStmt(normalizedOffset);
+        if (assignStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = assignStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { assignStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+    }
+
+    if (!isAtEnd(normalizedOffset) && m_source[normalizedOffset] == '{') {
+        const auto block = parseBlock(normalizedOffset);
+        if (block.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = block.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { block.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+    }
+
+    const auto returnKeyword = matchKeyword(normalizedOffset, "return");
+    if (returnKeyword.m_success) {
+        const auto returnStmt = parseReturnStmt(normalizedOffset);
+        if (returnStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = returnStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { returnStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+    }
+
+    const auto expStmt = parseExpStmt(normalizedOffset);
+    if (expStmt.m_success) {
+        const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = true,
+            .m_nextOffset = expStmt.m_nextOffset,
+            .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                Stmt { expStmt.m_value }),
+        };
+        m_stmtMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+        .m_success = false,
+        .m_nextOffset = normalizedOffset,
+        .m_value = nullptr,
+    };
+    m_stmtMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<std::shared_ptr<AssignStmt>> Parser::parseAssignStmt(int32_t offset)
+{
+    if (const auto memoIt = m_assignStmtMemo.find(offset);
+        memoIt != m_assignStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto lVal = parseLVal(normalizedOffset);
+    if (!lVal.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<AssignStmt>> {
+            .m_success = false,
+            .m_nextOffset = normalizedOffset,
+            .m_value = nullptr,
+        };
+        m_assignStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto assign = matchSymbol(lVal.m_nextOffset, '=');
+    if (!assign.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<AssignStmt>> {
+            .m_success = false,
+            .m_nextOffset = normalizedOffset,
+            .m_value = nullptr,
+        };
+        m_assignStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto exp = parseExp(assign.m_nextOffset);
+    if (!exp.m_success) {
+        bool keepInnerDiagnostic = false;
+        for (const auto& diagnostic : m_bestDiagnostics) {
+            if (diagnostic.m_offset != m_bestFailureOffset) {
+                continue;
+            }
+
+            if (diagnostic.m_kind == DiagnosticKind::integerOutOfRange
+                || diagnostic.m_kind == DiagnosticKind::malformedPrimaryExp) {
+                keepInnerDiagnostic = true;
+                break;
+            }
+        }
+        if (!keepInnerDiagnostic) {
+            const auto recoveryDiagnosticOffset
+                = m_bestFailureOffset > skipTrivia(assign.m_nextOffset)
+                ? m_bestFailureOffset
+                : skipTrivia(assign.m_nextOffset);
+            recordCommittedFailure(recoveryDiagnosticOffset,
+                DiagnosticKind::malformedAssignValue,
+                "malformed assignment value");
+        }
+
+        const auto failure = ParseResult<std::shared_ptr<AssignStmt>> {
+            .m_success = false,
+            .m_nextOffset = recoverToStmtBoundary(assign.m_nextOffset),
+            .m_value = nullptr,
+        };
+        m_assignStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto semicolon = matchSymbol(exp.m_nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(exp.m_nextOffset),
+            DiagnosticKind::missingAssignSemicolon,
+            "missing ';' after assignment statement");
+        auto recoveredOffset = recoverToStmtBoundary(exp.m_nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<std::shared_ptr<AssignStmt>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = std::make_shared<AssignStmt>(lVal.m_value->m_startOffset,
+                lVal.m_value, exp.m_value),
+        };
+        m_assignStmtMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<AssignStmt>> {
+        .m_success = true,
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<AssignStmt>(lVal.m_value->m_startOffset,
+            lVal.m_value, exp.m_value),
+    };
+    m_assignStmtMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ExpStmt>> Parser::parseExpStmt(int32_t offset)
+{
+    if (const auto memoIt = m_expStmtMemo.find(offset);
+        memoIt != m_expStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto semicolonOnly = matchSymbol(normalizedOffset, ';');
+    if (semicolonOnly.m_success) {
+        const auto result = ParseResult<std::shared_ptr<ExpStmt>> {
+            .m_success = true,
+            .m_nextOffset = semicolonOnly.m_nextOffset,
+            .m_value = std::make_shared<ExpStmt>(
+                semicolonOnly.m_startOffset, nullptr),
+        };
+        m_expStmtMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto exp = parseExp(normalizedOffset);
+    if (!exp.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ExpStmt>> {
+            .m_success = false,
+            .m_nextOffset = normalizedOffset,
+            .m_value = nullptr,
+        };
+        m_expStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto semicolon = matchSymbol(exp.m_nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(exp.m_nextOffset),
+            DiagnosticKind::missingSemicolon,
+            "missing ';' after expression statement");
+        auto recoveredOffset = recoverToStmtBoundary(exp.m_nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<std::shared_ptr<ExpStmt>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = std::make_shared<ExpStmt>(normalizedOffset, exp.m_value),
+        };
+        m_expStmtMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<ExpStmt>> {
+        .m_success = true,
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<ExpStmt>(normalizedOffset, exp.m_value),
+    };
+    m_expStmtMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ReturnStmt>> Parser::parseReturnStmt(int32_t offset)
+{
+    if (const auto memoIt = m_returnStmtMemo.find(offset);
+        memoIt != m_returnStmtMemo.end()) {
+        return memoIt->second;
+    }
+
     const auto keyword = matchKeyword(offset, "return");
     if (!keyword.m_success) {
-        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+        const auto failure = ParseResult<std::shared_ptr<ReturnStmt>> {
             .m_success = false,
             .m_nextOffset = skipTrivia(offset),
             .m_value = nullptr,
         };
-        m_stmtMemo.emplace(offset, failure);
+        m_returnStmtMemo.emplace(offset, failure);
         return failure;
     }
 
@@ -334,12 +1044,13 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
             recordCommittedFailure(recoveryDiagnosticOffset,
                 DiagnosticKind::malformedReturnValue, "malformed return value");
         }
-        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+
+        const auto failure = ParseResult<std::shared_ptr<ReturnStmt>> {
             .m_success = false,
             .m_nextOffset = recoverToStmtBoundary(keyword.m_nextOffset),
             .m_value = nullptr,
         };
-        m_stmtMemo.emplace(offset, failure);
+        m_returnStmtMemo.emplace(offset, failure);
         return failure;
     }
 
@@ -354,27 +1065,23 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
             recoveredOffset = recoveredSemicolon.m_nextOffset;
         }
 
-        auto returnStmt
-            = std::make_shared<ReturnStmt>(keyword.m_startOffset, exp.m_value);
-        const auto recoveredResult = ParseResult<std::shared_ptr<StmtNode>> {
+        const auto recoveredResult = ParseResult<std::shared_ptr<ReturnStmt>> {
             .m_success = true,
             .m_nextOffset = recoveredOffset,
-            .m_value = std::make_shared<StmtNode>(
-                keyword.m_startOffset, Stmt { returnStmt }),
+            .m_value = std::make_shared<ReturnStmt>(
+                keyword.m_startOffset, exp.m_value),
         };
-        m_stmtMemo.emplace(offset, recoveredResult);
+        m_returnStmtMemo.emplace(offset, recoveredResult);
         return recoveredResult;
     }
 
-    auto returnStmt
-        = std::make_shared<ReturnStmt>(keyword.m_startOffset, exp.m_value);
-    const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+    const auto result = ParseResult<std::shared_ptr<ReturnStmt>> {
         .m_success = true,
         .m_nextOffset = semicolon.m_nextOffset,
-        .m_value = std::make_shared<StmtNode>(
-            keyword.m_startOffset, Stmt { returnStmt }),
+        .m_value = std::make_shared<ReturnStmt>(
+            keyword.m_startOffset, exp.m_value),
     };
-    m_stmtMemo.emplace(offset, result);
+    m_returnStmtMemo.emplace(offset, result);
     return result;
 }
 
@@ -783,6 +1490,18 @@ ParseResult<std::shared_ptr<PrimaryExp>> Parser::parsePrimaryExp(int32_t offset)
         return result;
     }
 
+    const auto lVal = parseLVal(normalizedOffset);
+    if (lVal.m_success) {
+        const auto result = ParseResult<std::shared_ptr<PrimaryExp>> {
+            .m_success = true,
+            .m_nextOffset = lVal.m_nextOffset,
+            .m_value = std::make_shared<PrimaryExp>(
+                lVal.m_value->m_startOffset, PrimaryExp::Kind { lVal.m_value }),
+        };
+        m_primaryExpMemo.emplace(offset, result);
+        return result;
+    }
+
     if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] < '0'
         || m_source[normalizedOffset] > '9') {
         const auto failure = ParseResult<std::shared_ptr<PrimaryExp>> {
@@ -866,6 +1585,45 @@ ParseResult<std::shared_ptr<UnaryExp>> Parser::parseUnaryExp(int32_t offset)
                 std::make_pair(unaryOp.m_value, nestedUnaryExp.m_value) }),
     };
     m_unaryExpMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<LVal>> Parser::parseLVal(int32_t offset)
+{
+    if (const auto memoIt = m_lValMemo.find(offset); memoIt != m_lValMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    if (isAtEnd(normalizedOffset)
+        || !isIdentifierStart(m_source[normalizedOffset])) {
+        const auto failure = ParseResult<std::shared_ptr<LVal>> {
+            .m_success = false,
+            .m_nextOffset = normalizedOffset,
+            .m_value = nullptr,
+        };
+        m_lValMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto identifier = parseIdent(normalizedOffset);
+    if (!identifier.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<LVal>> {
+            .m_success = false,
+            .m_nextOffset = identifier.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_lValMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<LVal>> {
+        .m_success = true,
+        .m_nextOffset = identifier.m_nextOffset,
+        .m_value = std::make_shared<LVal>(identifier.m_value->m_startOffset,
+            identifier.m_value),
+    };
+    m_lValMemo.emplace(offset, result);
     return result;
 }
 
@@ -1320,6 +2078,21 @@ int32_t Parser::recoverToExprRParen(int32_t offset) const
     return skipTrivia(nextOffset);
 }
 
+int32_t Parser::recoverToDeclBoundary(int32_t offset) const
+{
+    auto nextOffset = skipTrivia(offset);
+    while (!isAtEnd(nextOffset)) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ','
+            || m_source[normalizedOffset] == ';'
+            || m_source[normalizedOffset] == '}') {
+            return normalizedOffset;
+        }
+        nextOffset = normalizedOffset + 1;
+    }
+    return skipTrivia(nextOffset);
+}
+
 int32_t Parser::recoverToStmtBoundary(int32_t offset) const
 {
     auto nextOffset = skipTrivia(offset);
@@ -1327,6 +2100,27 @@ int32_t Parser::recoverToStmtBoundary(int32_t offset) const
         const auto normalizedOffset = skipTrivia(nextOffset);
         if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ';'
             || m_source[normalizedOffset] == '}') {
+            return normalizedOffset;
+        }
+        nextOffset = normalizedOffset + 1;
+    }
+    return skipTrivia(nextOffset);
+}
+
+int32_t Parser::recoverToBlockItemBoundary(int32_t offset) const
+{
+    auto nextOffset = skipTrivia(offset);
+    while (!isAtEnd(nextOffset)) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == '}'
+            || m_source[normalizedOffset] == '{'
+            || m_source[normalizedOffset] == ';'
+            || m_source[normalizedOffset] == '('
+            || m_source[normalizedOffset] == '+'
+            || m_source[normalizedOffset] == '-'
+            || m_source[normalizedOffset] == '!'
+            || std::isdigit(static_cast<unsigned char>(m_source[normalizedOffset])) != 0
+            || isIdentifierStart(m_source[normalizedOffset])) {
             return normalizedOffset;
         }
         nextOffset = normalizedOffset + 1;

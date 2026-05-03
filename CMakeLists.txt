@@ -71,6 +71,31 @@ set_target_properties(parser_binary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 1
 target_link_libraries(parser_binary_test core)
 add_test(NAME parser_binary_test COMMAND parser_binary_test)
 
+add_executable(parser_decl_test test/parser_decl_test.cpp)
+set_target_properties(parser_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(parser_decl_test core)
+add_test(NAME parser_decl_test COMMAND parser_decl_test)
+
+add_executable(parser_assign_test test/parser_assign_test.cpp)
+set_target_properties(parser_assign_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(parser_assign_test core)
+add_test(NAME parser_assign_test COMMAND parser_assign_test)
+
+add_executable(parser_stmt_test test/parser_stmt_test.cpp)
+set_target_properties(parser_stmt_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(parser_stmt_test core)
+add_test(NAME parser_stmt_test COMMAND parser_stmt_test)
+
+add_executable(semantic_symbol_test test/semantic_symbol_test.cpp)
+set_target_properties(semantic_symbol_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(semantic_symbol_test core)
+add_test(NAME semantic_symbol_test COMMAND semantic_symbol_test)
+
+add_executable(semantic_const_fold_test test/semantic_const_fold_test.cpp)
+set_target_properties(semantic_const_fold_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(semantic_const_fold_test core)
+add_test(NAME semantic_const_fold_test COMMAND semantic_const_fold_test)
+
 add_executable(koopa_basic_test test/koopa_basic_test.cpp)
 set_target_properties(koopa_basic_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(koopa_basic_test core)
@@ -85,3 +110,8 @@ add_executable(koopa_binary_test test/koopa_binary_test.cpp)
 set_target_properties(koopa_binary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(koopa_binary_test core)
 add_test(NAME koopa_binary_test COMMAND koopa_binary_test)
+
+add_executable(koopa_decl_test test/koopa_decl_test.cpp)
+set_target_properties(koopa_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(koopa_decl_test core)
+add_test(NAME koopa_decl_test COMMAND koopa_decl_test)
