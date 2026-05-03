@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -33,11 +34,6 @@ std::string makeFunctionName(const std::string& identifier)
     return "@" + identifier;
 }
 
-std::string makeLocalName(const frontend::semantic::Symbol& symbol)
-{
-    return "%" + symbol.m_name;
-}
-
 std::string makeTempName(int32_t& nextTempId)
 {
     return "%" + std::to_string(nextTempId++);
@@ -56,26 +52,28 @@ Function* Generator::generateFuncDef(
 {
     int32_t nextTempId = 1;
     std::unordered_map<const frontend::semantic::Symbol*, Value*> storageBySymbol;
+    std::unordered_set<std::string> usedSymbolNames;
     auto* function
         = Function::create(FunctionType::get(lowerFuncType(funcDef.m_funcType),
                                std::vector<Type*> {}),
             makeFunctionName(funcDef.m_identifier));
     function->pushBB(generateBlock(requireNode(funcDef.m_block_nn,
                               "function definition is missing a block"),
-        nextTempId, storageBySymbol));
+        nextTempId, storageBySymbol, usedSymbolNames));
     function->validate();
     return function;
 }
 
 BasicBlock* Generator::generateBlock(const frontend::semantic::Block& block,
     int32_t& nextTempId,
-    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+    std::unordered_set<std::string>& usedSymbolNames)
     const
 {
     auto* basicBlock = BasicBlock::createEntry("%entry");
     for (const auto& blockItem : block.m_blockItems) {
         generateBlockItem(requireNode(blockItem, "block contains a null item"),
-            *basicBlock, nextTempId, storageBySymbol);
+            *basicBlock, nextTempId, storageBySymbol, usedSymbolNames);
     }
     basicBlock->validate();
     return basicBlock;
@@ -84,7 +82,8 @@ BasicBlock* Generator::generateBlock(const frontend::semantic::Block& block,
 void Generator::generateBlockItem(
     const frontend::semantic::BlockItemNode& blockItem, BasicBlock& basicBlock,
     int32_t& nextTempId,
-    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+    std::unordered_set<std::string>& usedSymbolNames)
     const
 {
     std::visit(
@@ -94,11 +93,11 @@ void Generator::generateBlockItem(
                               std::shared_ptr<frontend::semantic::DeclNode>>) {
                 generateDecl(requireNode(
                                  blockItemAlt, "block item declaration is null"),
-                    basicBlock, nextTempId, storageBySymbol);
+                    basicBlock, nextTempId, storageBySymbol, usedSymbolNames);
             } else {
                 generateStmt(requireNode(
                                  blockItemAlt, "block item statement is null"),
-                    basicBlock, nextTempId, storageBySymbol);
+                    basicBlock, nextTempId, storageBySymbol, usedSymbolNames);
             }
         },
         blockItem.m_blockItem);
@@ -106,7 +105,8 @@ void Generator::generateBlockItem(
 
 void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
     BasicBlock& basicBlock, int32_t& nextTempId,
-    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+    std::unordered_set<std::string>& usedSymbolNames)
     const
 {
     std::visit(
@@ -122,7 +122,7 @@ void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
                     const auto& symbol = requireNode(resolvedConstDef.m_symbol_nn,
                         "const declarator is missing its symbol");
                     auto* alloc = AllocValue::get(Int32Type::get(),
-                        makeLocalName(symbol));
+                        makeUniqueLocalName(symbol, usedSymbolNames));
                     basicBlock.pushInst(alloc);
                     storageBySymbol[resolvedConstDef.m_symbol_nn.get()] = alloc;
                     if (resolvedConstDef.m_initExp_nn != nullptr) {
@@ -140,7 +140,7 @@ void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
                     const auto& symbol = requireNode(resolvedVarDef.m_symbol_nn,
                         "var declarator is missing its symbol");
                     auto* alloc = AllocValue::get(Int32Type::get(),
-                        makeLocalName(symbol));
+                        makeUniqueLocalName(symbol, usedSymbolNames));
                     basicBlock.pushInst(alloc);
                     storageBySymbol[resolvedVarDef.m_symbol_nn.get()] = alloc;
                     if (resolvedVarDef.m_initExp_nn != nullptr) {
@@ -156,7 +156,8 @@ void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
 
 void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
     BasicBlock& basicBlock, int32_t& nextTempId,
-    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+    std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+    std::unordered_set<std::string>& usedSymbolNames)
     const
 {
     std::visit(
@@ -175,7 +176,8 @@ void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
                     generateBlockItem(requireNode(
                                           blockItem,
                                           "nested block contains a null item"),
-                        basicBlock, nextTempId, storageBySymbol);
+                        basicBlock, nextTempId, storageBySymbol,
+                        usedSymbolNames);
                 }
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<frontend::semantic::ExpStmt>>) {
@@ -388,6 +390,25 @@ BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
 Value* Generator::generateNumber(const frontend::semantic::Number& number) const
 {
     return IntegerValue::get(number.m_value);
+}
+
+std::string Generator::makeUniqueLocalName(
+    const frontend::semantic::Symbol& symbol,
+    std::unordered_set<std::string>& usedSymbolNames) const
+{
+    const std::string baseName = "%" + symbol.m_name;
+    if (usedSymbolNames.insert(baseName).second) {
+        return baseName;
+    }
+
+    int32_t suffix = 1;
+    while (true) {
+        const std::string candidate
+            = baseName + "_" + std::to_string(suffix++);
+        if (usedSymbolNames.insert(candidate).second) {
+            return candidate;
+        }
+    }
 }
 
 } // namespace yesod::koopa

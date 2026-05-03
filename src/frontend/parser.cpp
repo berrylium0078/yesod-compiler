@@ -305,7 +305,9 @@ ParseResult<std::shared_ptr<Block>> Parser::parseBlock(int32_t offset)
 
         recordCommittedFailure(normalizedOffset,
             DiagnosticKind::malformedBlockItem, "malformed block item");
-        nextOffset = recoverToBlockItemBoundary(normalizedOffset + 1);
+        nextOffset = blockItem.m_nextOffset > normalizedOffset
+            ? blockItem.m_nextOffset
+            : recoverToBlockItemBoundary(normalizedOffset + 1);
     }
 }
 
@@ -343,7 +345,9 @@ ParseResult<std::shared_ptr<BlockItemNode>> Parser::parseBlockItem(int32_t offse
 
     const auto failure = ParseResult<std::shared_ptr<BlockItemNode>> {
         .m_success = false,
-        .m_nextOffset = normalizedOffset,
+        .m_nextOffset = stmt.m_nextOffset > normalizedOffset
+            ? stmt.m_nextOffset
+            : decl.m_nextOffset,
         .m_value = nullptr,
     };
     m_blockItemMemo.emplace(offset, failure);
@@ -827,6 +831,14 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
             m_stmtMemo.emplace(offset, result);
             return result;
         }
+
+        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = false,
+            .m_nextOffset = returnStmt.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_stmtMemo.emplace(offset, failure);
+        return failure;
     }
 
     const auto expStmt = parseExpStmt(normalizedOffset);

@@ -142,8 +142,8 @@ void testMalformedInputsFailWithFocusedDiagnostics()
     require(
         !malformedStmtHead.success(), "malformed statement head should fail");
     require(firstDiagnostic(malformedStmtHead).m_kind
-            == DiagnosticKind::malformedBlockItem,
-        "malformed statement head should report the PEG recovery label");
+            == DiagnosticKind::missingSemicolon,
+        "bare identifier statement should now report the expression-statement semicolon label");
 
     const auto malformedReturnValue = parseSource("int main(){return ;}");
     require(

@@ -1,7 +1,9 @@
 #ifndef _YESOD_KOOPA_AST_TO_KOOPA_H_
 #define _YESOD_KOOPA_AST_TO_KOOPA_H_
 
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "frontend/semantic_ast.h"
 #include "koopa/mykoopa.h"
@@ -18,19 +20,23 @@ class Generator {
         const frontend::semantic::FuncDef& funcDef) const;
     [[nodiscard]] BasicBlock* generateBlock(
         const frontend::semantic::Block& block, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+        std::unordered_set<std::string>& usedSymbolNames)
         const;
     void generateBlockItem(const frontend::semantic::BlockItemNode& blockItem,
         BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+        std::unordered_set<std::string>& usedSymbolNames)
         const;
     void generateDecl(const frontend::semantic::DeclNode& declNode,
         BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+        std::unordered_set<std::string>& usedSymbolNames)
         const;
     void generateStmt(const frontend::semantic::StmtNode& stmtNode,
         BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
+        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
+        std::unordered_set<std::string>& usedSymbolNames)
         const;
     void generateAssignStmt(const frontend::semantic::AssignStmt& assignStmt,
         BasicBlock& basicBlock, int32_t& nextTempId,
@@ -56,6 +62,9 @@ class Generator {
         int32_t& nextTempId) const;
     [[nodiscard]] Value* generateNumber(
         const frontend::semantic::Number& number) const;
+    [[nodiscard]] std::string makeUniqueLocalName(
+        const frontend::semantic::Symbol& symbol,
+        std::unordered_set<std::string>& usedSymbolNames) const;
 };
 
 } // namespace yesod::koopa

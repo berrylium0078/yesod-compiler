@@ -51,11 +51,70 @@ void testDeclarationProgramValidatesWithKoopa()
     koopa_delete_program(koopaProgram);
 }
 
+void testShadowedNamesGetUniqueKoopaStorage()
+{
+    auto program = generateProgram(
+        "int main(){int x = 1; {x; int x = 2; x;} {int x = 3; x;} x; return x;}");
+    const auto* basicBlock = requireEntryBlock(*requireOnlyFunction(*program));
+
+    require(basicBlock->getNumInsts() == 12,
+        "shadowed scope example should emit unique storage for both inner blocks and keep outer loads distinct");
+
+    const auto* outerAlloc = requireAlloc(basicBlock->getInst(0), "%x");
+    const auto* outerInitStore = requireStore(basicBlock->getInst(1), outerAlloc);
+    requireInteger(outerInitStore->getVal(), 1);
+
+    const auto* firstInnerOuterLoad
+        = requireLoad(basicBlock->getInst(2), outerAlloc, "%1");
+
+    const auto* firstInnerAlloc = dynamic_cast<const AllocValue*>(basicBlock->getInst(3));
+    require(firstInnerAlloc != nullptr, "expected alloc instruction for first inner shadowed symbol");
+    require(firstInnerAlloc->getName() != outerAlloc->getName(),
+        "first inner shadowed symbol should get a distinct Koopa storage name");
+    require(firstInnerAlloc->getName().rfind("%x", 0) == 0,
+        "first inner shadowed symbol name should preserve the identifier prefix");
+
+    const auto* firstInnerInitStore = requireStore(basicBlock->getInst(4), firstInnerAlloc);
+    requireInteger(firstInnerInitStore->getVal(), 2);
+
+    const auto* firstInnerLoad = requireLoad(basicBlock->getInst(5), firstInnerAlloc, "%2");
+
+    const auto* secondInnerAlloc = dynamic_cast<const AllocValue*>(basicBlock->getInst(6));
+    require(secondInnerAlloc != nullptr, "expected alloc instruction for second inner shadowed symbol");
+    require(secondInnerAlloc->getName() != outerAlloc->getName(),
+        "second inner shadowed symbol should get a distinct Koopa storage name");
+    require(secondInnerAlloc->getName() != firstInnerAlloc->getName(),
+        "separate inner scopes should get different Koopa storage names");
+    require(secondInnerAlloc->getName().rfind("%x", 0) == 0,
+        "second inner shadowed symbol name should preserve the identifier prefix");
+
+    const auto* secondInnerInitStore = requireStore(basicBlock->getInst(7), secondInnerAlloc);
+    requireInteger(secondInnerInitStore->getVal(), 3);
+
+    const auto* secondInnerLoad = requireLoad(basicBlock->getInst(8), secondInnerAlloc, "%3");
+    const auto* outerLoadAfterBlocks
+        = requireLoad(basicBlock->getInst(9), outerAlloc, "%4");
+    const auto* outerReturnLoad
+        = requireLoad(basicBlock->getInst(10), outerAlloc, "%5");
+    require(requireReturn(basicBlock->getInst(11))->getVal() == outerReturnLoad,
+        "return should use the outer symbol after the nested scope ends");
+
+    require(firstInnerOuterLoad->getSource() == outerAlloc,
+        "use before the first shadowing declaration should load the outer symbol");
+    require(firstInnerLoad->getSource() == firstInnerAlloc,
+        "use after the first shadowing declaration should load the first inner symbol");
+    require(secondInnerLoad->getSource() == secondInnerAlloc,
+        "use inside the second nested block should load the second inner symbol");
+    require(outerLoadAfterBlocks->getSource() == outerAlloc,
+        "use after both inner blocks should load the outer symbol");
+}
+
 } // namespace
 
 int main()
 {
     testVarDeclarationAssignmentAndReturnLowering();
     testDeclarationProgramValidatesWithKoopa();
+    testShadowedNamesGetUniqueKoopaStorage();
     return 0;
 }
