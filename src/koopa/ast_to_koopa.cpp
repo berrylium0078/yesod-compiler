@@ -177,6 +177,9 @@ void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
             if constexpr (std::is_same_v<AltType,
+                              std::shared_ptr<frontend::semantic::IfStmt>>) {
+                throw std::runtime_error("if statements are not yet supported in Koopa generation");
+            } else if constexpr (std::is_same_v<AltType,
                               std::shared_ptr<frontend::semantic::AssignStmt>>) {
                 generateAssignStmt(requireNode(
                                        stmtAlt, "assignment statement is null"),

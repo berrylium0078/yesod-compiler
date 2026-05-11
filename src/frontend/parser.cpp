@@ -45,6 +45,7 @@ ParseOutput Parser::parse()
     m_initValMemo.clear();
     m_constExpMemo.clear();
     m_stmtMemo.clear();
+    m_ifStmtMemo.clear();
     m_assignStmtMemo.clear();
     m_expStmtMemo.clear();
     m_returnStmtMemo.clear();
@@ -790,6 +791,29 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
+    const auto ifKeyword = matchKeyword(normalizedOffset, "if");
+    if (ifKeyword.m_success) {
+        const auto ifStmt = parseIfStmt(normalizedOffset);
+        if (ifStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = ifStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { ifStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+
+        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = false,
+            .m_nextOffset = ifStmt.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_stmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
     if (!isAtEnd(normalizedOffset) && isIdentifierStart(m_source[normalizedOffset])) {
         const auto assignStmt = parseAssignStmt(normalizedOffset);
         if (assignStmt.m_success) {
@@ -860,6 +884,129 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
     };
     m_stmtMemo.emplace(offset, failure);
     return failure;
+}
+
+ParseResult<std::shared_ptr<IfStmt>> Parser::parseIfStmt(int32_t offset)
+{
+    if (const auto memoIt = m_ifStmtMemo.find(offset);
+        memoIt != m_ifStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "if");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<IfStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = nullptr,
+        };
+        m_ifStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto openParen = matchSymbol(keyword.m_nextOffset, '(');
+    if (!openParen.m_success) {
+        recordFailure(skipTrivia(keyword.m_nextOffset),
+            DiagnosticKind::expectedSymbol, "expected '(' after 'if'");
+        const auto failure = ParseResult<std::shared_ptr<IfStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(keyword.m_nextOffset),
+            .m_value = nullptr,
+        };
+        m_ifStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    std::shared_ptr<Exp> condExp_nn;
+    auto thenStmtOffset = openParen.m_nextOffset;
+    const auto condExp = parseExp(openParen.m_nextOffset);
+    if (!condExp.m_success) {
+        bool keepInnerDiagnostic = false;
+        for (const auto& diagnostic : m_bestDiagnostics) {
+            if (diagnostic.m_offset != m_bestFailureOffset) {
+                continue;
+            }
+
+            if (diagnostic.m_kind == DiagnosticKind::integerOutOfRange
+                || diagnostic.m_kind == DiagnosticKind::malformedPrimaryExp) {
+                keepInnerDiagnostic = true;
+                break;
+            }
+        }
+        if (!keepInnerDiagnostic) {
+            const auto recoveryDiagnosticOffset
+                = m_bestFailureOffset > skipTrivia(openParen.m_nextOffset)
+                ? m_bestFailureOffset
+                : skipTrivia(openParen.m_nextOffset);
+            recordCommittedFailure(recoveryDiagnosticOffset,
+                DiagnosticKind::malformedIfCond,
+                "malformed if condition");
+        }
+
+        thenStmtOffset = recoverToIfStmtHead(openParen.m_nextOffset);
+    } else {
+        condExp_nn = condExp.m_value;
+        thenStmtOffset = condExp.m_nextOffset;
+    }
+
+    const auto closeParen = matchSymbol(thenStmtOffset, ')');
+    if (!closeParen.m_success) {
+        recordCommittedFailure(skipTrivia(thenStmtOffset),
+            DiagnosticKind::missingIfRParen,
+            "missing ')' after if condition");
+        thenStmtOffset = recoverToIfStmtHead(thenStmtOffset);
+        const auto recoveredParen = matchSymbol(thenStmtOffset, ')');
+        if (recoveredParen.m_success) {
+            thenStmtOffset = recoveredParen.m_nextOffset;
+        }
+    } else {
+        thenStmtOffset = closeParen.m_nextOffset;
+    }
+
+    const auto thenStmt = parseStmt(thenStmtOffset);
+    if (!thenStmt.m_success) {
+        recordCommittedFailure(skipTrivia(thenStmtOffset),
+            DiagnosticKind::malformedIfThenStmt,
+            "malformed then-branch statement");
+        const auto failure = ParseResult<std::shared_ptr<IfStmt>> {
+            .m_success = false,
+            .m_nextOffset = recoverToStmtBoundary(thenStmtOffset),
+            .m_value = nullptr,
+        };
+        m_ifStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    std::shared_ptr<StmtNode> elseStmt_nn;
+    auto nextOffset = thenStmt.m_nextOffset;
+    const auto elseKeyword = matchKeyword(nextOffset, "else");
+    if (elseKeyword.m_success) {
+        const auto elseStmt = parseStmt(elseKeyword.m_nextOffset);
+        if (!elseStmt.m_success) {
+            recordCommittedFailure(skipTrivia(elseKeyword.m_nextOffset),
+                DiagnosticKind::malformedElseStmt,
+                "malformed else-branch statement");
+            const auto failure = ParseResult<std::shared_ptr<IfStmt>> {
+                .m_success = false,
+                .m_nextOffset = recoverToStmtBoundary(elseKeyword.m_nextOffset),
+                .m_value = nullptr,
+            };
+            m_ifStmtMemo.emplace(offset, failure);
+            return failure;
+        }
+
+        elseStmt_nn = elseStmt.m_value;
+        nextOffset = elseStmt.m_nextOffset;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<IfStmt>> {
+        .m_success = true,
+        .m_nextOffset = nextOffset,
+        .m_value = std::make_shared<IfStmt>(keyword.m_startOffset,
+            condExp_nn, thenStmt.m_value, elseStmt_nn),
+    };
+    m_ifStmtMemo.emplace(offset, result);
+    return result;
 }
 
 ParseResult<std::shared_ptr<AssignStmt>> Parser::parseAssignStmt(int32_t offset)
@@ -2090,6 +2237,31 @@ int32_t Parser::recoverToExprRParen(int32_t offset) const
     return skipTrivia(nextOffset);
 }
 
+int32_t Parser::recoverToIfStmtHead(int32_t offset) const
+{
+    auto nextOffset = skipTrivia(offset);
+    while (!isAtEnd(nextOffset)) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ')'
+            || m_source[normalizedOffset] == '{'
+            || m_source[normalizedOffset] == '}'
+            || m_source[normalizedOffset] == ';'
+            || m_source[normalizedOffset] == '('
+            || m_source[normalizedOffset] == '+'
+            || m_source[normalizedOffset] == '-'
+            || m_source[normalizedOffset] == '!'
+            || std::isdigit(static_cast<unsigned char>(m_source[normalizedOffset])) != 0
+            || isIdentifierStart(m_source[normalizedOffset])
+            || matchKeyword(normalizedOffset, "if").m_success
+            || matchKeyword(normalizedOffset, "else").m_success
+            || matchKeyword(normalizedOffset, "return").m_success) {
+            return normalizedOffset;
+        }
+        nextOffset = normalizedOffset + 1;
+    }
+    return skipTrivia(nextOffset);
+}
+
 int32_t Parser::recoverToDeclBoundary(int32_t offset) const
 {
     auto nextOffset = skipTrivia(offset);
@@ -2111,7 +2283,8 @@ int32_t Parser::recoverToStmtBoundary(int32_t offset) const
     while (!isAtEnd(nextOffset)) {
         const auto normalizedOffset = skipTrivia(nextOffset);
         if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ';'
-            || m_source[normalizedOffset] == '}') {
+            || m_source[normalizedOffset] == '}'
+            || matchKeyword(normalizedOffset, "else").m_success) {
             return normalizedOffset;
         }
         nextOffset = normalizedOffset + 1;
@@ -2132,7 +2305,11 @@ int32_t Parser::recoverToBlockItemBoundary(int32_t offset) const
             || m_source[normalizedOffset] == '-'
             || m_source[normalizedOffset] == '!'
             || std::isdigit(static_cast<unsigned char>(m_source[normalizedOffset])) != 0
-            || isIdentifierStart(m_source[normalizedOffset])) {
+            || isIdentifierStart(m_source[normalizedOffset])
+            || matchKeyword(normalizedOffset, "const").m_success
+            || matchKeyword(normalizedOffset, "int").m_success
+            || matchKeyword(normalizedOffset, "if").m_success
+            || matchKeyword(normalizedOffset, "return").m_success) {
             return normalizedOffset;
         }
         nextOffset = normalizedOffset + 1;

@@ -267,7 +267,13 @@ std::shared_ptr<semantic::StmtNode> SemanticAnalyzer::analyzeStmtNode(
     return std::visit(
         [&](const auto& stmtAlt) -> std::shared_ptr<semantic::StmtNode> {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<AssignStmt>>) {
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<IfStmt>>) {
+                auto ifStmt = analyzeIfStmt(requireNode(
+                    stmtAlt, "if statement payload is missing"));
+                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
+                    semantic::Stmt { ifStmt });
+            } else if constexpr (std::is_same_v<AltType,
+                                     std::shared_ptr<AssignStmt>>) {
                 auto assignStmt = analyzeAssignStmt(requireNode(stmtAlt,
                     "assignment statement payload is missing"));
                 return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
@@ -292,6 +298,24 @@ std::shared_ptr<semantic::StmtNode> SemanticAnalyzer::analyzeStmtNode(
             }
         },
         stmtNode.m_stmt);
+}
+
+std::shared_ptr<semantic::IfStmt> SemanticAnalyzer::analyzeIfStmt(
+    const IfStmt& ifStmt)
+{
+    std::shared_ptr<semantic::StmtNode> elseStmt_nn;
+    if (ifStmt.m_elseStmt_nn != nullptr) {
+        elseStmt_nn = analyzeStmtNode(requireNode(
+            ifStmt.m_elseStmt_nn, "if statement else-branch is missing"));
+    }
+
+    return std::make_shared<semantic::IfStmt>(ifStmt.m_startOffset,
+        analyzeExp(requireNode(
+            ifStmt.m_condExp_nn, "if statement is missing its condition"))
+            .m_exp_nn,
+        analyzeStmtNode(requireNode(
+            ifStmt.m_thenStmt_nn, "if statement is missing its then-branch")),
+        elseStmt_nn);
 }
 
 std::shared_ptr<semantic::AssignStmt> SemanticAnalyzer::analyzeAssignStmt(

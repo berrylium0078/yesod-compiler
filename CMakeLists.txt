@@ -86,6 +86,11 @@ set_target_properties(parser_stmt_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(parser_stmt_test core)
 add_test(NAME parser_stmt_test COMMAND parser_stmt_test)
 
+add_executable(parser_if_test test/parser_if_test.cpp)
+set_target_properties(parser_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(parser_if_test core)
+add_test(NAME parser_if_test COMMAND parser_if_test)
+
 add_executable(semantic_symbol_test test/semantic_symbol_test.cpp)
 set_target_properties(semantic_symbol_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(semantic_symbol_test core)

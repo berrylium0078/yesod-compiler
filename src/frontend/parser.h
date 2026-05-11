@@ -22,6 +22,10 @@ enum class DiagnosticKind {
     malformedBlockItem,
     malformedDeclItem,
     missingDeclSemicolon,
+    malformedIfCond,
+    missingIfRParen,
+    malformedIfThenStmt,
+    malformedElseStmt,
     malformedStmtHead,
     malformedAssignValue,
     malformedReturnValue,
@@ -97,6 +101,8 @@ class Parser {
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<StmtNode>> parseStmt(
         int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<IfStmt>> parseIfStmt(
+        int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<AssignStmt>> parseAssignStmt(
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<ExpStmt>> parseExpStmt(
@@ -139,6 +145,7 @@ class Parser {
     [[nodiscard]] int32_t skipTrivia(int32_t offset) const;
     [[nodiscard]] int32_t recoverToFuncHeaderEnd(int32_t offset) const;
     [[nodiscard]] int32_t recoverToExprRParen(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToIfStmtHead(int32_t offset) const;
     [[nodiscard]] int32_t recoverToDeclBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToStmtBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToBlockItemBoundary(int32_t offset) const;
@@ -193,6 +200,8 @@ class Parser {
         m_constExpMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<StmtNode>>>
         m_stmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<IfStmt>>>
+        m_ifStmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<AssignStmt>>>
         m_assignStmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<ExpStmt>>>

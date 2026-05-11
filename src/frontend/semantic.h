@@ -63,6 +63,8 @@ namespace yesod::frontend {
             const VarDecl& varDecl);
         [[nodiscard]] std::shared_ptr<semantic::StmtNode> analyzeStmtNode(
             const StmtNode& stmtNode);
+        [[nodiscard]] std::shared_ptr<semantic::IfStmt> analyzeIfStmt(
+            const IfStmt& ifStmt);
         [[nodiscard]] std::shared_ptr<semantic::AssignStmt> analyzeAssignStmt(
             const AssignStmt& assignStmt);
         [[nodiscard]] std::shared_ptr<semantic::ExpStmt> analyzeExpStmt(

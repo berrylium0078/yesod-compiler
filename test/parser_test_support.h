@@ -32,6 +32,12 @@ static_assert(std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn),
     std::shared_ptr<LVal>>);
 static_assert(std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn),
     std::shared_ptr<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_condExp_nn),
+    std::shared_ptr<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_thenStmt_nn),
+    std::shared_ptr<StmtNode>>);
+static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_elseStmt_nn),
+    std::shared_ptr<StmtNode>>);
 static_assert(std::is_enum_v<UnaryOpKeyword>);
 static_assert(std::is_enum_v<MulOpKeyword>);
 static_assert(std::is_enum_v<AddOpKeyword>);
@@ -40,7 +46,7 @@ static_assert(std::is_enum_v<EqOpKeyword>);
 static_assert(
     std::variant_size_v<decltype(std::declval<DeclNode>().m_decl)> == 2);
 static_assert(
-    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 4);
+    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 5);
 static_assert(
     std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
     == 2);
@@ -207,6 +213,28 @@ inline std::shared_ptr<ReturnStmt> extractReturnStmt(
     const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
 {
     return extractReturnStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<IfStmt> extractIfStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<IfStmt> ifStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<IfStmt>>) {
+                ifStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(ifStmt != nullptr, "expected if statement variant");
+    return ifStmt;
+}
+
+inline std::shared_ptr<IfStmt> extractIfStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractIfStmt(extractStmtNode(blockItemNode_nn));
 }
 
 inline std::shared_ptr<AssignStmt> extractAssignStmt(
