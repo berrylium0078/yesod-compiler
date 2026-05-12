@@ -101,6 +101,11 @@ namespace {
         return (lhs != 0 || rhs != 0) ? 1 : 0;
     }
 
+    int32_t normalizeBooleanConstant(int32_t value)
+    {
+        return value != 0 ? 1 : 0;
+    }
+
 } // namespace
 
 SemanticOutput SemanticAnalyzer::analyze(const CompUnit& compUnit)
@@ -310,7 +315,7 @@ std::shared_ptr<semantic::IfStmt> SemanticAnalyzer::analyzeIfStmt(
     }
 
     return std::make_shared<semantic::IfStmt>(ifStmt.m_startOffset,
-        analyzeExp(requireNode(
+        analyzeCondExp(requireNode(
             ifStmt.m_condExp_nn, "if statement is missing its condition"))
             .m_exp_nn,
         analyzeStmtNode(requireNode(
@@ -363,8 +368,16 @@ std::shared_ptr<semantic::ReturnStmt> SemanticAnalyzer::analyzeReturnStmt(
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(const Exp& exp)
 {
-    return analyzeLOrExp(requireNode(
-        exp.m_lOrExp_nn, "expression is missing a logical-or expression"));
+    return normalizeToArithmetic(exp.m_startOffset,
+        analyzeLOrExp(requireNode(
+            exp.m_lOrExp_nn, "expression is missing a logical-or expression")));
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(const Exp& exp)
+{
+    return normalizeToBoolean(exp.m_startOffset,
+        analyzeLOrExp(requireNode(
+            exp.m_lOrExp_nn, "expression is missing a logical-or expression")));
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLOrExp(
@@ -373,13 +386,16 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLOrExp(
     auto current = analyzeLAndExp(requireNode(
         lOrExp.m_head_nn, "logical-or expression is missing its head"));
     for (const auto& tailEntry : lOrExp.m_tail) {
-        const auto rhs = analyzeLAndExp(requireNode(
+        auto rhs = analyzeLAndExp(requireNode(
             tailEntry.second, "logical-or expression is missing its operand"));
+        current = normalizeToBoolean(lOrExp.m_startOffset, std::move(current));
+        rhs = normalizeToBoolean(lOrExp.m_startOffset, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyLOrOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeNumberExp(lOrExp.m_startOffset,
-                current.m_constantValue);
+            current.m_exp_nn = makeBooleanConstantExp(
+                lOrExp.m_startOffset, current.m_constantValue);
+            current.m_valueKind = ExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
@@ -388,6 +404,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLOrExp(
             .m_exp_nn = makeBinaryExp(lOrExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -401,13 +418,16 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLAndExp(
     auto current = analyzeEqExp(requireNode(
         lAndExp.m_head_nn, "logical-and expression is missing its head"));
     for (const auto& tailEntry : lAndExp.m_tail) {
-        const auto rhs = analyzeEqExp(requireNode(
+        auto rhs = analyzeEqExp(requireNode(
             tailEntry.second, "logical-and expression is missing its operand"));
+        current = normalizeToBoolean(lAndExp.m_startOffset, std::move(current));
+        rhs = normalizeToBoolean(lAndExp.m_startOffset, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyLAndOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeNumberExp(lAndExp.m_startOffset,
-                current.m_constantValue);
+            current.m_exp_nn = makeBooleanConstantExp(
+                lAndExp.m_startOffset, current.m_constantValue);
+            current.m_valueKind = ExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
@@ -416,6 +436,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLAndExp(
             .m_exp_nn = makeBinaryExp(lAndExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -428,13 +449,16 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeEqExp(const EqExp& eqExp)
     auto current = analyzeRelExp(requireNode(
         eqExp.m_head_nn, "equality expression is missing its head"));
     for (const auto& tailEntry : eqExp.m_tail) {
-        const auto rhs = analyzeRelExp(requireNode(
+        auto rhs = analyzeRelExp(requireNode(
             tailEntry.second, "equality expression is missing its operand"));
+        current = normalizeToArithmetic(eqExp.m_startOffset, std::move(current));
+        rhs = normalizeToArithmetic(eqExp.m_startOffset, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyEqOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeNumberExp(eqExp.m_startOffset,
-                current.m_constantValue);
+            current.m_exp_nn = makeBooleanConstantExp(
+                eqExp.m_startOffset, current.m_constantValue);
+            current.m_valueKind = ExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
@@ -443,6 +467,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeEqExp(const EqExp& eqExp)
             .m_exp_nn = makeBinaryExp(eqExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -456,13 +481,16 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeRelExp(
     auto current = analyzeAddExp(requireNode(
         relExp.m_head_nn, "relational expression is missing its head"));
     for (const auto& tailEntry : relExp.m_tail) {
-        const auto rhs = analyzeAddExp(requireNode(
+        auto rhs = analyzeAddExp(requireNode(
             tailEntry.second, "relational expression is missing its operand"));
+        current = normalizeToArithmetic(relExp.m_startOffset, std::move(current));
+        rhs = normalizeToArithmetic(relExp.m_startOffset, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyRelOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeNumberExp(relExp.m_startOffset,
-                current.m_constantValue);
+            current.m_exp_nn = makeBooleanConstantExp(
+                relExp.m_startOffset, current.m_constantValue);
+            current.m_valueKind = ExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
@@ -471,6 +499,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeRelExp(
             .m_exp_nn = makeBinaryExp(relExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -484,8 +513,10 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeAddExp(
     auto current = analyzeMulExp(requireNode(
         addExp.m_head_nn, "additive expression is missing its head"));
     for (const auto& tailEntry : addExp.m_tail) {
-        const auto rhs = analyzeMulExp(requireNode(
+        auto rhs = analyzeMulExp(requireNode(
             tailEntry.second, "additive expression is missing its operand"));
+        current = normalizeToArithmetic(addExp.m_startOffset, std::move(current));
+        rhs = normalizeToArithmetic(addExp.m_startOffset, std::move(rhs));
         const auto folded = current.m_isConstant && rhs.m_isConstant
             ? applyAddOp(
                   tailEntry.first, current.m_constantValue, rhs.m_constantValue)
@@ -501,6 +532,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeAddExp(
             .m_exp_nn = makeBinaryExp(addExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::arithmetic,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -514,9 +546,11 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeMulExp(
     auto current = analyzeUnaryExp(requireNode(
         mulExp.m_head_nn, "multiplicative expression is missing its head"));
     for (const auto& tailEntry : mulExp.m_tail) {
-        const auto rhs = analyzeUnaryExp(requireNode(
+        auto rhs = analyzeUnaryExp(requireNode(
             tailEntry.second,
             "multiplicative expression is missing its operand"));
+        current = normalizeToArithmetic(mulExp.m_startOffset, std::move(current));
+        rhs = normalizeToArithmetic(mulExp.m_startOffset, std::move(rhs));
         const auto folded = current.m_isConstant && rhs.m_isConstant
             ? applyMulOp(
                   tailEntry.first, current.m_constantValue, rhs.m_constantValue)
@@ -532,6 +566,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeMulExp(
             .m_exp_nn = makeBinaryExp(mulExp.m_startOffset,
                 semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
                 rhs.m_exp_nn),
+            .m_valueKind = ExpValueKind::arithmetic,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -551,13 +586,25 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
             } else {
                 auto operand = analyzeUnaryExp(requireNode(unaryAlt.second,
                     "unary expression is missing its operand"));
+                if (unaryAlt.first == UnaryOpKeyword::bang) {
+                    operand = normalizeToBoolean(
+                        unaryExp.m_startOffset, std::move(operand));
+                } else {
+                    operand = normalizeToArithmetic(
+                        unaryExp.m_startOffset, std::move(operand));
+                }
                 if (operand.m_isConstant) {
                     const auto folded
                         = applyUnaryOp(unaryAlt.first, operand.m_constantValue);
                     if (folded.has_value()) {
                         return AnalyzedExp {
-                            .m_exp_nn = makeNumberExp(unaryExp.m_startOffset,
-                                *folded),
+                            .m_exp_nn = unaryAlt.first == UnaryOpKeyword::bang
+                                ? makeBooleanConstantExp(
+                                      unaryExp.m_startOffset, *folded)
+                                : makeNumberExp(unaryExp.m_startOffset, *folded),
+                            .m_valueKind = unaryAlt.first == UnaryOpKeyword::bang
+                                ? ExpValueKind::boolean
+                                : ExpValueKind::arithmetic,
                             .m_isConstant = true,
                             .m_constantValue = *folded,
                         };
@@ -566,6 +613,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
                 return AnalyzedExp {
                     .m_exp_nn = makeUnaryExp(
                         unaryExp.m_startOffset, unaryAlt.first, operand.m_exp_nn),
+                    .m_valueKind = unaryAlt.first == UnaryOpKeyword::bang
+                        ? ExpValueKind::boolean
+                        : ExpValueKind::arithmetic,
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
@@ -601,6 +651,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzePrimaryExp(
 
                 return AnalyzedExp {
                     .m_exp_nn = makeLValExp(primaryExp.m_startOffset, symbol_nn),
+                    .m_valueKind = ExpValueKind::arithmetic,
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
@@ -609,6 +660,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzePrimaryExp(
                     primaryAlt, "number primary expression is missing");
                 return AnalyzedExp {
                     .m_exp_nn = makeNumberExp(number.m_startOffset, number.m_value),
+                    .m_valueKind = ExpValueKind::arithmetic,
                     .m_isConstant = true,
                     .m_constantValue = number.m_value,
                 };
@@ -692,6 +744,69 @@ std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBinaryExp(
         semantic::Exp::Kind {
             std::make_shared<semantic::BinaryExp>(startOffset, std::move(op),
                 lhs_nn, rhs_nn) });
+}
+
+std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeIntToBoolExp(
+    int32_t startOffset, const std::shared_ptr<semantic::Exp>& operand_nn) const
+{
+    return std::make_shared<semantic::Exp>(startOffset,
+        semantic::Exp::Kind { std::make_shared<semantic::IntToBoolExp>(
+            startOffset, operand_nn) });
+}
+
+std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBoolToIntExp(
+    int32_t startOffset, const std::shared_ptr<semantic::Exp>& operand_nn) const
+{
+    return std::make_shared<semantic::Exp>(startOffset,
+        semantic::Exp::Kind { std::make_shared<semantic::BoolToIntExp>(
+            startOffset, operand_nn) });
+}
+
+std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBooleanConstantExp(
+    int32_t startOffset, int32_t value) const
+{
+    return makeIntToBoolExp(
+        startOffset, makeNumberExp(startOffset, normalizeBooleanConstant(value)));
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToArithmetic(
+    int32_t startOffset, AnalyzedExp analyzedExp) const
+{
+    if (analyzedExp.m_valueKind == ExpValueKind::arithmetic) {
+        return analyzedExp;
+    }
+    if (analyzedExp.m_isConstant) {
+        analyzedExp.m_exp_nn = makeNumberExp(startOffset,
+            normalizeBooleanConstant(analyzedExp.m_constantValue));
+        analyzedExp.m_constantValue
+            = normalizeBooleanConstant(analyzedExp.m_constantValue);
+        analyzedExp.m_valueKind = ExpValueKind::arithmetic;
+        return analyzedExp;
+    }
+
+    analyzedExp.m_exp_nn = makeBoolToIntExp(startOffset, analyzedExp.m_exp_nn);
+    analyzedExp.m_valueKind = ExpValueKind::arithmetic;
+    return analyzedExp;
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToBoolean(
+    int32_t startOffset, AnalyzedExp analyzedExp) const
+{
+    if (analyzedExp.m_valueKind == ExpValueKind::boolean) {
+        return analyzedExp;
+    }
+    if (analyzedExp.m_isConstant) {
+        analyzedExp.m_constantValue
+            = normalizeBooleanConstant(analyzedExp.m_constantValue);
+        analyzedExp.m_exp_nn
+            = makeBooleanConstantExp(startOffset, analyzedExp.m_constantValue);
+        analyzedExp.m_valueKind = ExpValueKind::boolean;
+        return analyzedExp;
+    }
+
+    analyzedExp.m_exp_nn = makeIntToBoolExp(startOffset, analyzedExp.m_exp_nn);
+    analyzedExp.m_valueKind = ExpValueKind::boolean;
+    return analyzedExp;
 }
 
 void SemanticAnalyzer::pushScope()

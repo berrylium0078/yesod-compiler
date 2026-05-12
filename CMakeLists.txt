@@ -101,6 +101,11 @@ set_target_properties(semantic_const_fold_test PROPERTIES C_STANDARD 11 CXX_STAN
 target_link_libraries(semantic_const_fold_test core)
 add_test(NAME semantic_const_fold_test COMMAND semantic_const_fold_test)
 
+add_executable(semantic_if_test test/semantic_if_test.cpp)
+set_target_properties(semantic_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(semantic_if_test core)
+add_test(NAME semantic_if_test COMMAND semantic_if_test)
+
 add_executable(koopa_basic_test test/koopa_basic_test.cpp)
 set_target_properties(koopa_basic_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(koopa_basic_test core)
@@ -115,6 +120,11 @@ add_executable(koopa_binary_test test/koopa_binary_test.cpp)
 set_target_properties(koopa_binary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(koopa_binary_test core)
 add_test(NAME koopa_binary_test COMMAND koopa_binary_test)
+
+add_executable(koopa_if_test test/koopa_if_test.cpp)
+set_target_properties(koopa_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+target_link_libraries(koopa_if_test core)
+add_test(NAME koopa_if_test COMMAND koopa_if_test)
 
 add_executable(koopa_decl_test test/koopa_decl_test.cpp)
 set_target_properties(koopa_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)

@@ -43,6 +43,8 @@ struct Exp;
 struct Number;
 struct LVal;
 struct BinaryExp;
+struct IntToBoolExp;
+struct BoolToIntExp;
 struct ConstDef;
 struct VarDef;
 struct ConstDecl;
@@ -95,10 +97,31 @@ struct BinaryExp final : AstNode {
     std::shared_ptr<Exp> m_rhs_nn;
 };
 
+struct IntToBoolExp final : AstNode {
+    IntToBoolExp(int32_t startOffset, std::shared_ptr<Exp> operand_nn)
+        : AstNode(startOffset)
+        , m_operand_nn(std::move(operand_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_operand_nn;
+};
+
+struct BoolToIntExp final : AstNode {
+    BoolToIntExp(int32_t startOffset, std::shared_ptr<Exp> operand_nn)
+        : AstNode(startOffset)
+        , m_operand_nn(std::move(operand_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_operand_nn;
+};
+
 struct Exp final : AstNode {
     using Kind = std::variant<std::shared_ptr<Number>, std::shared_ptr<LVal>,
         std::pair<UnaryOpKeyword, std::shared_ptr<Exp>>,
-        std::shared_ptr<BinaryExp>>;
+        std::shared_ptr<BinaryExp>, std::shared_ptr<IntToBoolExp>,
+        std::shared_ptr<BoolToIntExp>>;
 
     Exp(int32_t startOffset, Kind kind)
         : AstNode(startOffset)

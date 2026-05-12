@@ -16,45 +16,47 @@ class Generator {
         const frontend::semantic::CompUnit& compUnit) const;
 
   private:
+    struct FunctionGenerationState {
+        Function* m_function_nn;
+        BasicBlock* m_currentBasicBlock_nn;
+        BasicBlock* m_endBlock_nn;
+        int32_t m_nextTempId = 1;
+        int32_t m_nextBlockId = 1;
+        std::unordered_map<const frontend::semantic::Symbol*, Value*>
+            m_storageBySymbol;
+        std::unordered_set<std::string> m_usedSymbolNames;
+    };
+
     [[nodiscard]] Function* generateFuncDef(
         const frontend::semantic::FuncDef& funcDef) const;
-    void generateBlock(const frontend::semantic::Block& block,
-        BasicBlock& basicBlock, BasicBlock& endBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
-        std::unordered_set<std::string>& usedSymbolNames)
-        const;
-    void generateBlockItem(const frontend::semantic::BlockItemNode& blockItem,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
-        std::unordered_set<std::string>& usedSymbolNames)
-        const;
+    void generateBlock(
+        const frontend::semantic::Block& block,
+        FunctionGenerationState& state) const;
+    void generateBlockItem(
+        const frontend::semantic::BlockItemNode& blockItem,
+        FunctionGenerationState& state) const;
     void generateDecl(const frontend::semantic::DeclNode& declNode,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
-        std::unordered_set<std::string>& usedSymbolNames)
-        const;
+        FunctionGenerationState& state) const;
     void generateStmt(const frontend::semantic::StmtNode& stmtNode,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol,
-        std::unordered_set<std::string>& usedSymbolNames)
-        const;
+        FunctionGenerationState& state) const;
+    void generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
+        FunctionGenerationState& state) const;
     void generateAssignStmt(const frontend::semantic::AssignStmt& assignStmt,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
-        const;
+        FunctionGenerationState& state) const;
     void generateExpStmt(const frontend::semantic::ExpStmt& expStmt,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
-        const;
+        FunctionGenerationState& state) const;
     [[nodiscard]] ReturnValue* generateReturnStmt(
         const frontend::semantic::ReturnStmt& returnStmt,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
-        const;
-    [[nodiscard]] Value* generateExp(const frontend::semantic::Exp& exp,
-        BasicBlock& basicBlock, int32_t& nextTempId,
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>& storageBySymbol)
-        const;
+        FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateExp(
+        const frontend::semantic::Exp& exp,
+        FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateBooleanAsInt(
+        const frontend::semantic::Exp& exp,
+        FunctionGenerationState& state) const;
+    void generateBooleanBranch(const frontend::semantic::Exp& exp,
+        BasicBlock& trueBlock, BasicBlock& falseBlock,
+        FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateBooleanizedValue(
         Value* value, BasicBlock& basicBlock, int32_t& nextTempId) const;
     [[nodiscard]] BinaryValue* generateBinaryValue(koopa_raw_binary_op op,
@@ -62,6 +64,8 @@ class Generator {
         int32_t& nextTempId) const;
     [[nodiscard]] Value* generateNumber(
         const frontend::semantic::Number& number) const;
+    [[nodiscard]] BasicBlock* createBasicBlock(
+        const std::string& stem, FunctionGenerationState& state) const;
     [[nodiscard]] bool blockHasTerminator(const BasicBlock& basicBlock) const;
     void finalizeBasicBlock(BasicBlock& basicBlock, BasicBlock& endBlock) const;
     [[nodiscard]] std::string makeUniqueLocalName(

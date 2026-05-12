@@ -41,8 +41,14 @@ namespace yesod::frontend {
         [[nodiscard]] SemanticOutput analyze(const CompUnit& compUnit);
 
       private:
+        enum class ExpValueKind {
+            arithmetic,
+            boolean,
+        };
+
         struct AnalyzedExp {
             std::shared_ptr<semantic::Exp> m_exp_nn;
+            ExpValueKind m_valueKind = ExpValueKind::arithmetic;
             bool m_isConstant = false;
             int32_t m_constantValue = 0;
         };
@@ -72,6 +78,7 @@ namespace yesod::frontend {
         [[nodiscard]] std::shared_ptr<semantic::ReturnStmt> analyzeReturnStmt(
             const ReturnStmt& returnStmt);
         [[nodiscard]] AnalyzedExp analyzeExp(const Exp& exp);
+        [[nodiscard]] AnalyzedExp analyzeCondExp(const Exp& exp);
         [[nodiscard]] AnalyzedExp analyzeLOrExp(const LOrExp& lOrExp);
         [[nodiscard]] AnalyzedExp analyzeLAndExp(const LAndExp& lAndExp);
         [[nodiscard]] AnalyzedExp analyzeEqExp(const EqExp& eqExp);
@@ -102,6 +109,18 @@ namespace yesod::frontend {
             int32_t startOffset, semantic::BinaryExp::Op op,
             const std::shared_ptr<semantic::Exp>& lhs_nn,
             const std::shared_ptr<semantic::Exp>& rhs_nn) const;
+        [[nodiscard]] std::shared_ptr<semantic::Exp> makeIntToBoolExp(
+            int32_t startOffset,
+            const std::shared_ptr<semantic::Exp>& operand_nn) const;
+        [[nodiscard]] std::shared_ptr<semantic::Exp> makeBoolToIntExp(
+            int32_t startOffset,
+            const std::shared_ptr<semantic::Exp>& operand_nn) const;
+        [[nodiscard]] std::shared_ptr<semantic::Exp> makeBooleanConstantExp(
+            int32_t startOffset, int32_t value) const;
+        [[nodiscard]] AnalyzedExp normalizeToArithmetic(
+            int32_t startOffset, AnalyzedExp analyzedExp) const;
+        [[nodiscard]] AnalyzedExp normalizeToBoolean(
+            int32_t startOffset, AnalyzedExp analyzedExp) const;
         void pushScope();
         void popScope();
         [[nodiscard]] bool defineSymbol(

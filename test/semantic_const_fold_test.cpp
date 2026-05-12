@@ -4,7 +4,8 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-std::shared_ptr<ast::Number> requireNumberExp(const std::shared_ptr<ast::Exp>& exp_nn)
+std::shared_ptr<ast::Number> requireNumberExp(
+    const std::shared_ptr<ast::Exp>& exp_nn)
 {
     std::shared_ptr<ast::Number> number;
     std::visit(

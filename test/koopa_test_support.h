@@ -73,7 +73,7 @@ inline const Function* requireOnlyFunction(const Program& program)
 
 inline const BasicBlock* requireEntryBlock(const Function& function)
 {
-    require(function.getNumBBs() == 2,
+    require(function.getNumBBs() >= 2,
         "expected entry block plus synthesized guard end block");
     const auto* basicBlock = function.getBB(0);
     require(basicBlock->isEntry(), "first basic block should be the entry block");
@@ -84,13 +84,19 @@ inline const BasicBlock* requireEntryBlock(const Function& function)
 
 inline const BasicBlock* requireEndBlock(const Function& function)
 {
-    require(function.getNumBBs() == 2,
+    require(function.getNumBBs() >= 2,
         "expected entry block plus synthesized guard end block");
-    const auto* basicBlock = function.getBB(1);
+    const auto* basicBlock = function.getBB(function.getNumBBs() - 1);
     require(!basicBlock->isEntry(), "guard end block should not be the entry block");
     require(basicBlock->getName() == "%end",
         "guard end block should use the documented label");
     return basicBlock;
+}
+
+inline const BasicBlock* requireBlock(const Function& function, size_t index)
+{
+    require(index < function.getNumBBs(), "expected basic block at requested index");
+    return function.getBB(index);
 }
 
 inline const IntegerValue* requireInteger(
@@ -178,6 +184,25 @@ inline const JumpValue* requireJump(
     require(jumpValue->getNumArgs() == 0,
         "current subset should not emit block arguments on jumps");
     return jumpValue;
+}
+
+inline const BranchValue* requireBranch(const Value* value,
+    const BasicBlock* expectedTrueTarget,
+    const BasicBlock* expectedFalseTarget)
+{
+    require(value != nullptr, "expected branch value");
+    require(value->isBranchValue(), "expected branch instruction");
+    const auto* branchValue = dynamic_cast<const BranchValue*>(value);
+    require(branchValue != nullptr, "expected branch instruction cast");
+    require(branchValue->getTrueBB() == expectedTrueTarget,
+        "branch instruction should target the expected true basic block");
+    require(branchValue->getFalseBB() == expectedFalseTarget,
+        "branch instruction should target the expected false basic block");
+    require(branchValue->getNumTrueArgs() == 0,
+        "current subset should not emit block arguments on true branches");
+    require(branchValue->getNumFalseArgs() == 0,
+        "current subset should not emit block arguments on false branches");
+    return branchValue;
 }
 
 } // namespace yesod::test_support::koopa
