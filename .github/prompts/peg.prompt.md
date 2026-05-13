@@ -18,29 +18,11 @@ The current PEG design baseline is documented in `doc/sysy-peg.md` and should be
 
 ## Requirements
 
-1. Start from the original grammar and keep the PEG extension minimal. Do not redesign the language unless a PEG constraint forces a change.
-2. Eliminate left recursion explicitly. For every transformed rule, show the rewritten PEG-friendly form and briefly explain the transformation.
-3. Document every ordered-choice-sensitive rule. This is mandatory for rules like `Stmt` and `UnaryExp`, where branch order affects correctness.
-4. When a rule becomes PEG-sensitive, explain why the selected branch order is required and what earlier alternatives must exclude or consume before later ones are tried.
-5. Keep the grammar close to the original EBNF, but add a compact annotated extension for error recovery.
-6. Use only this minimal annotation set for recovery:
-   - `^` for cut or commit
-   - `Throw<Label>` for labeled failure
-   - named `Recover...` rules for panic-mode resynchronization
-7. Add labeled recovery branches only to high-value productions. Do not blanket-annotate every rule.
-8. Add explicit synchronization helpers that use the existing token layer. Prefer helpers that resynchronize on delimiters, separators, or statement and declaration boundaries already present in the grammar.
-9. Keep the label set compact. Cover major construct failures and missing delimiters, but avoid a large taxonomy.
-10. For each recovery label, name the triggering construct or missing delimiter precisely. Good examples include missing `)`, missing `]`, missing `}`, malformed statement head, malformed declaration head, or malformed primary expression.
-11. Distinguish clearly between:
-   - the plain PEG grammar
-   - the recovery-annotated PEG grammar
-   - the rationale for where recovery was added and where it was intentionally omitted
-12. If the input grammar is ambiguous or incomplete, state the assumption before presenting the PEG grammar.
-13. Preserve the existing token layer unless the input explicitly requires lexical changes.
-14. Keep the recovery design practical for parser implementation. Prefer a small number of robust synchronization points over speculative fine-grained recovery.
-15. When the task adds language features rather than defining the grammar from scratch, use `doc/sysy-peg.md` as the baseline PEG design.
-16. For feature additions, preserve unaffected rules and document only the necessary grammar deltas, interactions, and reordered choices introduced by the new feature.
-17. For feature additions, explain how the new construct fits into the existing precedence structure, statement forms, declaration forms, and synchronization strategy.
+1. Preserve the original EBNF structure unless a PEG constraint explicitly requires a redesign. Keep the PEG extension minimal, and preserve the existing token layer unless the input explicitly requires lexical changes.
+2. Eliminate left recursion explicitly, and document every ordered-choice-sensitive rule. For transformed rules, show the rewritten PEG-friendly form and briefly explain why it preserves the intended parse. For rules like `Stmt` and `UnaryExp`, explain the chosen branch order and what each earlier alternative must consume or exclude.
+3. Add recovery annotations only when they significantly improve parser diagnostics or structural recovery. Use only `^` for commit points, `Throw<Label>` for labeled failures, and named `Recover...` rules for panic-mode resynchronization. Keep labels compact and name them precisely, such as missing `)`, missing `]`, missing `}`, malformed statement head, or malformed declaration head.
+4. Use explicit synchronization helpers that rely on the existing token layer, and prefer a small number of delimiters, separators, and statement or declaration boundaries instead of fine-grained recovery everywhere. Distinguish clearly between the plain PEG grammar, the recovery-annotated PEG grammar, and the rationale for recovery placement. If the input grammar is ambiguous or incomplete, suggest possible corrections and ask the user to choose one before proceeding.
+5. For incremental feature additions, use `doc/sysy-peg.md` as the baseline. Preserve unaffected rules, describe only the necessary deltas and reordered choices, and explain how the new construct fits into precedence, statement forms, declaration forms, and synchronization strategy.
 
 ## Output Format
 

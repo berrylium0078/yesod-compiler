@@ -19,47 +19,57 @@ The authoritative frontend design inputs are:
 - `doc/sysy-peg.md` for grammar, ordered choice, cuts, labels, and synchronization behavior
 - `.github/copilot-instructions.md` for coding conventions
 - `src/frontend/ast.*` for AST definitions
+- `src/frontend/semantic_ast.*` for the AST definitions after the semantic analysis pass
 - `src/frontend/parser.*` for the integrated scanner and parser implementation
+
+If any of these documents are missing, incomplete, or internally inconsistent in a way that blocks implementation, report the blocker instead of inventing a design.
 
 ## Requirements
 
+### Grammar And Parser Behavior
+
 1. Treat `doc/sysy-peg.md` as the source of truth. Do not redesign the grammar or recovery strategy unless the document itself is internally inconsistent.
-2. Assume `doc/sysy-peg.md` already exists. If it is missing or too incomplete to implement faithfully, stop and report the blocker instead of inventing the missing design.
-3. Follow `.github/copilot-instructions.md` exactly for namespace, naming, header guards, ownership, and `std::variant` usage. Use `yesod::frontend` for frontend code.
-4. Keep lexical scanning integrated inside the parser implementation. Do not create a separate lexer module unless an existing code boundary forces a minimal compatibility wrapper.
-5. Implement or update one parse function for each PEG non-terminal that must be recognized by the frontend.
-6. Use packrat parsing. Memoize by non-terminal and `int32_t` byte offset.
-7. Each memoized parse result must record success or failure, the next `int32_t` byte offset, and the produced AST node or other typed parse result.
-8. Use byte offsets as `int32_t` source positions throughout the parser and AST.
-9. Each AST node stores only its starting byte offset for diagnostics. Do not store line or column on nodes.
-10. Represent AST child substructures only with `std::shared_ptr`. Do not embed child AST substructures by value inside parent nodes.
-11. Keep leaf-node payloads minimal:
-    - identifiers store only `std::string`
-    - number literals store only parsed `int32_t`
-    - comment nodes and whitespace nodes, if represented at all, store no additional payload
-    - operators and keywords are represented as `enum class`
-12. When a production has multiple semantic alternatives, model it with `std::variant` instead of flattening into structs with unrelated optional fields.
-13. Consume `std::variant` values with `std::visit`. Do not use `std::get` or `std::get_if`.
-14. Preserve PEG ordered-choice behavior exactly, especially for branch-order-sensitive productions documented in `doc/sysy-peg.md`.
-15. Implement recovery from the annotations in `doc/sysy-peg.md`. Cuts, labeled failures, and synchronization helpers must match the document rather than ad hoc parser behavior.
-16. Before editing, compare `doc/sysy-peg.md` against the current AST, parser, and parser tests. Identify missing or stale non-terminals, node variants, token categories, recovery paths, and tests.
-17. Keep the change set minimal but complete. Update AST definitions, parser code, parser-internal tokenization, tests, and build wiring only where synchronization requires it.
-18. Add or update parser-oriented tests that cover:
-    - representative valid parses
-    - precedence and associativity-sensitive expressions
-    - ordered-choice-sensitive productions
-    - AST payload constraints for identifiers, number literals, keywords, and operators
-    - integrated lexical handling at parser boundaries
-    - malformed inputs and recovery behavior
-19. Update tests incrementally. When a new grammar or AST feature is added, preserve the earlier test groups unless the feature introduces an intentional breaking change that makes the old expectation invalid.
-20. Treat previously existing test groups as baseline compatibility checks. If the current workspace no longer contains them, inspect git history to recover the earlier basic coverage before extending the suite.
-21. Organize tests into separate files by AST or feature-update group instead of accumulating all cases into a single monolithic test file. For example, keep basic, unary-operator, and binary-operator coverage in distinct test files when those are the current feature groups.
-22. When adding a new feature group, add a new focused test file for that group and leave existing group files intact except for necessary compatibility adjustments caused by intentional breaking changes.
-23. Where recovery is observable, assert both the intended diagnostic category and that parsing makes forward progress to the documented synchronization point.
-24. If comments or whitespace are skipped instead of emitted as nodes, document that choice and keep it consistent with `doc/sysy-peg.md` and the AST constraints above.
-25. Update CMake or test registration only as needed to build and run the parser tests.
-26. Fix synchronization at the root cause. Do not weaken tests to preserve parser behavior that contradicts `doc/sysy-peg.md`.
-27. Validate the result with the narrowest available build and test steps for the touched frontend slice.
+2. If the document is missing, incomplete, or internally inconsistent, report a blocker only when that gap prevents implementing one or more of the listed requirements.
+3. Keep lexical scanning integrated inside the parser implementation. Do not create a separate lexer module unless an existing code boundary forces a minimal compatibility wrapper.
+4. Implement or update one parse function for each PEG non-terminal that must be recognized by the frontend.
+5. Use packrat parsing. Memoize by non-terminal and `int32_t` byte offset, and ensure each memoized parse result records success or failure, the next `int32_t` byte offset, and the produced AST node or other typed parse result.
+6. Preserve PEG ordered-choice behavior exactly, especially for branch-order-sensitive productions documented in `doc/sysy-peg.md`.
+7. Implement recovery from the annotations in `doc/sysy-peg.md`. Cuts, labeled failures, and synchronization helpers must match the document rather than ad hoc parser behavior.
+
+### AST Constraints
+
+1. Follow `.github/copilot-instructions.md` exactly for namespace, naming, header guards, ownership, and `std::variant` usage. Use `yesod::frontend` for frontend code.
+2. Use byte offsets as `int32_t` source positions throughout the parser and AST.
+3. Each AST node stores only its starting byte offset for diagnostics. Do not store line or column on nodes.
+4. Represent AST child substructures only with `std::shared_ptr`. Do not embed child AST substructures by value inside parent nodes.
+5. Keep leaf-node payloads minimal:
+   - identifiers store only `std::string`
+   - number literals store only parsed `int32_t`
+   - comment nodes and whitespace nodes, if represented at all, store no additional payload
+   - operators and keywords are represented as `enum class`
+6. When a production has multiple semantic alternatives, model it with `std::variant` instead of flattening into structs with unrelated optional fields.
+7. Consume `std::variant` values with `std::visit`. Do not use `std::get` or `std::get_if`.
+
+### Tests And Wiring
+
+1. Before editing, compare `doc/sysy-peg.md` against the current AST, parser, and parser tests. Identify missing or stale non-terminals, node variants, token categories, recovery paths, and tests.
+2. Keep the change set minimal but complete. Update AST definitions, parser code, parser-internal tokenization, tests, and build wiring only where synchronization requires it.
+3. Add or update parser-oriented tests that cover:
+   - representative valid parses
+   - precedence and associativity-sensitive expressions
+   - ordered-choice-sensitive productions
+   - AST payload constraints for identifiers, number literals, keywords, and operators
+   - integrated lexical handling at parser boundaries
+   - malformed inputs and recovery behavior
+4. Update tests incrementally. When a new grammar or AST feature is added, preserve the earlier test groups unless the feature introduces an intentional breaking change that makes the old expectation invalid.
+5. Treat previously existing test groups as baseline compatibility checks. If the current workspace no longer contains them, inspect git history to recover the earlier basic coverage before extending the suite.
+6. Organize tests into separate files by AST or feature-update group instead of accumulating all cases into a single monolithic test file. For example, keep basic, unary-operator, and binary-operator coverage in distinct test files when those are the current feature groups.
+7. When adding a new feature group, add a new focused test file for that group and leave existing group files intact except for necessary compatibility adjustments caused by intentional breaking changes.
+8. Where recovery is observable, assert both the intended diagnostic category and that parsing makes forward progress to the documented synchronization point.
+9. If comments or whitespace are skipped instead of emitted as nodes, document that choice and keep it consistent with `doc/sysy-peg.md` and the AST constraints above.
+10. Update CMake or test registration only as needed to build and run the parser tests.
+11. Fix synchronization at the root cause. Do not weaken tests to preserve parser behavior that contradicts `doc/sysy-peg.md`.
+12. Validate the result with the narrowest available build and test steps for the touched frontend slice.
 
 ## Output Format
 
