@@ -13,8 +13,10 @@ namespace {
 using yesod::koopa::AllocValue;
 using yesod::koopa::BasicBlock;
 using yesod::koopa::BinaryValue;
+using yesod::koopa::BranchValue;
 using yesod::koopa::Function;
 using yesod::koopa::IntegerValue;
+using yesod::koopa::JumpValue;
 using yesod::koopa::LoadValue;
 using yesod::koopa::Program;
 using yesod::koopa::ReturnValue;
@@ -24,6 +26,7 @@ using yesod::koopa::Value;
 class FunctionEmitter {
     std::ostream& m_output;
     std::map<const Value*, int> m_stackSlots;
+    std::map<const BasicBlock*, std::string> m_blockLabels;
     int m_stackSize = 0;
     const Function* m_currentFunction_nn = nullptr;
 
@@ -41,6 +44,7 @@ class FunctionEmitter {
 
         assignStackSlots(function);
         m_currentFunction_nn = &function;
+        assignBlockLabels(function);
 
         m_output << "  .globl " << symbolName(function.getName()) << "\n";
         m_output << symbolName(function.getName()) << ":\n";
@@ -60,10 +64,12 @@ class FunctionEmitter {
         return koopaName;
     }
 
-    static std::string blockLabel(const Function& function, const BasicBlock& basicBlock)
+    static std::string sanitizeBlockName(const BasicBlock& basicBlock)
     {
-        std::string label = symbolName(function.getName());
-        label += basicBlock.isEntry() ? "_entry" : "_";
+        std::string label;
+        if (basicBlock.isEntry()) {
+            label = "entry";
+        }
         for (const char ch : basicBlock.getName()) {
             if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
                 || (ch >= '0' && ch <= '9')) {
@@ -74,7 +80,35 @@ class FunctionEmitter {
                 label.push_back('_');
             }
         }
+        if (label.empty()) {
+            label = basicBlock.isEntry() ? "entry" : "bb";
+        }
         return label;
+    }
+
+    void assignBlockLabels(const Function& function)
+    {
+        m_blockLabels.clear();
+
+        std::map<std::string, int> usedLabels;
+        const std::string functionName = symbolName(function.getName());
+        for (const BasicBlock* basicBlock : function.bbs()) {
+            std::string label = functionName + "_" + sanitizeBlockName(*basicBlock);
+            const int duplicateCount = ++usedLabels[label];
+            if (duplicateCount > 1) {
+                label += "_" + std::to_string(duplicateCount);
+            }
+            m_blockLabels.emplace(basicBlock, std::move(label));
+        }
+    }
+
+    const std::string& blockLabel(const BasicBlock& basicBlock) const
+    {
+        const auto it = m_blockLabels.find(&basicBlock);
+        if (it == m_blockLabels.end()) {
+            throw std::runtime_error("missing RISC-V label for basic block");
+        }
+        return it->second;
     }
 
     void assignStackSlots(const Function& function)
@@ -123,7 +157,7 @@ class FunctionEmitter {
     void emitBasicBlock(const BasicBlock& basicBlock)
     {
         if (!basicBlock.isEntry()) {
-            m_output << blockLabel(*m_currentFunction_nn, basicBlock) << ":\n";
+            m_output << blockLabel(basicBlock) << ":\n";
         }
 
         for (const Value* instruction : basicBlock.insts()) {
@@ -152,13 +186,18 @@ class FunctionEmitter {
             return;
         }
 
+        if (instruction.isBranchValue()) {
+            emitBranch(dynamic_cast<const BranchValue&>(instruction));
+            return;
+        }
+
         if (instruction.isReturnValue()) {
             emitReturn(dynamic_cast<const ReturnValue&>(instruction));
             return;
         }
 
         if (instruction.isJumpValue()) {
-            emitJump(*dynamic_cast<const yesod::koopa::JumpValue*>(&instruction));
+            emitJump(dynamic_cast<const JumpValue&>(instruction));
             return;
         }
 
@@ -260,12 +299,23 @@ class FunctionEmitter {
         m_output << "  sw t2, -" << stackOffset(binaryValue) << "(sp)\n";
     }
 
-    void emitJump(const yesod::koopa::JumpValue& jumpValue)
+    void emitBranch(const BranchValue& branchValue)
+    {
+        if (branchValue.getNumTrueArgs() != 0 || branchValue.getNumFalseArgs() != 0) {
+            throw std::runtime_error("RISC-V backend does not support block arguments yet");
+        }
+
+        loadValueToRegister(*branchValue.getCondition(), "t0");
+        m_output << "  bnez t0, " << blockLabel(*branchValue.getTrueBB()) << "\n";
+        m_output << "  j " << blockLabel(*branchValue.getFalseBB()) << "\n";
+    }
+
+    void emitJump(const JumpValue& jumpValue)
     {
         if (jumpValue.getNumArgs() != 0) {
             throw std::runtime_error("RISC-V backend does not support block arguments yet");
         }
-        m_output << "  j " << blockLabel(*m_currentFunction_nn, *jumpValue.getTargetBB()) << "\n";
+        m_output << "  j " << blockLabel(*jumpValue.getTargetBB()) << "\n";
     }
 
     void emitReturn(const ReturnValue& returnValue)
