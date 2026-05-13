@@ -18,6 +18,8 @@ namespace yesod::frontend {
         doubleDefinition,
         nonConstantConstInitializer,
         assignToConst,
+        breakOutsideWhile,
+        continueOutsideWhile,
     };
 
     struct SemanticDiagnostic {
@@ -71,6 +73,12 @@ namespace yesod::frontend {
             const StmtNode& stmtNode);
         [[nodiscard]] std::shared_ptr<semantic::IfStmt> analyzeIfStmt(
             const IfStmt& ifStmt);
+        [[nodiscard]] std::shared_ptr<semantic::WhileStmt> analyzeWhileStmt(
+            const WhileStmt& whileStmt);
+        [[nodiscard]] std::shared_ptr<semantic::BreakStmt> analyzeBreakStmt(
+            const BreakStmt& breakStmt);
+        [[nodiscard]] std::shared_ptr<semantic::ContinueStmt>
+        analyzeContinueStmt(const ContinueStmt& continueStmt);
         [[nodiscard]] std::shared_ptr<semantic::AssignStmt> analyzeAssignStmt(
             const AssignStmt& assignStmt);
         [[nodiscard]] std::shared_ptr<semantic::ExpStmt> analyzeExpStmt(
@@ -125,12 +133,15 @@ namespace yesod::frontend {
         void popScope();
         [[nodiscard]] bool defineSymbol(
             const std::shared_ptr<semantic::Symbol>& symbol_nn);
+        [[nodiscard]] std::shared_ptr<semantic::LoopTarget>
+        currentLoopTarget() const;
         void recordDiagnostic(SemanticDiagnosticKind kind, int32_t offset,
             std::string message);
 
         using Scope = std::unordered_map<std::string, std::shared_ptr<semantic::Symbol>>;
 
         std::vector<Scope> m_scopeStack;
+        std::vector<std::shared_ptr<semantic::LoopTarget>> m_loopTargetStack;
         std::vector<SemanticDiagnostic> m_diagnostics;
     };
 

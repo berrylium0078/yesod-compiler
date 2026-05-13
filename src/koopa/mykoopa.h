@@ -655,9 +655,9 @@ class StoreValue : public Value {
     {
         assert(Destination->getVType()->isPointerType()
             && "the destination of store value should have pointer type");
-        Type* PointeeType = dynamic_cast<PointerType*>(Destination->getVType())
-                                ->getPointeeType();
-        assert(*PointeeType == *Val->getVType()
+        assert(*dynamic_cast<PointerType*>(Destination->getVType())
+                    ->getPointeeType()
+                == *Val->getVType()
             && "the value of store value should have compatible type");
         return new StoreValue(Val, Destination);
     }
@@ -710,7 +710,7 @@ class GetElemPtrValue : public Value {
               PointerType::get(dynamic_cast<ArrayType*>(
                   dynamic_cast<PointerType*>(Source->getVType())
                       ->getPointeeType())
-                                   ->getElementType()),
+                      ->getElementType()),
               std::move(Name))
         , Source(Source)
         , Index(Index)
@@ -729,9 +729,9 @@ class GetElemPtrValue : public Value {
         assert(Source->getVType()->isPointerType()
             && "the source of getelemptr value should have pointer-of-array "
                "type");
-        Type* PointeeType
-            = dynamic_cast<PointerType*>(Source->getVType())->getPointeeType();
-        assert(PointeeType->isArrayType()
+        assert(dynamic_cast<PointerType*>(Source->getVType())
+                   ->getPointeeType()
+                   ->isArrayType()
             && "the source of getelemptr value should have pointer-of-array "
                "type");
         assert(Index->getVType()->isInt32Type()
@@ -1071,11 +1071,11 @@ class BasicBlock {
 
     static BasicBlock* createEntry(string&& Name = "")
     {
-        return new BasicBlock(true, {}, {}, std::move(Name));
+        return new BasicBlock(true, { }, { }, std::move(Name));
     }
     static BasicBlock* createNonEntry(string&& Name = "")
     {
-        return new BasicBlock(false, {}, {}, std::move(Name));
+        return new BasicBlock(false, { }, { }, std::move(Name));
     }
     void pushParam(Value* Param) { Params.push_back(Param); }
     void pushInst(Value* Inst) { Insts.push_back(Inst); }
@@ -1138,7 +1138,7 @@ class Function {
 
     static Function* create(Type* FuncType, string&& Name = "")
     {
-        return new Function(FuncType, {}, {}, std::move(Name));
+        return new Function(FuncType, { }, { }, std::move(Name));
     }
     void pushParam(Value* Param) { Params.push_back(Param); }
     void pushBB(BasicBlock* BB) { BBs.push_back(BB); }
@@ -1190,6 +1190,7 @@ class Program {
         for (Value* Val : Vals) {
             assert(Val->isGlobalAllocValue()
                 && "global value should be global alloc");
+            (void)Val;
         }
         return new Program(Builder, std::move(Vals), std::move(Funcs));
     }
@@ -1199,7 +1200,7 @@ class Program {
         return get(Builder, vector<Value*>(Vals), vector<Function*>(Funcs));
     }
 
-    static Program* create() { return get(nullptr, {}, {}); }
+    static Program* create() { return get(nullptr, { }, { }); }
     void pushVal(Value* Val)
     {
         assert(

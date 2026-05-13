@@ -524,9 +524,9 @@ koopa_raw_basic_block_t BasicBlock::dumpRaw(const BasicBlock* BB)
     koopa_raw_basic_block_t& Entry = Memo[BB];
     if (Entry == nullptr) {
         koopa_raw_basic_block_data_t* RawBB = BB->dumpMeta();
+        Entry = RawBB;
         Value::dumpSlice(RawBB->params, BB->params());
         Value::dumpSlice(RawBB->insts, BB->insts());
-        Entry = RawBB;
     }
     return Entry;
 }
@@ -663,8 +663,9 @@ Program* Program::validate()
     }
     koopa_raw_program_t RawProg = dumpRaw(this);
     koopa_program_t Prog;
-    assert(koopa_generate_raw_to_koopa(&RawProg, &Prog) == KOOPA_EC_SUCCESS
-        && "koopa validation is not passed");
+    auto err = koopa_generate_raw_to_koopa(&RawProg, &Prog);
+    (void)err;
+    assert(err == KOOPA_EC_SUCCESS && "koopa validation is not passed");
     koopa_dump_to_stdout(Prog);
     koopa_raw_program_builder_t Builder = koopa_new_raw_program_builder();
     RawProg = koopa_build_raw_program(Builder, Prog);

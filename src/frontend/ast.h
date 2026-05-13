@@ -84,6 +84,9 @@ struct ConstDecl;
 struct VarDecl;
 struct DeclNode;
 struct IfStmt;
+struct WhileStmt;
+struct BreakStmt;
+struct ContinueStmt;
 struct AssignStmt;
 struct ExpStmt;
 struct ReturnStmt;
@@ -357,6 +360,33 @@ struct IfStmt final : AstNode {
     std::shared_ptr<StmtNode> m_elseStmt_nn;
 };
 
+struct WhileStmt final : AstNode {
+    WhileStmt(int32_t startOffset, std::shared_ptr<Exp> condExp_nn,
+        std::shared_ptr<StmtNode> bodyStmt_nn)
+        : AstNode(startOffset)
+        , m_condExp_nn(std::move(condExp_nn))
+        , m_bodyStmt_nn(std::move(bodyStmt_nn))
+    {
+    }
+
+    std::shared_ptr<Exp> m_condExp_nn;
+    std::shared_ptr<StmtNode> m_bodyStmt_nn;
+};
+
+struct BreakStmt final : AstNode {
+    explicit BreakStmt(int32_t startOffset)
+        : AstNode(startOffset)
+    {
+    }
+};
+
+struct ContinueStmt final : AstNode {
+    explicit ContinueStmt(int32_t startOffset)
+        : AstNode(startOffset)
+    {
+    }
+};
+
 struct AssignStmt final : AstNode {
     AssignStmt(int32_t startOffset, std::shared_ptr<LVal> lVal_nn,
         std::shared_ptr<Exp> exp_nn)
@@ -390,9 +420,10 @@ struct ReturnStmt final : AstNode {
     std::shared_ptr<Exp> m_exp_nn;
 };
 
-using Stmt = std::variant<std::shared_ptr<IfStmt>, std::shared_ptr<AssignStmt>,
-    std::shared_ptr<Block>, std::shared_ptr<ReturnStmt>,
-    std::shared_ptr<ExpStmt>>;
+using Stmt = std::variant<std::shared_ptr<IfStmt>, std::shared_ptr<WhileStmt>,
+    std::shared_ptr<BreakStmt>, std::shared_ptr<ContinueStmt>,
+    std::shared_ptr<AssignStmt>, std::shared_ptr<Block>,
+    std::shared_ptr<ReturnStmt>, std::shared_ptr<ExpStmt>>;
 
 struct StmtNode final : AstNode {
     StmtNode(int32_t startOffset, Stmt stmt)

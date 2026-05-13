@@ -2,7 +2,7 @@
 
 ## 1. Source Grammar Notes
 
-This document is the current integrated PEG design for the implemented SysY subset. It is still derived from the source EBNF in [doc/sysy.md](doc/sysy.md), but it is presented here as one final design rather than as a running sequence of deltas.
+This document is the current PEG design for the implemented SysY subset. For this revision, [doc/sysy.md](doc/sysy.md) remains the source EBNF and this file is treated as an incremental extension of the previous PEG baseline, adding only `while`, `break`, and `continue` to the existing statement grammar.
 
 Assumptions for the current subset:
 
@@ -14,10 +14,11 @@ Assumptions for the current subset:
 - `ConstInitVal ::= ConstExp`
 - `InitVal ::= Exp`
 - `LVal ::= IDENT`
-- `Stmt ::= LVal "=" Exp ";" | [Exp] ";" | Block | "return" Exp ";" | "if" "(" Exp ")" Stmt ["else" Stmt]`
+- `Stmt ::= LVal "=" Exp ";" | [Exp] ";" | Block | "return" Exp ";" | "if" "(" Exp ")" Stmt ["else" Stmt] | "while" "(" Exp ")" Stmt | "break" ";" | "continue" ";"`
 - `Block` is both a function body and a statement form, so nested blocks introduce nested scopes and may be empty because `BlockItem*` admits zero items
 - function calls, arrays, and brace initializers are out of scope
 - `if-else` is supported, and dangling `else` binds to the innermost `if`
+- `while`, `break`, and `continue` are supported as statement forms; `break` and `continue` remain subject to semantic loop-context checks rather than syntax restrictions
 - whitespace and comments are handled entirely by the token layer and are not represented in the AST
 
 The operator-precedence ladder is the usual SysY one:
@@ -34,24 +35,25 @@ The operator-precedence ladder is the usual SysY one:
 
 ## 2. Baseline Delta
 
-This file now presents the current design as one unified grammar, but relative to the earlier baseline the meaningful changes are still:
+Relative to the previous `doc/sysy-peg.md` baseline, the delta for this revision is:
 
-- unchanged: the compilation-unit shell, declaration forms, expression precedence ladder, identifier and integer-literal tokenization, and trivia skipping
-- changed: `Stmt` now includes assignment, expression statements, block statements, return, and `if` / `if-else`
-- changed: `Block` is reachable recursively through `Stmt`, not only from `FuncDef`
-- added: `IfStmt` as the explicit helper for `"if" "(" Exp ")" Stmt ["else" Stmt]`
-- added: `ExpStmt` as the explicit helper for `[Exp] ";"`
-- reordered: `Stmt` must still distinguish `AssignStmt` from `ExpStmt`, because both may start with `IDENT`; `IfStmt` is inserted as a keyword-led statement form without disturbing the existing expression fallback
-- token layer: add `if` and `else` keywords; other tokens stay unchanged
-- recovery: existing function-header, declaration, block, return, and parenthesized-primary recovery stay valid; block-item and statement-boundary synchronization must now recognize `if` heads and `else` boundaries
+- unchanged: the compilation-unit shell, declaration forms, `if` / `if-else`, assignment and expression statements, expression precedence ladder, identifier and integer-literal tokenization, and trivia skipping
+- changed: `Stmt` grows three new keyword-led alternatives for `while`, `break`, and `continue`
+- added: `WhileStmt` as the explicit helper for `"while" "(" Exp ")" Stmt`
+- added: `BreakStmt` and `ContinueStmt` as keyword-led simple statements
+- reordered: `Stmt` keeps `AssignStmt` before `ExpStmt` for the existing `IDENT` ambiguity, while inserting `WhileStmt`, `BreakStmt`, and `ContinueStmt` ahead of the expression fallback because their prefixes are keyword-distinct
+- token layer: add `while`, `break`, and `continue` keywords; existing tokens stay unchanged
+- recovery: existing function-header, declaration, block, `if`, return, and parenthesized-primary recovery remain valid; block-item and statement-boundary synchronization must now recognize `while`, `break`, and `continue` heads
 
 ## 3. Left-Recursion Elimination
 
-The statement and declaration additions introduce no new left recursion. The PEG-sensitive rewrites are:
+The `while` and loop-control additions introduce no new left recursion. The PEG-sensitive rewrites are:
 
 | Original shape | PEG shape | Note |
 |---|---|---|
 | `Stmt ::= ... | "if" "(" Exp ")" Stmt ["else" Stmt]` | `IfStmt <- KW_IF LPAREN Exp RPAREN Stmt (KW_ELSE Stmt)?` and `Stmt <- IfStmt / ...` | the optional `else` stays greedy on the recursive `Stmt`, so the nearest nested `if` consumes it first |
+| `Stmt ::= ... | "while" "(" Exp ")" Stmt` | `WhileStmt <- KW_WHILE LPAREN Exp RPAREN Stmt` and `Stmt <- ... / WhileStmt / ...` | the source shape is already PEG-friendly, so it only needs a keyword-led helper |
+| `Stmt ::= ... | "break" ";" | "continue" ";"` | `BreakStmt <- KW_BREAK SEMI` and `ContinueStmt <- KW_CONTINUE SEMI` | each source form is already PEG-friendly and prefix-distinct from other statement heads |
 | `MulExp ::= UnaryExp | MulExp MulOp UnaryExp` | `MulExp <- UnaryExp (MulOp UnaryExp)*` | preserves left-associative multiplicative chains |
 | `AddExp ::= MulExp | AddExp AddOp MulExp` | `AddExp <- MulExp (AddOp MulExp)*` | preserves additive precedence and left-to-right folding |
 | `RelExp ::= AddExp | RelExp RelOp AddExp` | `RelExp <- AddExp (RelOp AddExp)*` | removes left recursion without changing precedence |
@@ -85,8 +87,11 @@ VarDef             <- IDENT (ASSIGN InitVal)?
 InitVal            <- Exp
 ConstExp           <- Exp
 
-Stmt               <- IfStmt / AssignStmt / Block / ReturnStmt / ExpStmt
+Stmt               <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
 IfStmt             <- KW_IF LPAREN Exp RPAREN Stmt (KW_ELSE Stmt)?
+WhileStmt          <- KW_WHILE LPAREN Exp RPAREN Stmt
+BreakStmt          <- KW_BREAK SEMI
+ContinueStmt       <- KW_CONTINUE SEMI
 AssignStmt         <- LVal ASSIGN Exp SEMI
 ReturnStmt         <- KW_RETURN Exp SEMI
 ExpStmt            <- Exp? SEMI
@@ -122,10 +127,13 @@ HexadecimalConst   <- HexadecimalPrefix HexadecimalDigit+
 HexadecimalPrefix  <- "0x" / "0X"
 
 KW_CONST           <- "const" !IdentifierContinue Spacing
+KW_BREAK           <- "break" !IdentifierContinue Spacing
+KW_CONTINUE        <- "continue" !IdentifierContinue Spacing
 KW_ELSE            <- "else" !IdentifierContinue Spacing
 KW_IF              <- "if" !IdentifierContinue Spacing
 KW_INT             <- "int" !IdentifierContinue Spacing
 KW_RETURN          <- "return" !IdentifierContinue Spacing
+KW_WHILE           <- "while" !IdentifierContinue Spacing
 LPAREN             <- "(" Spacing
 RPAREN             <- ")" Spacing
 LBRACE             <- "{" Spacing
@@ -164,10 +172,12 @@ EOF                <- !.
 
 Ordered-choice-sensitive plain-grammar rules:
 
-- `Stmt <- IfStmt / AssignStmt / Block / ReturnStmt / ExpStmt`
-  `AssignStmt` must come before `ExpStmt` because both can begin with `IDENT`. `IfStmt`, `Block`, and `ReturnStmt` are prefix-disjoint keyword or delimiter-led forms, so they can safely precede the catch-all `ExpStmt`.
+- `Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt`
+  `AssignStmt` must come before `ExpStmt` because both can begin with `IDENT`. `IfStmt`, `WhileStmt`, `BreakStmt`, `ContinueStmt`, `Block`, and `ReturnStmt` are prefix-disjoint keyword or delimiter-led forms, so they can safely precede the catch-all `ExpStmt`.
 - `IfStmt <- KW_IF LPAREN Exp RPAREN Stmt (KW_ELSE Stmt)?`
   The optional `else` suffix is intentionally greedy. Because the then-branch is a recursive `Stmt`, an inner `IfStmt` gets the first chance to consume `KW_ELSE`, which implements the standard dangling-`else` rule.
+- `WhileStmt <- KW_WHILE LPAREN Exp RPAREN Stmt`
+  The `while` head is prefix-distinct, so it can sit before identifier-led and expression-led statements without changing their parse. Its body stays a full `Stmt`, which keeps nested `if`, nested `while`, and block bodies aligned with the source grammar.
 - `UnaryExp <- PrimaryExp / UnaryOp UnaryExp`
   The order matches the source EBNF. Prefixes are disjoint in the current subset.
 - `PrimaryExp <- LPAREN Exp RPAREN / LVal / Number`
@@ -209,13 +219,21 @@ VarDef                   <- IDENT (ASSIGN InitVal)?
 InitVal                  <- Exp
 ConstExp                 <- Exp
 
-Stmt                     <- IfStmt / AssignStmt / Block / ReturnStmt / ExpStmt
+Stmt                     <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
 IfStmt                   <- KW_IF LPAREN ^
                             (Exp / Throw<MalformedIfCond> RecoverToIfStmtHead)
                             (RPAREN / Throw<MissingIfRParen> RecoverToIfStmtHead)
                             (Stmt / Throw<MalformedIfThenStmt> RecoverToStmtBoundary)
                             (KW_ELSE ^
                               (Stmt / Throw<MalformedElseStmt> RecoverToStmtBoundary))?
+WhileStmt                <- KW_WHILE LPAREN ^
+                            (Exp / Throw<MalformedWhileCond> RecoverToWhileStmtHead)
+                            (RPAREN / Throw<MissingWhileRParen> RecoverToWhileStmtHead)
+                            (Stmt / Throw<MalformedWhileBody> RecoverToStmtBoundary)
+BreakStmt                <- KW_BREAK ^
+                            (SEMI / Throw<MissingBreakSemicolon> RecoverToStmtBoundary)
+ContinueStmt             <- KW_CONTINUE ^
+                            (SEMI / Throw<MissingContinueSemicolon> RecoverToStmtBoundary)
 AssignStmt               <- LVal ASSIGN ^
                             (Exp / Throw<MalformedAssignValue> RecoverToStmtBoundary)
                             (SEMI / Throw<MissingAssignSemicolon> RecoverToStmtBoundary)
@@ -261,10 +279,13 @@ HexadecimalConst         <- HexadecimalPrefix HexadecimalDigit+
 HexadecimalPrefix        <- "0x" / "0X"
 
 KW_CONST                 <- "const" !IdentifierContinue Spacing
+KW_BREAK                 <- "break" !IdentifierContinue Spacing
+KW_CONTINUE              <- "continue" !IdentifierContinue Spacing
 KW_ELSE                  <- "else" !IdentifierContinue Spacing
 KW_IF                    <- "if" !IdentifierContinue Spacing
 KW_INT                   <- "int" !IdentifierContinue Spacing
 KW_RETURN                <- "return" !IdentifierContinue Spacing
+KW_WHILE                 <- "while" !IdentifierContinue Spacing
 LPAREN                   <- "(" Spacing
 RPAREN                   <- ")" Spacing
 LBRACE                   <- "{" Spacing
@@ -296,12 +317,15 @@ EndOfLine                <- "\r\n" / "\n" / "\r"
 
 RecoverToFuncHeaderEnd     <- (!")" !"{" !EOF .)* (RPAREN / &LBRACE / EOF)
 RecoverToExprRParen        <- (!")" !";" !"}" !EOF .)* (RPAREN / &SEMI / &RBRACE / EOF)
-RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
-RecoverToStmtBoundary      <- (!";" !"}" !KW_ELSE !EOF .)* (SEMI / &RBRACE / &KW_ELSE / EOF)
+RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToStmtBoundary      <- (!";" !"}" !KW_ELSE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !EOF .)*
+                              (SEMI / &RBRACE / &KW_ELSE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / EOF)
 RecoverToDeclBoundary      <- (!"," !";" !"}" !EOF .)* (COMMA / SEMI / &RBRACE / EOF)
-RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_IF !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
-                              (&KW_CONST / &KW_INT / &KW_IF / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
+RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
 RecoverToBlockEnd          <- (!"}" !EOF .)* (RBRACE / EOF)
 
 Digit                    <- [0-9]
@@ -317,6 +341,8 @@ Recovery placement, intentionally kept small:
 - `Block`: commit after `{` and recover at block-item boundaries or `}`
 - `ConstDecl` and `VarDecl`: recover on declarator boundaries `,`, `;`, `}`
 - `IfStmt`: commit after `if (` because the construct is already determined; recover the condition to `)` or the next statement head, and stop statement recovery at `else`
+- `WhileStmt`: commit after `while (` because the construct is already determined; recover the condition to `)` or the next statement head, then recover the body like any other statement
+- `BreakStmt` and `ContinueStmt`: commit after the keyword because no other statement shares that prefix, so a missing `;` should not fall through into another statement form
 - `AssignStmt`: commit after `=` so failures stay assignment-shaped
 - `ReturnStmt`: commit after `return` because no other statement shares that prefix
 - `ExpStmt`: keep bare `;` cheap, but treat a parsed expression as committed when its trailing `;` is missing
@@ -335,6 +361,11 @@ Recovery placement, intentionally kept small:
 | `MissingIfRParen` | `IfStmt` after condition `Exp` | `if` condition is missing `)` | `RecoverToIfStmtHead` |
 | `MalformedIfThenStmt` | `IfStmt` after `)` | then-branch statement is malformed or missing | `RecoverToStmtBoundary` |
 | `MalformedElseStmt` | `IfStmt` after `else` | else-branch statement is malformed or missing | `RecoverToStmtBoundary` |
+| `MalformedWhileCond` | `WhileStmt` after `while (` | `while` condition is malformed or missing | `RecoverToWhileStmtHead` |
+| `MissingWhileRParen` | `WhileStmt` after condition `Exp` | `while` condition is missing `)` | `RecoverToWhileStmtHead` |
+| `MalformedWhileBody` | `WhileStmt` after `)` | loop body statement is malformed or missing | `RecoverToStmtBoundary` |
+| `MissingBreakSemicolon` | `BreakStmt` after `break` | `break` statement is missing `;` | `RecoverToStmtBoundary` |
+| `MissingContinueSemicolon` | `ContinueStmt` after `continue` | `continue` statement is missing `;` | `RecoverToStmtBoundary` |
 | `MalformedAssignValue` | `AssignStmt` after `=` | assignment rhs is malformed or missing | `RecoverToStmtBoundary` |
 | `MissingAssignSemicolon` | `AssignStmt` after `Exp` | assignment is missing `;` | `RecoverToStmtBoundary` |
 | `MalformedReturnValue` | `ReturnStmt` after `return` | return expression is malformed or missing | `RecoverToStmtBoundary` |
@@ -348,10 +379,10 @@ Recovery placement, intentionally kept small:
 1. `Stmt`
 
 ```peg
-Stmt <- IfStmt / AssignStmt / Block / ReturnStmt / ExpStmt
+Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
 ```
 
-This is the main PEG-sensitive rule. `AssignStmt` must precede `ExpStmt` because both can begin with `IDENT`. `ExpStmt` must stay last because it is the fallback for empty statements and all remaining expression-headed statements. `IfStmt`, `Block`, and `ReturnStmt` can stay ahead of it because `if`, `{`, and `return` are prefix-disjoint.
+This is the main PEG-sensitive rule. `AssignStmt` must precede `ExpStmt` because both can begin with `IDENT`. `ExpStmt` must stay last because it is the fallback for empty statements and all remaining expression-headed statements. `IfStmt`, `WhileStmt`, `BreakStmt`, `ContinueStmt`, `Block`, and `ReturnStmt` can stay ahead of it because `if`, `while`, `break`, `continue`, `{`, and `return` are prefix-disjoint.
 
 2. `IfStmt`
 
@@ -361,7 +392,15 @@ IfStmt <- KW_IF LPAREN Exp RPAREN Stmt (KW_ELSE Stmt)?
 
 This rule is PEG-sensitive because of dangling `else`. The order inside the rule is fixed by the source grammar, and the optional `KW_ELSE Stmt` must remain on the same production as the recursive then-branch. If the grammar were split into separate `if-without-else` and `if-with-else` choices in the wrong order, PEG would let the shorter branch succeed too early and strand a later `else`. No extra cut is needed for the plain grammar; the greedy optional suffix plus recursive `Stmt` already gives the innermost `if` the first chance to consume `else`.
 
-3. `UnaryExp`
+3. `WhileStmt`
+
+```peg
+WhileStmt <- KW_WHILE LPAREN Exp RPAREN Stmt
+```
+
+This rule is only mildly order-sensitive: it must remain ahead of `ExpStmt` because `while` should be recognized as a reserved statement head, not as an expression-starting identifier. No additional cut is needed in the plain grammar because `KW_WHILE LPAREN` already determines the construct.
+
+4. `UnaryExp`
 
 ```peg
 UnaryExp <- PrimaryExp / UnaryOp UnaryExp
@@ -369,7 +408,7 @@ UnaryExp <- PrimaryExp / UnaryOp UnaryExp
 
 This order preserves the source EBNF. In the current subset the prefixes are disjoint, so no cut is needed here.
 
-4. `PrimaryExp`
+5. `PrimaryExp`
 
 ```peg
 PrimaryExp <- LPAREN Exp RPAREN / LVal / Number
@@ -377,7 +416,7 @@ PrimaryExp <- LPAREN Exp RPAREN / LVal / Number
 
 The order is documented because `LVal` introduces an `IDENT`-headed primary form and because recovery commits after `(`. In the current subset the prefixes are still disjoint.
 
-5. `RelOp`
+6. `RelOp`
 
 ```peg
 RelOp <- LE / GE / LT / GT
@@ -385,7 +424,7 @@ RelOp <- LE / GE / LT / GT
 
 Longer operators must come before their shorter prefixes.
 
-6. `IntegerConst`
+7. `IntegerConst`
 
 ```peg
 IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
@@ -393,7 +432,7 @@ IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
 
 Hexadecimal must precede octal so `0x...` does not get consumed as plain octal `0`.
 
-7. `Decl`
+8. `Decl`
 
 ```peg
 Decl <- ConstDecl / VarDecl
@@ -401,7 +440,7 @@ Decl <- ConstDecl / VarDecl
 
 This order is safe because `const` and `int` are prefix-distinct.
 
-8. `BlockItem`
+9. `BlockItem`
 
 ```peg
 BlockItem <- Decl / Stmt
@@ -411,6 +450,6 @@ This order is currently safe because declaration heads (`const`, `int`) are disj
 
 ## 8. Short Design Rationale
 
-The final grammar stays close to the source EBNF while making PEG-sensitive choices explicit only where needed. The main extension points are declarations, identifier-valued primaries, assignment statements, expression statements, nested block statements, and `if-else`. The precedence ladder stays unchanged, and the only token-layer delta is the addition of `if` and `else` keywords.
+The final grammar stays close to the source EBNF while making PEG-sensitive choices explicit only where needed. This revision is a minimal extension of the existing statement grammar: it adds one recursive loop form and two simple loop-control statements without disturbing declarations, expressions, or the established `if-else` shape. The precedence ladder stays unchanged, and the only token-layer delta is the addition of `while`, `break`, and `continue`.
 
-The recovery design is intentionally conservative. It attaches labels to outer user-visible constructs, not to low-level helpers, and uses only a few robust synchronization anchors: function-header end, statement boundary, declaration boundary, block-item boundary, `)`, `}`, and the `if` statement head. Stopping statement recovery at `else` is the key incremental change, because it preserves the innermost-`if` attachment rule instead of letting recovery accidentally consume the branch delimiter.
+The recovery design is intentionally conservative. It attaches labels to outer user-visible constructs, not to low-level helpers, and uses only a few robust synchronization anchors: function-header end, statement boundary, declaration boundary, block-item boundary, `)`, `}`, and statement heads for `if` and `while`. Stopping statement recovery at `else` remains the key `if`-specific safeguard, while recognizing `while`, `break`, and `continue` as statement starts prevents loop-control syntax errors from cascading into the following statement.

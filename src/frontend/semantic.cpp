@@ -111,6 +111,7 @@ namespace {
 SemanticOutput SemanticAnalyzer::analyze(const CompUnit& compUnit)
 {
     m_scopeStack.clear();
+    m_loopTargetStack.clear();
     m_diagnostics.clear();
     return SemanticOutput {
         .m_root = analyzeCompUnit(compUnit),
@@ -278,6 +279,24 @@ std::shared_ptr<semantic::StmtNode> SemanticAnalyzer::analyzeStmtNode(
                 return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
                     semantic::Stmt { ifStmt });
             } else if constexpr (std::is_same_v<AltType,
+                                     std::shared_ptr<WhileStmt>>) {
+                auto whileStmt = analyzeWhileStmt(requireNode(
+                    stmtAlt, "while statement payload is missing"));
+                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
+                    semantic::Stmt { whileStmt });
+            } else if constexpr (std::is_same_v<AltType,
+                                     std::shared_ptr<BreakStmt>>) {
+                auto breakStmt = analyzeBreakStmt(requireNode(
+                    stmtAlt, "break statement payload is missing"));
+                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
+                    semantic::Stmt { breakStmt });
+            } else if constexpr (std::is_same_v<AltType,
+                                     std::shared_ptr<ContinueStmt>>) {
+                auto continueStmt = analyzeContinueStmt(requireNode(
+                    stmtAlt, "continue statement payload is missing"));
+                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
+                    semantic::Stmt { continueStmt });
+            } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<AssignStmt>>) {
                 auto assignStmt = analyzeAssignStmt(requireNode(stmtAlt,
                     "assignment statement payload is missing"));
@@ -321,6 +340,48 @@ std::shared_ptr<semantic::IfStmt> SemanticAnalyzer::analyzeIfStmt(
         analyzeStmtNode(requireNode(
             ifStmt.m_thenStmt_nn, "if statement is missing its then-branch")),
         elseStmt_nn);
+}
+
+std::shared_ptr<semantic::WhileStmt> SemanticAnalyzer::analyzeWhileStmt(
+    const WhileStmt& whileStmt)
+{
+    const auto loopTarget_nn
+        = std::make_shared<semantic::LoopTarget>(whileStmt.m_startOffset);
+    m_loopTargetStack.push_back(loopTarget_nn);
+    auto bodyStmt_nn = analyzeStmtNode(requireNode(
+        whileStmt.m_bodyStmt_nn, "while statement is missing its body"));
+    m_loopTargetStack.pop_back();
+
+    return std::make_shared<semantic::WhileStmt>(whileStmt.m_startOffset,
+        analyzeCondExp(requireNode(
+            whileStmt.m_condExp_nn, "while statement is missing its condition"))
+            .m_exp_nn,
+        bodyStmt_nn, loopTarget_nn);
+}
+
+std::shared_ptr<semantic::BreakStmt> SemanticAnalyzer::analyzeBreakStmt(
+    const BreakStmt& breakStmt)
+{
+    const auto loopTarget_nn = currentLoopTarget();
+    if (loopTarget_nn == nullptr) {
+        recordDiagnostic(SemanticDiagnosticKind::breakOutsideWhile,
+            breakStmt.m_startOffset, "break statement is not inside a while loop");
+    }
+    return std::make_shared<semantic::BreakStmt>(
+        breakStmt.m_startOffset, loopTarget_nn);
+}
+
+std::shared_ptr<semantic::ContinueStmt> SemanticAnalyzer::analyzeContinueStmt(
+    const ContinueStmt& continueStmt)
+{
+    const auto loopTarget_nn = currentLoopTarget();
+    if (loopTarget_nn == nullptr) {
+        recordDiagnostic(SemanticDiagnosticKind::continueOutsideWhile,
+            continueStmt.m_startOffset,
+            "continue statement is not inside a while loop");
+    }
+    return std::make_shared<semantic::ContinueStmt>(
+        continueStmt.m_startOffset, loopTarget_nn);
 }
 
 std::shared_ptr<semantic::AssignStmt> SemanticAnalyzer::analyzeAssignStmt(
@@ -835,6 +896,15 @@ bool SemanticAnalyzer::defineSymbol(
 
     m_scopeStack.back().emplace(symbol_nn->m_name, symbol_nn);
     return true;
+}
+
+std::shared_ptr<semantic::LoopTarget> SemanticAnalyzer::currentLoopTarget()
+    const
+{
+    if (m_loopTargetStack.empty()) {
+        return nullptr;
+    }
+    return m_loopTargetStack.back();
 }
 
 void SemanticAnalyzer::recordDiagnostic(SemanticDiagnosticKind kind,

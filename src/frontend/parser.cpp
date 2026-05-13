@@ -46,6 +46,9 @@ ParseOutput Parser::parse()
     m_constExpMemo.clear();
     m_stmtMemo.clear();
     m_ifStmtMemo.clear();
+    m_whileStmtMemo.clear();
+    m_breakStmtMemo.clear();
+    m_continueStmtMemo.clear();
     m_assignStmtMemo.clear();
     m_expStmtMemo.clear();
     m_returnStmtMemo.clear();
@@ -814,6 +817,75 @@ ParseResult<std::shared_ptr<StmtNode>> Parser::parseStmt(int32_t offset)
         return failure;
     }
 
+    const auto whileKeyword = matchKeyword(normalizedOffset, "while");
+    if (whileKeyword.m_success) {
+        const auto whileStmt = parseWhileStmt(normalizedOffset);
+        if (whileStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = whileStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { whileStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+
+        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = false,
+            .m_nextOffset = whileStmt.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_stmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto breakKeyword = matchKeyword(normalizedOffset, "break");
+    if (breakKeyword.m_success) {
+        const auto breakStmt = parseBreakStmt(normalizedOffset);
+        if (breakStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = breakStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { breakStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+
+        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = false,
+            .m_nextOffset = breakStmt.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_stmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto continueKeyword = matchKeyword(normalizedOffset, "continue");
+    if (continueKeyword.m_success) {
+        const auto continueStmt = parseContinueStmt(normalizedOffset);
+        if (continueStmt.m_success) {
+            const auto result = ParseResult<std::shared_ptr<StmtNode>> {
+                .m_success = true,
+                .m_nextOffset = continueStmt.m_nextOffset,
+                .m_value = std::make_shared<StmtNode>(normalizedOffset,
+                    Stmt { continueStmt.m_value }),
+            };
+            m_stmtMemo.emplace(offset, result);
+            return result;
+        }
+
+        const auto failure = ParseResult<std::shared_ptr<StmtNode>> {
+            .m_success = false,
+            .m_nextOffset = continueStmt.m_nextOffset,
+            .m_value = nullptr,
+        };
+        m_stmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
     if (!isAtEnd(normalizedOffset) && isIdentifierStart(m_source[normalizedOffset])) {
         const auto assignStmt = parseAssignStmt(normalizedOffset);
         if (assignStmt.m_success) {
@@ -1006,6 +1078,204 @@ ParseResult<std::shared_ptr<IfStmt>> Parser::parseIfStmt(int32_t offset)
             condExp_nn, thenStmt.m_value, elseStmt_nn),
     };
     m_ifStmtMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<WhileStmt>> Parser::parseWhileStmt(int32_t offset)
+{
+    if (const auto memoIt = m_whileStmtMemo.find(offset);
+        memoIt != m_whileStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "while");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<WhileStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = nullptr,
+        };
+        m_whileStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto openParen = matchSymbol(keyword.m_nextOffset, '(');
+    if (!openParen.m_success) {
+        recordFailure(skipTrivia(keyword.m_nextOffset),
+            DiagnosticKind::expectedSymbol, "expected '(' after 'while'");
+        const auto failure = ParseResult<std::shared_ptr<WhileStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(keyword.m_nextOffset),
+            .m_value = nullptr,
+        };
+        m_whileStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    std::shared_ptr<Exp> condExp_nn;
+    auto bodyStmtOffset = openParen.m_nextOffset;
+    const auto condExp = parseExp(openParen.m_nextOffset);
+    if (!condExp.m_success) {
+        bool keepInnerDiagnostic = false;
+        for (const auto& diagnostic : m_bestDiagnostics) {
+            if (diagnostic.m_offset != m_bestFailureOffset) {
+                continue;
+            }
+
+            if (diagnostic.m_kind == DiagnosticKind::integerOutOfRange
+                || diagnostic.m_kind == DiagnosticKind::malformedPrimaryExp) {
+                keepInnerDiagnostic = true;
+                break;
+            }
+        }
+        if (!keepInnerDiagnostic) {
+            const auto recoveryDiagnosticOffset
+                = m_bestFailureOffset > skipTrivia(openParen.m_nextOffset)
+                ? m_bestFailureOffset
+                : skipTrivia(openParen.m_nextOffset);
+            recordCommittedFailure(recoveryDiagnosticOffset,
+                DiagnosticKind::malformedWhileCond,
+                "malformed while condition");
+        }
+
+        bodyStmtOffset = recoverToWhileStmtHead(openParen.m_nextOffset);
+    } else {
+        condExp_nn = condExp.m_value;
+        bodyStmtOffset = condExp.m_nextOffset;
+    }
+
+    const auto closeParen = matchSymbol(bodyStmtOffset, ')');
+    if (!closeParen.m_success) {
+        recordCommittedFailure(skipTrivia(bodyStmtOffset),
+            DiagnosticKind::missingWhileRParen,
+            "missing ')' after while condition");
+        bodyStmtOffset = recoverToWhileStmtHead(bodyStmtOffset);
+        const auto recoveredParen = matchSymbol(bodyStmtOffset, ')');
+        if (recoveredParen.m_success) {
+            bodyStmtOffset = recoveredParen.m_nextOffset;
+        }
+    } else {
+        bodyStmtOffset = closeParen.m_nextOffset;
+    }
+
+    const auto bodyStmt = parseStmt(bodyStmtOffset);
+    if (!bodyStmt.m_success) {
+        recordCommittedFailure(skipTrivia(bodyStmtOffset),
+            DiagnosticKind::malformedWhileBody,
+            "malformed while body statement");
+        const auto failure = ParseResult<std::shared_ptr<WhileStmt>> {
+            .m_success = false,
+            .m_nextOffset = recoverToStmtBoundary(bodyStmtOffset),
+            .m_value = nullptr,
+        };
+        m_whileStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<WhileStmt>> {
+        .m_success = true,
+        .m_nextOffset = bodyStmt.m_nextOffset,
+        .m_value = std::make_shared<WhileStmt>(keyword.m_startOffset,
+            condExp_nn, bodyStmt.m_value),
+    };
+    m_whileStmtMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<BreakStmt>> Parser::parseBreakStmt(int32_t offset)
+{
+    if (const auto memoIt = m_breakStmtMemo.find(offset);
+        memoIt != m_breakStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "break");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<BreakStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = nullptr,
+        };
+        m_breakStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto semicolon = matchSymbol(keyword.m_nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(keyword.m_nextOffset),
+            DiagnosticKind::missingBreakSemicolon,
+            "missing ';' after break statement");
+        auto recoveredOffset = recoverToStmtBoundary(keyword.m_nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<std::shared_ptr<BreakStmt>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = std::make_shared<BreakStmt>(keyword.m_startOffset),
+        };
+        m_breakStmtMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<BreakStmt>> {
+        .m_success = true,
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<BreakStmt>(keyword.m_startOffset),
+    };
+    m_breakStmtMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::shared_ptr<ContinueStmt>> Parser::parseContinueStmt(
+    int32_t offset)
+{
+    if (const auto memoIt = m_continueStmtMemo.find(offset);
+        memoIt != m_continueStmtMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto keyword = matchKeyword(offset, "continue");
+    if (!keyword.m_success) {
+        const auto failure = ParseResult<std::shared_ptr<ContinueStmt>> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = nullptr,
+        };
+        m_continueStmtMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto semicolon = matchSymbol(keyword.m_nextOffset, ';');
+    if (!semicolon.m_success) {
+        recordCommittedFailure(skipTrivia(keyword.m_nextOffset),
+            DiagnosticKind::missingContinueSemicolon,
+            "missing ';' after continue statement");
+        auto recoveredOffset = recoverToStmtBoundary(keyword.m_nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult
+            = ParseResult<std::shared_ptr<ContinueStmt>> {
+                  .m_success = true,
+                  .m_nextOffset = recoveredOffset,
+                  .m_value = std::make_shared<ContinueStmt>(
+                      keyword.m_startOffset),
+              };
+        m_continueStmtMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
+    }
+
+    const auto result = ParseResult<std::shared_ptr<ContinueStmt>> {
+        .m_success = true,
+        .m_nextOffset = semicolon.m_nextOffset,
+        .m_value = std::make_shared<ContinueStmt>(keyword.m_startOffset),
+    };
+    m_continueStmtMemo.emplace(offset, result);
     return result;
 }
 
@@ -2253,6 +2523,9 @@ int32_t Parser::recoverToIfStmtHead(int32_t offset) const
             || std::isdigit(static_cast<unsigned char>(m_source[normalizedOffset])) != 0
             || isIdentifierStart(m_source[normalizedOffset])
             || matchKeyword(normalizedOffset, "if").m_success
+            || matchKeyword(normalizedOffset, "while").m_success
+            || matchKeyword(normalizedOffset, "break").m_success
+            || matchKeyword(normalizedOffset, "continue").m_success
             || matchKeyword(normalizedOffset, "else").m_success
             || matchKeyword(normalizedOffset, "return").m_success) {
             return normalizedOffset;
@@ -2260,6 +2533,11 @@ int32_t Parser::recoverToIfStmtHead(int32_t offset) const
         nextOffset = normalizedOffset + 1;
     }
     return skipTrivia(nextOffset);
+}
+
+int32_t Parser::recoverToWhileStmtHead(int32_t offset) const
+{
+    return recoverToIfStmtHead(offset);
 }
 
 int32_t Parser::recoverToDeclBoundary(int32_t offset) const
@@ -2284,6 +2562,11 @@ int32_t Parser::recoverToStmtBoundary(int32_t offset) const
         const auto normalizedOffset = skipTrivia(nextOffset);
         if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ';'
             || m_source[normalizedOffset] == '}'
+            || matchKeyword(normalizedOffset, "if").m_success
+            || matchKeyword(normalizedOffset, "while").m_success
+            || matchKeyword(normalizedOffset, "break").m_success
+            || matchKeyword(normalizedOffset, "continue").m_success
+            || matchKeyword(normalizedOffset, "return").m_success
             || matchKeyword(normalizedOffset, "else").m_success) {
             return normalizedOffset;
         }
@@ -2309,6 +2592,9 @@ int32_t Parser::recoverToBlockItemBoundary(int32_t offset) const
             || matchKeyword(normalizedOffset, "const").m_success
             || matchKeyword(normalizedOffset, "int").m_success
             || matchKeyword(normalizedOffset, "if").m_success
+            || matchKeyword(normalizedOffset, "while").m_success
+            || matchKeyword(normalizedOffset, "break").m_success
+            || matchKeyword(normalizedOffset, "continue").m_success
             || matchKeyword(normalizedOffset, "return").m_success) {
             return normalizedOffset;
         }

@@ -17,6 +17,11 @@ class Generator {
 
   private:
     struct FunctionGenerationState {
+        struct LoopBlocks {
+            BasicBlock* m_condBlock_nn;
+            BasicBlock* m_endBlock_nn;
+        };
+
         Function* m_function_nn;
         BasicBlock* m_currentBasicBlock_nn;
         BasicBlock* m_endBlock_nn;
@@ -24,6 +29,8 @@ class Generator {
         int32_t m_nextBlockId = 1;
         std::unordered_map<const frontend::semantic::Symbol*, Value*>
             m_storageBySymbol;
+        std::unordered_map<const frontend::semantic::LoopTarget*, LoopBlocks>
+            m_loopBlocksByTarget;
         std::unordered_set<std::string> m_usedSymbolNames;
     };
 
@@ -40,6 +47,13 @@ class Generator {
     void generateStmt(const frontend::semantic::StmtNode& stmtNode,
         FunctionGenerationState& state) const;
     void generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
+        FunctionGenerationState& state) const;
+    void generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt,
+        FunctionGenerationState& state) const;
+    void generateBreakStmt(const frontend::semantic::BreakStmt& breakStmt,
+        FunctionGenerationState& state) const;
+    void generateContinueStmt(
+        const frontend::semantic::ContinueStmt& continueStmt,
         FunctionGenerationState& state) const;
     void generateAssignStmt(const frontend::semantic::AssignStmt& assignStmt,
         FunctionGenerationState& state) const;

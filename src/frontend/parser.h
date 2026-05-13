@@ -26,10 +26,15 @@ enum class DiagnosticKind {
     missingIfRParen,
     malformedIfThenStmt,
     malformedElseStmt,
+    malformedWhileCond,
+    missingWhileRParen,
+    malformedWhileBody,
     malformedStmtHead,
     malformedAssignValue,
     malformedReturnValue,
     malformedPrimaryExp,
+    missingBreakSemicolon,
+    missingContinueSemicolon,
     missingPrimaryRParen,
     missingAssignSemicolon,
     missingSemicolon,
@@ -103,6 +108,12 @@ class Parser {
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<IfStmt>> parseIfStmt(
         int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<WhileStmt>> parseWhileStmt(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<BreakStmt>> parseBreakStmt(
+        int32_t offset);
+    [[nodiscard]] ParseResult<std::shared_ptr<ContinueStmt>> parseContinueStmt(
+        int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<AssignStmt>> parseAssignStmt(
         int32_t offset);
     [[nodiscard]] ParseResult<std::shared_ptr<ExpStmt>> parseExpStmt(
@@ -146,6 +157,7 @@ class Parser {
     [[nodiscard]] int32_t recoverToFuncHeaderEnd(int32_t offset) const;
     [[nodiscard]] int32_t recoverToExprRParen(int32_t offset) const;
     [[nodiscard]] int32_t recoverToIfStmtHead(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToWhileStmtHead(int32_t offset) const;
     [[nodiscard]] int32_t recoverToDeclBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToStmtBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToBlockItemBoundary(int32_t offset) const;
@@ -202,6 +214,12 @@ class Parser {
         m_stmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<IfStmt>>>
         m_ifStmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<WhileStmt>>>
+        m_whileStmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<BreakStmt>>>
+        m_breakStmtMemo;
+    std::unordered_map<int32_t, ParseResult<std::shared_ptr<ContinueStmt>>>
+        m_continueStmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<AssignStmt>>>
         m_assignStmtMemo;
     std::unordered_map<int32_t, ParseResult<std::shared_ptr<ExpStmt>>>

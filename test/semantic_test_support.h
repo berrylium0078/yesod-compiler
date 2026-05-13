@@ -28,7 +28,7 @@ static_assert(std::is_same_v<decltype(std::declval<ast::Symbol>().m_name),
 static_assert(std::is_same_v<decltype(std::declval<ast::Number>().m_value),
     int32_t>);
 static_assert(std::variant_size_v<ast::Exp::Kind> == 6);
-static_assert(std::variant_size_v<ast::Stmt> == 5);
+static_assert(std::variant_size_v<ast::Stmt> == 8);
 
 [[noreturn]] inline void fail(const std::string& message)
 {

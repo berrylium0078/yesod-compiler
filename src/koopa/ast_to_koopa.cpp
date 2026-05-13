@@ -175,6 +175,22 @@ void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
                 generateIfStmt(
                     requireNode(stmtAlt, "if statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
+                         std::shared_ptr<frontend::semantic::WhileStmt>>) {
+            generateWhileStmt(requireNode(
+                          stmtAlt, "while statement is null"),
+                state);
+            } else if constexpr (std::is_same_v<AltType,
+                         std::shared_ptr<frontend::semantic::BreakStmt>>) {
+            generateBreakStmt(requireNode(
+                          stmtAlt, "break statement is null"),
+                state);
+            } else if constexpr (std::is_same_v<AltType,
+                         std::shared_ptr<frontend::semantic::ContinueStmt>>) {
+            generateContinueStmt(requireNode(
+                         stmtAlt,
+                         "continue statement is null"),
+                state);
+            } else if constexpr (std::is_same_v<AltType,
                               std::shared_ptr<frontend::semantic::AssignStmt>>) {
                 generateAssignStmt(requireNode(
                                        stmtAlt, "assignment statement is null"),
@@ -239,6 +255,69 @@ void Generator::generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
     }
 
     state.m_currentBasicBlock_nn = contBlock;
+}
+
+void Generator::generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt,
+    FunctionGenerationState& state) const
+{
+    auto* condBlock = createBasicBlock("while_cond", state);
+    auto* bodyBlock = createBasicBlock("while_body", state);
+    auto* endBlock = createBasicBlock("while_end", state);
+
+    state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
+
+    const auto& loopTarget = requireNode(
+        whileStmt.m_loopTarget_nn, "while statement is missing a loop target");
+    state.m_loopBlocksByTarget[&loopTarget] = FunctionGenerationState::LoopBlocks {
+        .m_condBlock_nn = condBlock,
+        .m_endBlock_nn = endBlock,
+    };
+
+    state.m_currentBasicBlock_nn = condBlock;
+    generateBooleanBranch(requireNode(
+                              whileStmt.m_condExp_nn,
+                              "while statement is missing a condition"),
+        *bodyBlock, *endBlock, state);
+
+    state.m_currentBasicBlock_nn = bodyBlock;
+    generateStmt(requireNode(
+                     whileStmt.m_bodyStmt_nn,
+                     "while statement is missing a body"),
+        state);
+    if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
+        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
+    }
+
+    state.m_loopBlocksByTarget.erase(&loopTarget);
+    state.m_currentBasicBlock_nn = endBlock;
+}
+
+void Generator::generateBreakStmt(const frontend::semantic::BreakStmt& breakStmt,
+    FunctionGenerationState& state) const
+{
+    const auto& loopTarget = requireNode(
+        breakStmt.m_loopTarget_nn, "break statement is missing a loop target");
+    const auto loopIt = state.m_loopBlocksByTarget.find(&loopTarget);
+    if (loopIt == state.m_loopBlocksByTarget.end()) {
+        throw std::runtime_error("break statement references unknown loop target");
+    }
+    state.m_currentBasicBlock_nn->pushInst(
+        JumpValue::get(loopIt->second.m_endBlock_nn, {}));
+}
+
+void Generator::generateContinueStmt(
+    const frontend::semantic::ContinueStmt& continueStmt,
+    FunctionGenerationState& state) const
+{
+    const auto& loopTarget = requireNode(continueStmt.m_loopTarget_nn,
+        "continue statement is missing a loop target");
+    const auto loopIt = state.m_loopBlocksByTarget.find(&loopTarget);
+    if (loopIt == state.m_loopBlocksByTarget.end()) {
+        throw std::runtime_error(
+            "continue statement references unknown loop target");
+    }
+    state.m_currentBasicBlock_nn->pushInst(
+        JumpValue::get(loopIt->second.m_condBlock_nn, {}));
 }
 
 void Generator::generateAssignStmt(

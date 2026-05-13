@@ -38,6 +38,10 @@ static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_thenStmt_nn),
     std::shared_ptr<StmtNode>>);
 static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_elseStmt_nn),
     std::shared_ptr<StmtNode>>);
+static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_condExp_nn),
+    std::shared_ptr<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_bodyStmt_nn),
+    std::shared_ptr<StmtNode>>);
 static_assert(std::is_enum_v<UnaryOpKeyword>);
 static_assert(std::is_enum_v<MulOpKeyword>);
 static_assert(std::is_enum_v<AddOpKeyword>);
@@ -46,7 +50,7 @@ static_assert(std::is_enum_v<EqOpKeyword>);
 static_assert(
     std::variant_size_v<decltype(std::declval<DeclNode>().m_decl)> == 2);
 static_assert(
-    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 5);
+    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 8);
 static_assert(
     std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
     == 2);
@@ -235,6 +239,61 @@ inline std::shared_ptr<IfStmt> extractIfStmt(
     const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
 {
     return extractIfStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<WhileStmt> extractWhileStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<WhileStmt> whileStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<WhileStmt>>) {
+                whileStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(whileStmt != nullptr, "expected while statement variant");
+    return whileStmt;
+}
+
+inline std::shared_ptr<WhileStmt> extractWhileStmt(
+    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+{
+    return extractWhileStmt(extractStmtNode(blockItemNode_nn));
+}
+
+inline std::shared_ptr<BreakStmt> extractBreakStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<BreakStmt> breakStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<BreakStmt>>) {
+                breakStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(breakStmt != nullptr, "expected break statement variant");
+    return breakStmt;
+}
+
+inline std::shared_ptr<ContinueStmt> extractContinueStmt(
+    const std::shared_ptr<StmtNode>& stmtNode_nn)
+{
+    std::shared_ptr<ContinueStmt> continueStmt;
+    std::visit(
+        [&](const auto& stmtAlt) {
+            using AltType = std::decay_t<decltype(stmtAlt)>;
+            if constexpr (std::is_same_v<AltType,
+                              std::shared_ptr<ContinueStmt>>) {
+                continueStmt = stmtAlt;
+            }
+        },
+        stmtNode_nn->m_stmt);
+    require(continueStmt != nullptr, "expected continue statement variant");
+    return continueStmt;
 }
 
 inline std::shared_ptr<AssignStmt> extractAssignStmt(
