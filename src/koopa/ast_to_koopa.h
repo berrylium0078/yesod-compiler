@@ -5,15 +5,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "frontend/semantic_ast.h"
+#include "frontend/semantic.h"
 #include "koopa/mykoopa.h"
 
 namespace yesod::koopa {
 
 class Generator {
   public:
-    [[nodiscard]] Program* generate(
-        const frontend::semantic::CompUnit& compUnit) const;
+    [[nodiscard]] Program* generate(const frontend::CompUnit& compUnit,
+        const frontend::SemanticInfo& semanticInfo) const;
 
   private:
     struct FunctionGenerationState {
@@ -22,53 +22,68 @@ class Generator {
             BasicBlock* m_endBlock_nn;
         };
 
+        const frontend::SemanticInfo* m_semanticInfo_nn;
         Function* m_function_nn;
         BasicBlock* m_currentBasicBlock_nn;
         BasicBlock* m_endBlock_nn;
         int32_t m_nextTempId = 1;
         int32_t m_nextBlockId = 1;
-        std::unordered_map<const frontend::semantic::Symbol*, Value*>
-            m_storageBySymbol;
-        std::unordered_map<const frontend::semantic::LoopTarget*, LoopBlocks>
-            m_loopBlocksByTarget;
+        std::unordered_map<int32_t, Value*> m_storageBySymbolId;
+        std::unordered_map<int32_t, LoopBlocks> m_loopBlocksById;
         std::unordered_set<std::string> m_usedSymbolNames;
     };
 
-    [[nodiscard]] Function* generateFuncDef(
-        const frontend::semantic::FuncDef& funcDef) const;
+    [[nodiscard]] Function* generateFuncDef(const frontend::FuncDef& funcDef,
+        const frontend::SemanticInfo& semanticInfo) const;
     void generateBlock(
-        const frontend::semantic::Block& block,
+        const frontend::Block& block, FunctionGenerationState& state) const;
+    void generateBlockItem(const frontend::BlockItemNode& blockItem,
         FunctionGenerationState& state) const;
-    void generateBlockItem(
-        const frontend::semantic::BlockItemNode& blockItem,
+    void generateDecl(const frontend::DeclNode& declNode,
         FunctionGenerationState& state) const;
-    void generateDecl(const frontend::semantic::DeclNode& declNode,
+    void generateStmt(const frontend::StmtNode& stmtNode,
         FunctionGenerationState& state) const;
-    void generateStmt(const frontend::semantic::StmtNode& stmtNode,
+    void generateIfStmt(const frontend::IfStmt& ifStmt,
         FunctionGenerationState& state) const;
-    void generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
+    void generateWhileStmt(const frontend::WhileStmt& whileStmt,
         FunctionGenerationState& state) const;
-    void generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt,
+    void generateBreakStmt(const frontend::BreakStmt& breakStmt,
         FunctionGenerationState& state) const;
-    void generateBreakStmt(const frontend::semantic::BreakStmt& breakStmt,
+    void generateContinueStmt(const frontend::ContinueStmt& continueStmt,
         FunctionGenerationState& state) const;
-    void generateContinueStmt(
-        const frontend::semantic::ContinueStmt& continueStmt,
+    void generateAssignStmt(const frontend::AssignStmt& assignStmt,
         FunctionGenerationState& state) const;
-    void generateAssignStmt(const frontend::semantic::AssignStmt& assignStmt,
-        FunctionGenerationState& state) const;
-    void generateExpStmt(const frontend::semantic::ExpStmt& expStmt,
+    void generateExpStmt(const frontend::ExpStmt& expStmt,
         FunctionGenerationState& state) const;
     [[nodiscard]] ReturnValue* generateReturnStmt(
-        const frontend::semantic::ReturnStmt& returnStmt,
+        const frontend::ReturnStmt& returnStmt,
         FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateExp(
-        const frontend::semantic::Exp& exp,
+        const frontend::Exp& exp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateLOrExpValue(
+        const frontend::LOrExp& lOrExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateLAndExpValue(
+        const frontend::LAndExp& lAndExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateEqExpValue(
+        const frontend::EqExp& eqExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateRelExpValue(
+        const frontend::RelExp& relExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateAddExpValue(
+        const frontend::AddExp& addExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateMulExpValue(
+        const frontend::MulExp& mulExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateUnaryExpValue(
+        const frontend::UnaryExp& unaryExp, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generatePrimaryExpValue(const frontend::PrimaryExp& primaryExp,
         FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateBooleanAsInt(
-        const frontend::semantic::Exp& exp,
+        const frontend::Exp& exp, FunctionGenerationState& state) const;
+    void generateBooleanBranch(const frontend::Exp& exp, BasicBlock& trueBlock,
+        BasicBlock& falseBlock, FunctionGenerationState& state) const;
+    void generateLOrExpBranch(const frontend::LOrExp& lOrExp,
+        BasicBlock& trueBlock, BasicBlock& falseBlock,
         FunctionGenerationState& state) const;
-    void generateBooleanBranch(const frontend::semantic::Exp& exp,
+    void generateLAndExpBranch(const frontend::LAndExp& lAndExp,
         BasicBlock& trueBlock, BasicBlock& falseBlock,
         FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateBooleanizedValue(
@@ -77,13 +92,16 @@ class Generator {
         Value* lhs, Value* rhs, BasicBlock& basicBlock,
         int32_t& nextTempId) const;
     [[nodiscard]] Value* generateNumber(
-        const frontend::semantic::Number& number) const;
+        const frontend::Number& number) const;
+    [[nodiscard]] const frontend::SemanticSymbol& requireSymbolForNode(
+        const frontend::AstNode& node, const frontend::SemanticInfo& semanticInfo,
+        const char* message) const;
     [[nodiscard]] BasicBlock* createBasicBlock(
         const std::string& stem, FunctionGenerationState& state) const;
     [[nodiscard]] bool blockHasTerminator(const BasicBlock& basicBlock) const;
     void finalizeBasicBlock(BasicBlock& basicBlock, BasicBlock& endBlock) const;
     [[nodiscard]] std::string makeUniqueLocalName(
-        const frontend::semantic::Symbol& symbol,
+        const frontend::SemanticSymbol& symbol,
         std::unordered_set<std::string>& usedSymbolNames) const;
 };
 

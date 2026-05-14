@@ -39,25 +39,29 @@ std::string makeTempName(int32_t& nextTempId)
     return "%" + std::to_string(nextTempId++);
 }
 
-Program* Generator::generate(const frontend::semantic::CompUnit& compUnit) const
+Program* Generator::generate(const frontend::CompUnit& compUnit,
+    const frontend::SemanticInfo& semanticInfo) const
 {
     auto* program = Program::create();
     program->pushFunc(generateFuncDef(requireNode(compUnit.m_funcDef_nn,
-        "compilation unit is missing a function definition")));
+        "compilation unit is missing a function definition"), semanticInfo));
     return program;
 }
 
-Function* Generator::generateFuncDef(
-    const frontend::semantic::FuncDef& funcDef) const
+Function* Generator::generateFuncDef(const frontend::FuncDef& funcDef,
+    const frontend::SemanticInfo& semanticInfo) const
 {
+    const auto& identifier = requireNode(
+        funcDef.m_identifier_nn, "function definition is missing an identifier");
     auto* function
         = Function::create(FunctionType::get(lowerFuncType(funcDef.m_funcType),
                                std::vector<Type*> {}),
-            makeFunctionName(funcDef.m_identifier));
+            makeFunctionName(identifier.m_name));
     auto* entryBlock = BasicBlock::createEntry("%entry");
     auto* endBlock = BasicBlock::createNonEntry("%end");
     function->pushBB(entryBlock);
     FunctionGenerationState state {
+        .m_semanticInfo_nn = &semanticInfo,
         .m_function_nn = function,
         .m_currentBasicBlock_nn = entryBlock,
         .m_endBlock_nn = endBlock,
@@ -76,20 +80,18 @@ Function* Generator::generateFuncDef(
 }
 
 void Generator::generateBlock(
-    const frontend::semantic::Block& block, FunctionGenerationState& state) const
+    const frontend::Block& block, FunctionGenerationState& state) const
 {
     for (const auto& blockItem : block.m_blockItems) {
         if (blockHasTerminator(*state.m_currentBasicBlock_nn)) {
             break;
         }
-        generateBlockItem(
-            requireNode(blockItem, "block contains a null item"), state);
+        generateBlockItem(requireNode(blockItem, "block contains a null item"), state);
     }
 }
 
 void Generator::generateBlockItem(
-    const frontend::semantic::BlockItemNode& blockItem,
-    FunctionGenerationState& state) const
+    const frontend::BlockItemNode& blockItem, FunctionGenerationState& state) const
 {
     if (blockHasTerminator(*state.m_currentBasicBlock_nn)) {
         return;
@@ -98,8 +100,7 @@ void Generator::generateBlockItem(
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::DeclNode>>) {
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::DeclNode>>) {
                 generateDecl(requireNode(
                                  blockItemAlt, "block item declaration is null"),
                     state);
@@ -112,32 +113,34 @@ void Generator::generateBlockItem(
         blockItem.m_blockItem);
 }
 
-void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
-    FunctionGenerationState& state) const
+void Generator::generateDecl(
+    const frontend::DeclNode& declNode, FunctionGenerationState& state) const
 {
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::ConstDecl>>) {
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::ConstDecl>>) {
                 const auto& constDecl = requireNode(
                     declAlt, "const declaration payload is null");
                 for (const auto& constDef : constDecl.m_constDefs) {
                     const auto& resolvedConstDef = requireNode(
                         constDef, "const declarator payload is null");
-                    const auto& symbol = requireNode(resolvedConstDef.m_symbol_nn,
-                        "const declarator is missing its symbol");
+                    const auto& symbol = requireSymbolForNode(resolvedConstDef,
+                        *state.m_semanticInfo_nn,
+                        "const declarator is missing its symbol binding");
                     auto* alloc = AllocValue::get(Int32Type::get(),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
-                    state.m_storageBySymbol[resolvedConstDef.m_symbol_nn.get()]
-                        = alloc;
-                    if (resolvedConstDef.m_initExp_nn != nullptr) {
-                        auto* initValue
-                            = generateExp(*resolvedConstDef.m_initExp_nn, state);
-                        state.m_currentBasicBlock_nn->pushInst(
-                            StoreValue::get(initValue, alloc));
-                    }
+                    state.m_storageBySymbolId[symbol.m_id] = alloc;
+                    const auto& constInitVal = requireNode(
+                        resolvedConstDef.m_constInitVal_nn,
+                        "const declarator is missing an initializer");
+                    const auto& constExp = requireNode(constInitVal.m_constExp_nn,
+                        "const initializer is missing its expression wrapper");
+                    auto* initValue = generateExp(requireNode(constExp.m_exp_nn,
+                        "const initializer is missing its expression"), state);
+                    state.m_currentBasicBlock_nn->pushInst(
+                        StoreValue::get(initValue, alloc));
                 }
             } else {
                 const auto& varDecl = requireNode(
@@ -145,16 +148,20 @@ void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
                 for (const auto& varDef : varDecl.m_varDefs) {
                     const auto& resolvedVarDef = requireNode(
                         varDef, "var declarator payload is null");
-                    const auto& symbol = requireNode(resolvedVarDef.m_symbol_nn,
-                        "var declarator is missing its symbol");
+                    const auto& symbol = requireSymbolForNode(resolvedVarDef,
+                        *state.m_semanticInfo_nn,
+                        "var declarator is missing its symbol binding");
                     auto* alloc = AllocValue::get(Int32Type::get(),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
-                    state.m_storageBySymbol[resolvedVarDef.m_symbol_nn.get()]
-                        = alloc;
-                    if (resolvedVarDef.m_initExp_nn != nullptr) {
-                        auto* initValue
-                            = generateExp(*resolvedVarDef.m_initExp_nn, state);
+                    state.m_storageBySymbolId[symbol.m_id] = alloc;
+                    if (resolvedVarDef.m_initVal_nn != nullptr) {
+                        auto* initValue = generateExp(requireNode(
+                            requireNode(resolvedVarDef.m_initVal_nn,
+                                "var declarator init payload is null")
+                                .m_exp_nn,
+                            "var initializer is missing its expression"),
+                            state);
                         state.m_currentBasicBlock_nn->pushInst(
                             StoreValue::get(initValue, alloc));
                     }
@@ -164,59 +171,48 @@ void Generator::generateDecl(const frontend::semantic::DeclNode& declNode,
         declNode.m_decl);
 }
 
-void Generator::generateStmt(const frontend::semantic::StmtNode& stmtNode,
-    FunctionGenerationState& state) const
+void Generator::generateStmt(
+    const frontend::StmtNode& stmtNode, FunctionGenerationState& state) const
 {
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::IfStmt>>) {
-                generateIfStmt(
-                    requireNode(stmtAlt, "if statement is null"), state);
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::IfStmt>>) {
+                generateIfStmt(requireNode(stmtAlt, "if statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                         std::shared_ptr<frontend::semantic::WhileStmt>>) {
-            generateWhileStmt(requireNode(
-                          stmtAlt, "while statement is null"),
-                state);
+                                     std::shared_ptr<frontend::WhileStmt>>) {
+                generateWhileStmt(
+                    requireNode(stmtAlt, "while statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                         std::shared_ptr<frontend::semantic::BreakStmt>>) {
-            generateBreakStmt(requireNode(
-                          stmtAlt, "break statement is null"),
-                state);
+                                     std::shared_ptr<frontend::BreakStmt>>) {
+                generateBreakStmt(
+                    requireNode(stmtAlt, "break statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                         std::shared_ptr<frontend::semantic::ContinueStmt>>) {
-            generateContinueStmt(requireNode(
-                         stmtAlt,
-                         "continue statement is null"),
-                state);
+                                     std::shared_ptr<frontend::ContinueStmt>>) {
+                generateContinueStmt(
+                    requireNode(stmtAlt, "continue statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::AssignStmt>>) {
-                generateAssignStmt(requireNode(
-                                       stmtAlt, "assignment statement is null"),
-                    state);
+                                     std::shared_ptr<frontend::AssignStmt>>) {
+                generateAssignStmt(
+                    requireNode(stmtAlt, "assignment statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::Block>>) {
-                const auto& nestedBlock
-                    = requireNode(stmtAlt, "block statement is null");
-                generateBlock(nestedBlock, state);
+                                     std::shared_ptr<frontend::Block>>) {
+                generateBlock(requireNode(stmtAlt, "block statement is null"), state);
             } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::ExpStmt>>) {
+                                     std::shared_ptr<frontend::ExpStmt>>) {
                 generateExpStmt(requireNode(
                                     stmtAlt, "expression statement is null"),
                     state);
             } else {
-                (void)generateReturnStmt(requireNode(
-                                            stmtAlt,
-                                            "return statement is null"),
-                    state);
+                (void)generateReturnStmt(
+                    requireNode(stmtAlt, "return statement is null"), state);
             }
         },
         stmtNode.m_stmt);
 }
 
-void Generator::generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
-    FunctionGenerationState& state) const
+void Generator::generateIfStmt(
+    const frontend::IfStmt& ifStmt, FunctionGenerationState& state) const
 {
     auto* thenBlock = createBasicBlock("if_then", state);
     BasicBlock* elseBlock = nullptr;
@@ -257,8 +253,8 @@ void Generator::generateIfStmt(const frontend::semantic::IfStmt& ifStmt,
     state.m_currentBasicBlock_nn = contBlock;
 }
 
-void Generator::generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt,
-    FunctionGenerationState& state) const
+void Generator::generateWhileStmt(
+    const frontend::WhileStmt& whileStmt, FunctionGenerationState& state) const
 {
     auto* condBlock = createBasicBlock("while_cond", state);
     auto* bodyBlock = createBasicBlock("while_body", state);
@@ -266,9 +262,11 @@ void Generator::generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt
 
     state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
 
-    const auto& loopTarget = requireNode(
-        whileStmt.m_loopTarget_nn, "while statement is missing a loop target");
-    state.m_loopBlocksByTarget[&loopTarget] = FunctionGenerationState::LoopBlocks {
+    const auto loopId = state.m_semanticInfo_nn->findLoopId(whileStmt.m_id);
+    if (!loopId.has_value()) {
+        throw std::runtime_error("while statement is missing a loop binding");
+    }
+    state.m_loopBlocksById[*loopId] = FunctionGenerationState::LoopBlocks {
         .m_condBlock_nn = condBlock,
         .m_endBlock_nn = endBlock,
     };
@@ -288,31 +286,34 @@ void Generator::generateWhileStmt(const frontend::semantic::WhileStmt& whileStmt
         state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
     }
 
-    state.m_loopBlocksByTarget.erase(&loopTarget);
+    state.m_loopBlocksById.erase(*loopId);
     state.m_currentBasicBlock_nn = endBlock;
 }
 
-void Generator::generateBreakStmt(const frontend::semantic::BreakStmt& breakStmt,
-    FunctionGenerationState& state) const
+void Generator::generateBreakStmt(
+    const frontend::BreakStmt& breakStmt, FunctionGenerationState& state) const
 {
-    const auto& loopTarget = requireNode(
-        breakStmt.m_loopTarget_nn, "break statement is missing a loop target");
-    const auto loopIt = state.m_loopBlocksByTarget.find(&loopTarget);
-    if (loopIt == state.m_loopBlocksByTarget.end()) {
+    const auto loopId = state.m_semanticInfo_nn->findLoopId(breakStmt.m_id);
+    if (!loopId.has_value()) {
+        throw std::runtime_error("break statement references no loop binding");
+    }
+    const auto loopIt = state.m_loopBlocksById.find(*loopId);
+    if (loopIt == state.m_loopBlocksById.end()) {
         throw std::runtime_error("break statement references unknown loop target");
     }
     state.m_currentBasicBlock_nn->pushInst(
         JumpValue::get(loopIt->second.m_endBlock_nn, {}));
 }
 
-void Generator::generateContinueStmt(
-    const frontend::semantic::ContinueStmt& continueStmt,
+void Generator::generateContinueStmt(const frontend::ContinueStmt& continueStmt,
     FunctionGenerationState& state) const
 {
-    const auto& loopTarget = requireNode(continueStmt.m_loopTarget_nn,
-        "continue statement is missing a loop target");
-    const auto loopIt = state.m_loopBlocksByTarget.find(&loopTarget);
-    if (loopIt == state.m_loopBlocksByTarget.end()) {
+    const auto loopId = state.m_semanticInfo_nn->findLoopId(continueStmt.m_id);
+    if (!loopId.has_value()) {
+        throw std::runtime_error("continue statement references no loop binding");
+    }
+    const auto loopIt = state.m_loopBlocksById.find(*loopId);
+    if (loopIt == state.m_loopBlocksById.end()) {
         throw std::runtime_error(
             "continue statement references unknown loop target");
     }
@@ -320,16 +321,15 @@ void Generator::generateContinueStmt(
         JumpValue::get(loopIt->second.m_condBlock_nn, {}));
 }
 
-void Generator::generateAssignStmt(
-    const frontend::semantic::AssignStmt& assignStmt,
+void Generator::generateAssignStmt(const frontend::AssignStmt& assignStmt,
     FunctionGenerationState& state) const
 {
     const auto& lVal
         = requireNode(assignStmt.m_lVal_nn, "assignment is missing an lvalue");
-    const auto& symbol
-        = requireNode(lVal.m_symbol_nn, "assignment lvalue is missing a symbol");
-    const auto storageIt = state.m_storageBySymbol.find(&symbol);
-    if (storageIt == state.m_storageBySymbol.end()) {
+    const auto& symbol = requireSymbolForNode(
+        lVal, *state.m_semanticInfo_nn, "assignment lvalue is missing a symbol");
+    const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
+    if (storageIt == state.m_storageBySymbolId.end()) {
         throw std::runtime_error("assignment references undefined storage");
     }
 
@@ -338,8 +338,8 @@ void Generator::generateAssignStmt(
     state.m_currentBasicBlock_nn->pushInst(StoreValue::get(value, storageIt->second));
 }
 
-void Generator::generateExpStmt(const frontend::semantic::ExpStmt& expStmt,
-    FunctionGenerationState& state) const
+void Generator::generateExpStmt(
+    const frontend::ExpStmt& expStmt, FunctionGenerationState& state) const
 {
     if (expStmt.m_exp_nn != nullptr) {
         (void)generateExp(requireNode(
@@ -348,8 +348,7 @@ void Generator::generateExpStmt(const frontend::semantic::ExpStmt& expStmt,
 }
 
 ReturnValue* Generator::generateReturnStmt(
-    const frontend::semantic::ReturnStmt& returnStmt,
-    FunctionGenerationState& state) const
+    const frontend::ReturnStmt& returnStmt, FunctionGenerationState& state) const
 {
     auto* returnValue = ReturnValue::get(generateExp(
         requireNode(returnStmt.m_exp_nn, "return statement is missing a value"),
@@ -359,121 +358,270 @@ ReturnValue* Generator::generateReturnStmt(
 }
 
 Value* Generator::generateExp(
-    const frontend::semantic::Exp& exp, FunctionGenerationState& state) const
+    const frontend::Exp& exp, FunctionGenerationState& state) const
 {
+    if (const auto constantValue
+        = state.m_semanticInfo_nn->findConstantValue(exp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    return generateLOrExpValue(
+        requireNode(exp.m_lOrExp_nn, "expression is missing a logical-or node"),
+        state);
+}
+
+Value* Generator::generateLOrExpValue(
+    const frontend::LOrExp& lOrExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue
+        = state.m_semanticInfo_nn->findConstantValue(lOrExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    if (lOrExp.m_tail.empty()) {
+        return generateLAndExpValue(
+            requireNode(lOrExp.m_head_nn, "logical-or expression is missing its head"),
+            state);
+    }
+    auto* resultStorage = AllocValue::get(
+        Int32Type::get(), makeTempName(state.m_nextTempId));
+    state.m_currentBasicBlock_nn->pushInst(resultStorage);
+    state.m_currentBasicBlock_nn->pushInst(
+        StoreValue::get(IntegerValue::get(0), resultStorage));
+
+    auto* trueBlock = createBasicBlock("lor_true", state);
+    auto* falseBlock = createBasicBlock("lor_false", state);
+    auto* contBlock = createBasicBlock("lor_end", state);
+
+    generateLOrExpBranch(lOrExp, *trueBlock, *falseBlock, state);
+
+    trueBlock->pushInst(StoreValue::get(IntegerValue::get(1), resultStorage));
+    trueBlock->pushInst(JumpValue::get(contBlock, {}));
+    falseBlock->pushInst(StoreValue::get(IntegerValue::get(0), resultStorage));
+    falseBlock->pushInst(JumpValue::get(contBlock, {}));
+
+    state.m_currentBasicBlock_nn = contBlock;
+    auto* loadValue
+        = LoadValue::get(resultStorage, makeTempName(state.m_nextTempId));
+    contBlock->pushInst(loadValue);
+    return loadValue;
+}
+
+Value* Generator::generateLAndExpValue(
+    const frontend::LAndExp& lAndExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue
+        = state.m_semanticInfo_nn->findConstantValue(lAndExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    if (lAndExp.m_tail.empty()) {
+        return generateEqExpValue(
+            requireNode(lAndExp.m_head_nn, "logical-and expression is missing its head"),
+            state);
+    }
+    auto* resultStorage = AllocValue::get(
+        Int32Type::get(), makeTempName(state.m_nextTempId));
+    state.m_currentBasicBlock_nn->pushInst(resultStorage);
+    state.m_currentBasicBlock_nn->pushInst(
+        StoreValue::get(IntegerValue::get(0), resultStorage));
+
+    auto* trueBlock = createBasicBlock("land_true", state);
+    auto* falseBlock = createBasicBlock("land_false", state);
+    auto* contBlock = createBasicBlock("land_end", state);
+
+    generateLAndExpBranch(lAndExp, *trueBlock, *falseBlock, state);
+
+    trueBlock->pushInst(StoreValue::get(IntegerValue::get(1), resultStorage));
+    trueBlock->pushInst(JumpValue::get(contBlock, {}));
+    falseBlock->pushInst(StoreValue::get(IntegerValue::get(0), resultStorage));
+    falseBlock->pushInst(JumpValue::get(contBlock, {}));
+
+    state.m_currentBasicBlock_nn = contBlock;
+    auto* loadValue
+        = LoadValue::get(resultStorage, makeTempName(state.m_nextTempId));
+    contBlock->pushInst(loadValue);
+    return loadValue;
+}
+
+Value* Generator::generateEqExpValue(
+    const frontend::EqExp& eqExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue = state.m_semanticInfo_nn->findConstantValue(eqExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    auto* current = generateRelExpValue(
+        requireNode(eqExp.m_head_nn, "equality expression is missing its head"),
+        state);
+    for (const auto& tailEntry : eqExp.m_tail) {
+        auto* rhs = generateRelExpValue(requireNode(
+            tailEntry.second, "equality expression is missing its operand"), state);
+        const auto op = tailEntry.first == frontend::EqOpKeyword::equal
+            ? KOOPA_RBO_EQ
+            : KOOPA_RBO_NOT_EQ;
+        current = generateBinaryValue(op, current, rhs,
+            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+    }
+    return current;
+}
+
+Value* Generator::generateRelExpValue(
+    const frontend::RelExp& relExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue = state.m_semanticInfo_nn->findConstantValue(relExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    auto* current = generateAddExpValue(
+        requireNode(relExp.m_head_nn, "relational expression is missing its head"),
+        state);
+    for (const auto& tailEntry : relExp.m_tail) {
+        auto* rhs = generateAddExpValue(requireNode(
+            tailEntry.second, "relational expression is missing its operand"), state);
+        koopa_raw_binary_op op = KOOPA_RBO_LT;
+        switch (tailEntry.first) {
+        case frontend::RelOpKeyword::less:
+            op = KOOPA_RBO_LT;
+            break;
+        case frontend::RelOpKeyword::greater:
+            op = KOOPA_RBO_GT;
+            break;
+        case frontend::RelOpKeyword::lessEqual:
+            op = KOOPA_RBO_LE;
+            break;
+        case frontend::RelOpKeyword::greaterEqual:
+            op = KOOPA_RBO_GE;
+            break;
+        }
+        current = generateBinaryValue(op, current, rhs,
+            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+    }
+    return current;
+}
+
+Value* Generator::generateAddExpValue(
+    const frontend::AddExp& addExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue = state.m_semanticInfo_nn->findConstantValue(addExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    auto* current = generateMulExpValue(
+        requireNode(addExp.m_head_nn, "additive expression is missing its head"),
+        state);
+    for (const auto& tailEntry : addExp.m_tail) {
+        auto* rhs = generateMulExpValue(requireNode(
+            tailEntry.second, "additive expression is missing its operand"), state);
+        const auto op = tailEntry.first == frontend::AddOpKeyword::plus
+            ? KOOPA_RBO_ADD
+            : KOOPA_RBO_SUB;
+        current = generateBinaryValue(op, current, rhs,
+            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+    }
+    return current;
+}
+
+Value* Generator::generateMulExpValue(
+    const frontend::MulExp& mulExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue = state.m_semanticInfo_nn->findConstantValue(mulExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    auto* current = generateUnaryExpValue(
+        requireNode(mulExp.m_head_nn, "multiplicative expression is missing its head"),
+        state);
+    for (const auto& tailEntry : mulExp.m_tail) {
+        auto* rhs = generateUnaryExpValue(requireNode(tailEntry.second,
+            "multiplicative expression is missing its operand"), state);
+        koopa_raw_binary_op op = KOOPA_RBO_MUL;
+        switch (tailEntry.first) {
+        case frontend::MulOpKeyword::star:
+            op = KOOPA_RBO_MUL;
+            break;
+        case frontend::MulOpKeyword::slash:
+            op = KOOPA_RBO_DIV;
+            break;
+        case frontend::MulOpKeyword::percent:
+            op = KOOPA_RBO_MOD;
+            break;
+        }
+        current = generateBinaryValue(op, current, rhs,
+            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+    }
+    return current;
+}
+
+Value* Generator::generateUnaryExpValue(
+    const frontend::UnaryExp& unaryExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue = state.m_semanticInfo_nn->findConstantValue(unaryExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
     return std::visit(
-        [&](const auto& expAlt) -> Value* {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::Number>>) {
-                return generateNumber(requireNode(
-                    expAlt, "semantic number expression is missing"));
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::LVal>>) {
-                const auto& lVal
-                    = requireNode(expAlt, "semantic lvalue expression is missing");
-                const auto& symbol = requireNode(
-                    lVal.m_symbol_nn, "semantic lvalue is missing its symbol");
-                const auto storageIt = state.m_storageBySymbol.find(&symbol);
-                if (storageIt == state.m_storageBySymbol.end()) {
+        [&](const auto& unaryAlt) -> Value* {
+            using AltType = std::decay_t<decltype(unaryAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::PrimaryExp>>) {
+                return generatePrimaryExpValue(requireNode(unaryAlt,
+                    "unary expression is missing its primary expression"), state);
+            } else {
+                auto* operand = generateUnaryExpValue(requireNode(unaryAlt.second,
+                    "unary expression is missing its operand"), state);
+                switch (unaryAlt.first) {
+                case frontend::UnaryOpKeyword::plus:
+                    return generateBinaryValue(KOOPA_RBO_ADD, IntegerValue::get(0),
+                        operand, *state.m_currentBasicBlock_nn, state.m_nextTempId);
+                case frontend::UnaryOpKeyword::minus:
+                    return generateBinaryValue(KOOPA_RBO_SUB, IntegerValue::get(0),
+                        operand, *state.m_currentBasicBlock_nn, state.m_nextTempId);
+                case frontend::UnaryOpKeyword::bang:
+                    return generateBinaryValue(KOOPA_RBO_EQ, IntegerValue::get(0),
+                        operand, *state.m_currentBasicBlock_nn, state.m_nextTempId);
+                }
+            }
+            throw std::runtime_error("unsupported unary operator");
+        },
+        unaryExp.m_kind);
+}
+
+Value* Generator::generatePrimaryExpValue(
+    const frontend::PrimaryExp& primaryExp, FunctionGenerationState& state) const
+{
+    if (const auto constantValue
+        = state.m_semanticInfo_nn->findConstantValue(primaryExp.m_id);
+        constantValue.has_value()) {
+        return IntegerValue::get(*constantValue);
+    }
+    return std::visit(
+        [&](const auto& primaryAlt) -> Value* {
+            using AltType = std::decay_t<decltype(primaryAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::Exp>>) {
+                return generateExp(requireNode(primaryAlt,
+                    "parenthesized primary is missing its inner expression"), state);
+            } else if constexpr (std::is_same_v<AltType, std::shared_ptr<frontend::LVal>>) {
+                const auto& lVal = requireNode(primaryAlt, "lvalue primary is missing");
+                const auto& symbol = requireSymbolForNode(
+                    lVal, *state.m_semanticInfo_nn, "lvalue is missing a symbol binding");
+                const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
+                if (storageIt == state.m_storageBySymbolId.end()) {
                     throw std::runtime_error("lvalue references undefined storage");
                 }
                 auto* loadValue = LoadValue::get(
                     storageIt->second, makeTempName(state.m_nextTempId));
                 state.m_currentBasicBlock_nn->pushInst(loadValue);
                 return loadValue;
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::pair<frontend::UnaryOpKeyword,
-                                         std::shared_ptr<frontend::semantic::Exp>>>) {
-                if (expAlt.first == frontend::UnaryOpKeyword::bang) {
-                    return generateBooleanAsInt(exp, state);
-                }
-
-                auto* operand = generateExp(requireNode(
-                                               expAlt.second,
-                                               "unary expression is missing its operand"),
-                    state);
-                auto* zero = IntegerValue::get(0);
-                if (expAlt.first == frontend::UnaryOpKeyword::plus) {
-                    return generateBinaryValue(KOOPA_RBO_ADD, zero, operand,
-                        *state.m_currentBasicBlock_nn, state.m_nextTempId);
-                }
-                return generateBinaryValue(KOOPA_RBO_SUB, zero, operand,
-                    *state.m_currentBasicBlock_nn, state.m_nextTempId);
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::BinaryExp>>) {
-                const auto& binaryExp = requireNode(
-                    expAlt, "semantic binary expression is missing");
-                const bool materializeBoolean = std::visit(
-                    [](const auto& binaryOp) {
-                        using OpType = std::decay_t<decltype(binaryOp)>;
-                        return !std::is_same_v<OpType, frontend::MulOpKeyword>
-                            && !std::is_same_v<OpType, frontend::AddOpKeyword>;
-                    },
-                    binaryExp.m_op);
-                if (materializeBoolean) {
-                    return generateBooleanAsInt(exp, state);
-                }
-
-                return std::visit(
-                    [&](const auto& binaryOp) -> Value* {
-                        using OpType = std::decay_t<decltype(binaryOp)>;
-                        auto* lhs = generateExp(requireNode(binaryExp.m_lhs_nn,
-                                                   "binary expression is missing its lhs"),
-                            state);
-                        auto* rhs = generateExp(requireNode(binaryExp.m_rhs_nn,
-                                                   "binary expression is missing its rhs"),
-                            state);
-                        if constexpr (std::is_same_v<OpType,
-                                          frontend::MulOpKeyword>) {
-                            switch (binaryOp) {
-                            case frontend::MulOpKeyword::star:
-                                return generateBinaryValue(KOOPA_RBO_MUL, lhs, rhs,
-                                    *state.m_currentBasicBlock_nn,
-                                    state.m_nextTempId);
-                            case frontend::MulOpKeyword::slash:
-                                return generateBinaryValue(KOOPA_RBO_DIV, lhs, rhs,
-                                    *state.m_currentBasicBlock_nn,
-                                    state.m_nextTempId);
-                            case frontend::MulOpKeyword::percent:
-                                return generateBinaryValue(KOOPA_RBO_MOD, lhs, rhs,
-                                    *state.m_currentBasicBlock_nn,
-                                    state.m_nextTempId);
-                            }
-                        } else if constexpr (std::is_same_v<OpType,
-                                                 frontend::AddOpKeyword>) {
-                            switch (binaryOp) {
-                            case frontend::AddOpKeyword::plus:
-                                return generateBinaryValue(KOOPA_RBO_ADD, lhs, rhs,
-                                    *state.m_currentBasicBlock_nn,
-                                    state.m_nextTempId);
-                            case frontend::AddOpKeyword::minus:
-                                return generateBinaryValue(KOOPA_RBO_SUB, lhs, rhs,
-                                    *state.m_currentBasicBlock_nn,
-                                    state.m_nextTempId);
-                            }
-                        }
-                        throw std::runtime_error("unsupported binary operator");
-                    },
-                    binaryExp.m_op);
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::IntToBoolExp>>) {
-                return generateBooleanAsInt(exp, state);
             } else {
-                const auto& boolToIntExp = requireNode(
-                    expAlt, "semantic bool-to-int expression is missing");
-                return generateBooleanAsInt(requireNode(
-                    boolToIntExp.m_operand_nn,
-                    "bool-to-int expression is missing its operand"), state);
+                return generateNumber(requireNode(
+                    primaryAlt, "number primary expression is missing"));
             }
-
-            throw std::runtime_error("unsupported semantic expression");
         },
-        exp.m_kind);
+        primaryExp.m_kind);
 }
 
 Value* Generator::generateBooleanAsInt(
-    const frontend::semantic::Exp& exp, FunctionGenerationState& state) const
+    const frontend::Exp& exp, FunctionGenerationState& state) const
 {
     auto* resultStorage = AllocValue::get(
         Int32Type::get(), makeTempName(state.m_nextTempId));
@@ -499,137 +647,74 @@ Value* Generator::generateBooleanAsInt(
     return loadValue;
 }
 
-void Generator::generateBooleanBranch(const frontend::semantic::Exp& exp,
+void Generator::generateBooleanBranch(const frontend::Exp& exp,
     BasicBlock& trueBlock, BasicBlock& falseBlock,
     FunctionGenerationState& state) const
 {
-    std::visit(
-        [&](const auto& expAlt) {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<frontend::semantic::IntToBoolExp>>) {
-                const auto& intToBoolExp = requireNode(
-                    expAlt, "semantic int-to-bool expression is missing");
-                auto* operand = generateExp(requireNode(
-                                                intToBoolExp.m_operand_nn,
-                                                "int-to-bool expression is missing its operand"),
-                    state);
-                auto* condition = generateBooleanizedValue(operand,
-                    *state.m_currentBasicBlock_nn, state.m_nextTempId);
-                state.m_currentBasicBlock_nn->pushInst(BranchValue::get(
-                    condition, &trueBlock, {}, &falseBlock, {}));
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::BoolToIntExp>>) {
-                const auto& boolToIntExp = requireNode(
-                    expAlt, "semantic bool-to-int expression is missing");
-                generateBooleanBranch(requireNode(boolToIntExp.m_operand_nn,
-                                          "bool-to-int expression is missing its operand"),
-                    trueBlock, falseBlock, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::pair<frontend::UnaryOpKeyword,
-                                         std::shared_ptr<frontend::semantic::Exp>>>) {
-                if (expAlt.first == frontend::UnaryOpKeyword::bang) {
-                    generateBooleanBranch(requireNode(
-                                              expAlt.second,
-                                              "unary boolean expression is missing its operand"),
-                        falseBlock, trueBlock, state);
-                    return;
-                }
+    generateLOrExpBranch(requireNode(
+        exp.m_lOrExp_nn, "expression is missing a logical-or node"), trueBlock,
+        falseBlock, state);
+}
 
-                auto* value = generateExp(exp, state);
-                auto* condition = generateBooleanizedValue(value,
-                    *state.m_currentBasicBlock_nn, state.m_nextTempId);
-                state.m_currentBasicBlock_nn->pushInst(BranchValue::get(
-                    condition, &trueBlock, {}, &falseBlock, {}));
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<frontend::semantic::BinaryExp>>) {
-                const auto& binaryExp = requireNode(
-                    expAlt, "semantic binary expression is missing");
-                std::visit(
-                    [&](const auto& binaryOp) {
-                        using OpType = std::decay_t<decltype(binaryOp)>;
-                        if constexpr (std::is_same_v<OpType,
-                                          frontend::LAndOpKeyword>) {
-                            auto* rhsBlock = createBasicBlock("land_rhs", state);
-                            generateBooleanBranch(requireNode(binaryExp.m_lhs_nn,
-                                                      "logical-and expression is missing its lhs"),
-                                *rhsBlock, falseBlock, state);
-                            state.m_currentBasicBlock_nn = rhsBlock;
-                            generateBooleanBranch(requireNode(binaryExp.m_rhs_nn,
-                                                      "logical-and expression is missing its rhs"),
-                                trueBlock, falseBlock, state);
-                        } else if constexpr (std::is_same_v<OpType,
-                                                 frontend::LOrOpKeyword>) {
-                            auto* rhsBlock = createBasicBlock("lor_rhs", state);
-                            generateBooleanBranch(requireNode(binaryExp.m_lhs_nn,
-                                                      "logical-or expression is missing its lhs"),
-                                trueBlock, *rhsBlock, state);
-                            state.m_currentBasicBlock_nn = rhsBlock;
-                            generateBooleanBranch(requireNode(binaryExp.m_rhs_nn,
-                                                      "logical-or expression is missing its rhs"),
-                                trueBlock, falseBlock, state);
-                        } else if constexpr (std::is_same_v<OpType,
-                                                 frontend::RelOpKeyword>
-                            || std::is_same_v<OpType, frontend::EqOpKeyword>) {
-                            auto* lhs = generateExp(requireNode(binaryExp.m_lhs_nn,
-                                                       "comparison expression is missing its lhs"),
-                                state);
-                            auto* rhs = generateExp(requireNode(binaryExp.m_rhs_nn,
-                                                       "comparison expression is missing its rhs"),
-                                state);
-                            koopa_raw_binary_op op = KOOPA_RBO_EQ;
-                            if constexpr (std::is_same_v<OpType,
-                                              frontend::RelOpKeyword>) {
-                                switch (binaryOp) {
-                                case frontend::RelOpKeyword::less:
-                                    op = KOOPA_RBO_LT;
-                                    break;
-                                case frontend::RelOpKeyword::greater:
-                                    op = KOOPA_RBO_GT;
-                                    break;
-                                case frontend::RelOpKeyword::lessEqual:
-                                    op = KOOPA_RBO_LE;
-                                    break;
-                                case frontend::RelOpKeyword::greaterEqual:
-                                    op = KOOPA_RBO_GE;
-                                    break;
-                                }
-                            } else {
-                                switch (binaryOp) {
-                                case frontend::EqOpKeyword::equal:
-                                    op = KOOPA_RBO_EQ;
-                                    break;
-                                case frontend::EqOpKeyword::notEqual:
-                                    op = KOOPA_RBO_NOT_EQ;
-                                    break;
-                                }
-                            }
-                            auto* condition = generateBinaryValue(op, lhs, rhs,
-                                *state.m_currentBasicBlock_nn,
-                                state.m_nextTempId);
-                            state.m_currentBasicBlock_nn->pushInst(
-                                BranchValue::get(condition, &trueBlock, {},
-                                    &falseBlock, {}));
-                        } else {
-                            auto* value = generateExp(exp, state);
-                            auto* condition = generateBooleanizedValue(value,
-                                *state.m_currentBasicBlock_nn,
-                                state.m_nextTempId);
-                            state.m_currentBasicBlock_nn->pushInst(
-                                BranchValue::get(condition, &trueBlock, {},
-                                    &falseBlock, {}));
-                        }
-                    },
-                    binaryExp.m_op);
-            } else {
-                auto* value = generateExp(exp, state);
-                auto* condition = generateBooleanizedValue(
-                    value, *state.m_currentBasicBlock_nn, state.m_nextTempId);
-                state.m_currentBasicBlock_nn->pushInst(BranchValue::get(
-                    condition, &trueBlock, {}, &falseBlock, {}));
-            }
-        },
-        exp.m_kind);
+void Generator::generateLOrExpBranch(const frontend::LOrExp& lOrExp,
+    BasicBlock& trueBlock, BasicBlock& falseBlock,
+    FunctionGenerationState& state) const
+{
+    const auto& head = requireNode(
+        lOrExp.m_head_nn, "logical-or expression is missing its head");
+    if (lOrExp.m_tail.empty()) {
+        auto* value = generateLAndExpValue(head, state);
+        state.m_currentBasicBlock_nn->pushInst(
+            BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
+        return;
+    }
+
+    auto* nextOperandBlock = createBasicBlock("lor_rhs", state);
+    generateLAndExpBranch(head, trueBlock, *nextOperandBlock, state);
+    for (size_t index = 0; index < lOrExp.m_tail.size(); ++index) {
+        state.m_currentBasicBlock_nn = nextOperandBlock;
+        const auto& rhs = requireNode(lOrExp.m_tail[index].second,
+            "logical-or expression is missing its operand");
+        if (index + 1 == lOrExp.m_tail.size()) {
+            generateLAndExpBranch(rhs, trueBlock, falseBlock, state);
+            return;
+        }
+        nextOperandBlock = createBasicBlock("lor_rhs", state);
+        generateLAndExpBranch(rhs, trueBlock, *nextOperandBlock, state);
+    }
+}
+
+void Generator::generateLAndExpBranch(const frontend::LAndExp& lAndExp,
+    BasicBlock& trueBlock, BasicBlock& falseBlock,
+    FunctionGenerationState& state) const
+{
+    const auto& head = requireNode(
+        lAndExp.m_head_nn, "logical-and expression is missing its head");
+    if (lAndExp.m_tail.empty()) {
+        auto* value = generateEqExpValue(head, state);
+        state.m_currentBasicBlock_nn->pushInst(
+            BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
+        return;
+    }
+
+    auto* nextOperandBlock = createBasicBlock("land_rhs", state);
+    auto* headValue = generateEqExpValue(head, state);
+    state.m_currentBasicBlock_nn->pushInst(
+        BranchValue::get(headValue, nextOperandBlock, {}, &falseBlock, {}));
+    for (size_t index = 0; index < lAndExp.m_tail.size(); ++index) {
+        state.m_currentBasicBlock_nn = nextOperandBlock;
+        const auto& rhs = requireNode(lAndExp.m_tail[index].second,
+            "logical-and expression is missing its operand");
+        auto* rhsValue = generateEqExpValue(rhs, state);
+        if (index + 1 == lAndExp.m_tail.size()) {
+            state.m_currentBasicBlock_nn->pushInst(
+                BranchValue::get(rhsValue, &trueBlock, {}, &falseBlock, {}));
+            return;
+        }
+        nextOperandBlock = createBasicBlock("land_rhs", state);
+        state.m_currentBasicBlock_nn->pushInst(
+            BranchValue::get(rhsValue, nextOperandBlock, {}, &falseBlock, {}));
+    }
 }
 
 Value* Generator::generateBooleanizedValue(
@@ -648,9 +733,20 @@ BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
     return binaryValue;
 }
 
-Value* Generator::generateNumber(const frontend::semantic::Number& number) const
+Value* Generator::generateNumber(const frontend::Number& number) const
 {
     return IntegerValue::get(number.m_value);
+}
+
+const frontend::SemanticSymbol& Generator::requireSymbolForNode(
+    const frontend::AstNode& node, const frontend::SemanticInfo& semanticInfo,
+    const char* message) const
+{
+    const auto* symbol = semanticInfo.findSymbolByNodeId(node.m_id);
+    if (symbol == nullptr) {
+        throw std::runtime_error(message);
+    }
+    return *symbol;
 }
 
 BasicBlock* Generator::createBasicBlock(
@@ -679,7 +775,7 @@ void Generator::finalizeBasicBlock(
 }
 
 std::string Generator::makeUniqueLocalName(
-    const frontend::semantic::Symbol& symbol,
+    const frontend::SemanticSymbol& symbol,
     std::unordered_set<std::string>& usedSymbolNames) const
 {
     const std::string baseName = "%" + symbol.m_name;

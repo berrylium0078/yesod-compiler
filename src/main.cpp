@@ -96,8 +96,7 @@ int main(int argc, const char* argv[])
         }
 
         yesod::frontend::SemanticAnalyzer semanticAnalyzer;
-        const auto semanticOutput
-            = semanticAnalyzer.analyze(*parseOutput.m_root);
+        const auto semanticOutput = semanticAnalyzer.analyze(parseOutput.m_root);
         if (!semanticOutput.success()) {
             printDiagnostics(semanticOutput);
             return 1;
@@ -105,7 +104,7 @@ int main(int argc, const char* argv[])
 
         Generator generator;
         std::unique_ptr<Program> program(
-            generator.generate(*semanticOutput.m_root));
+            generator.generate(*semanticOutput.m_root, semanticOutput.m_info));
         if (mode == "-koopa") {
             if (!writeKoopaProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate koopa IR" << std::endl;

@@ -2,6 +2,7 @@
 #define _YESOD_FRONTEND_AST_H_
 
 #include <cstdint>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
@@ -10,13 +11,23 @@
 
 namespace yesod::frontend {
 
+using AstNodeId = int32_t;
+
+inline AstNodeId nextAstNodeId()
+{
+    static std::atomic<AstNodeId> nextId { 0 };
+    return ++nextId;
+}
+
 struct AstNode {
     explicit AstNode(int32_t startOffset)
-        : m_startOffset(startOffset)
+        : m_id(nextAstNodeId())
+        , m_startOffset(startOffset)
     {
     }
     virtual ~AstNode() = default;
 
+    AstNodeId m_id;
     int32_t m_startOffset;
 };
 

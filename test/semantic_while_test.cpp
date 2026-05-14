@@ -1,7 +1,5 @@
 #include "semantic_test_support.h"
 
-#include <type_traits>
-
 using namespace yesod::test_support::semantic;
 
 namespace {
@@ -105,10 +103,12 @@ std::shared_ptr<ast::Block> requireBlockStmt(
 
 void testLoopControlStatementsBindToInnermostWhile()
 {
-    const auto root_nn = analyzeRoot(
+    const auto output = analyzeSource(
         "int main(){while (1) {while (2) {continue;} break;} return 0;}");
+    require(output.success(), "expected semantic success");
+
     const auto outerWhile_nn = requireWhileStmt(
-        requireStmtNode(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn = requireWhileStmt(requireStmtNode(
         outerBody_nn->m_blockItems[0]));
@@ -118,24 +118,24 @@ void testLoopControlStatementsBindToInnermostWhile()
     const auto breakStmt_nn = requireBreakStmt(requireStmtNode(
         outerBody_nn->m_blockItems[1]));
 
-    require(outerWhile_nn->m_loopTarget_nn != nullptr,
-        "outer while should allocate a loop target");
-    require(innerWhile_nn->m_loopTarget_nn != nullptr,
-        "inner while should allocate a loop target");
-    require(continueStmt_nn->m_loopTarget_nn == innerWhile_nn->m_loopTarget_nn,
+    const auto outerLoopId = requireLoopId(output, *outerWhile_nn);
+    const auto innerLoopId = requireLoopId(output, *innerWhile_nn);
+    require(requireLoopId(output, *continueStmt_nn) == innerLoopId,
         "continue should bind to the innermost containing while");
-    require(breakStmt_nn->m_loopTarget_nn == outerWhile_nn->m_loopTarget_nn,
+    require(requireLoopId(output, *breakStmt_nn) == outerLoopId,
         "break should bind to the innermost containing while");
-    require(continueStmt_nn->m_loopTarget_nn != breakStmt_nn->m_loopTarget_nn,
-        "nested loop-control statements should preserve distinct loop targets");
+    require(innerLoopId != outerLoopId,
+        "nested while statements should keep distinct loop identities");
 }
 
 void testNestedInnerLoopBreakAndContinueBothBindInnermostWhile()
 {
-    const auto root_nn = analyzeRoot(
+    const auto output = analyzeSource(
         "int main(){while (1) {while (2) {break; continue;}} return 0;}");
+    require(output.success(), "expected semantic success");
+
     const auto outerWhile_nn = requireWhileStmt(
-        requireStmtNode(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn = requireWhileStmt(requireStmtNode(
         outerBody_nn->m_blockItems[0]));
@@ -145,29 +145,31 @@ void testNestedInnerLoopBreakAndContinueBothBindInnermostWhile()
     const auto continueStmt_nn = requireContinueStmt(requireStmtNode(
         innerBody_nn->m_blockItems[1]));
 
-    require(breakStmt_nn->m_loopTarget_nn == innerWhile_nn->m_loopTarget_nn,
+    const auto innerLoopId = requireLoopId(output, *innerWhile_nn);
+    require(requireLoopId(output, *breakStmt_nn) == innerLoopId,
         "break inside the inner loop should bind to the innermost while");
-    require(
-        continueStmt_nn->m_loopTarget_nn == innerWhile_nn->m_loopTarget_nn,
+    require(requireLoopId(output, *continueStmt_nn) == innerLoopId,
         "continue inside the inner loop should bind to the innermost while");
-    require(breakStmt_nn->m_loopTarget_nn != outerWhile_nn->m_loopTarget_nn,
-        "inner-loop break should not bind to the outer while");
+    require(innerLoopId != requireLoopId(output, *outerWhile_nn),
+        "inner-loop control flow should not bind to the outer while");
 }
 
 void testLoopControlInsideWhileIfBindsContainingWhile()
 {
-    const auto root_nn = analyzeRoot(
+    const auto output = analyzeSource(
         "int main(){while (1) if (2) break; else continue; return 0;}");
+    require(output.success(), "expected semantic success");
+
     const auto whileStmt_nn = requireWhileStmt(
-        requireStmtNode(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto ifStmt_nn = requireIfStmt(whileStmt_nn->m_bodyStmt_nn);
     const auto breakStmt_nn = requireBreakStmt(ifStmt_nn->m_thenStmt_nn);
     const auto continueStmt_nn = requireContinueStmt(ifStmt_nn->m_elseStmt_nn);
 
-    require(breakStmt_nn->m_loopTarget_nn == whileStmt_nn->m_loopTarget_nn,
+    const auto whileLoopId = requireLoopId(output, *whileStmt_nn);
+    require(requireLoopId(output, *breakStmt_nn) == whileLoopId,
         "break inside while-if should bind to the containing while");
-    require(
-        continueStmt_nn->m_loopTarget_nn == whileStmt_nn->m_loopTarget_nn,
+    require(requireLoopId(output, *continueStmt_nn) == whileLoopId,
         "continue inside while-if should bind to the containing while");
 }
 

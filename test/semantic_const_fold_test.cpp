@@ -4,56 +4,41 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-std::shared_ptr<ast::Number> requireNumberExp(
-    const std::shared_ptr<ast::Exp>& exp_nn)
+std::shared_ptr<ast::DeclNode> requireDeclNode(
+    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
 {
-    std::shared_ptr<ast::Number> number;
+    std::shared_ptr<ast::DeclNode> declNode_nn;
     std::visit(
-        [&](const auto& expAlt) {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::Number>>) {
-                number = expAlt;
+        [&](const auto& blockItemAlt) {
+            using AltType = std::decay_t<decltype(blockItemAlt)>;
+            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::DeclNode>>) {
+                declNode_nn = blockItemAlt;
             }
         },
-        exp_nn->m_kind);
-    require(number != nullptr, "expected folded number semantic expression");
-    return number;
+        blockItem_nn->m_blockItem);
+    require(declNode_nn != nullptr, "expected declaration block item");
+    return declNode_nn;
 }
 
-void testConstExpressionsFoldToNumbers()
+std::shared_ptr<ast::StmtNode> requireStmtNode(
+    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
 {
-    const auto root_nn = analyzeRoot(
-        "int main(){const int answer = 40 + 2; int value = answer + 1 * 2; return answer + 1 * 2;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
-
-    std::shared_ptr<ast::DeclNode> constDeclNode_nn;
-    std::shared_ptr<ast::DeclNode> varDeclNode_nn;
-    std::shared_ptr<ast::StmtNode> returnNode_nn;
+    std::shared_ptr<ast::StmtNode> stmtNode_nn;
     std::visit(
-        [&](const auto& item) {
-            using AltType = std::decay_t<decltype(item)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::DeclNode>>) {
-                constDeclNode_nn = item;
-            }
-        },
-        blockItems[0]->m_blockItem);
-    std::visit(
-        [&](const auto& item) {
-            using AltType = std::decay_t<decltype(item)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::DeclNode>>) {
-                varDeclNode_nn = item;
-            }
-        },
-        blockItems[1]->m_blockItem);
-    std::visit(
-        [&](const auto& item) {
-            using AltType = std::decay_t<decltype(item)>;
+        [&](const auto& blockItemAlt) {
+            using AltType = std::decay_t<decltype(blockItemAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::StmtNode>>) {
-                returnNode_nn = item;
+                stmtNode_nn = blockItemAlt;
             }
         },
-        blockItems[2]->m_blockItem);
+        blockItem_nn->m_blockItem);
+    require(stmtNode_nn != nullptr, "expected statement block item");
+    return stmtNode_nn;
+}
 
+std::shared_ptr<ast::ConstDecl> requireConstDecl(
+    const std::shared_ptr<ast::DeclNode>& declNode_nn)
+{
     std::shared_ptr<ast::ConstDecl> constDecl_nn;
     std::visit(
         [&](const auto& declAlt) {
@@ -63,15 +48,14 @@ void testConstExpressionsFoldToNumbers()
                 constDecl_nn = declAlt;
             }
         },
-        constDeclNode_nn->m_decl);
+        declNode_nn->m_decl);
     require(constDecl_nn != nullptr, "expected const declaration");
-    require(requireNumberExp(constDecl_nn->m_constDefs[0]->m_initExp_nn)->m_value == 42,
-        "const initializer should fold to a number literal");
-    require(constDecl_nn->m_constDefs[0]->m_symbol_nn->m_hasConstantValue,
-        "const symbol should cache its folded constant value");
-    require(constDecl_nn->m_constDefs[0]->m_symbol_nn->m_constantValue == 42,
-        "const symbol should record its folded constant value");
+    return constDecl_nn;
+}
 
+std::shared_ptr<ast::VarDecl> requireVarDecl(
+    const std::shared_ptr<ast::DeclNode>& declNode_nn)
+{
     std::shared_ptr<ast::VarDecl> varDecl_nn;
     std::visit(
         [&](const auto& declAlt) {
@@ -80,11 +64,14 @@ void testConstExpressionsFoldToNumbers()
                 varDecl_nn = declAlt;
             }
         },
-        varDeclNode_nn->m_decl);
+        declNode_nn->m_decl);
     require(varDecl_nn != nullptr, "expected var declaration");
-    require(requireNumberExp(varDecl_nn->m_varDefs[0]->m_initExp_nn)->m_value == 44,
-        "var initializer should fold const-backed arithmetic to a number literal");
+    return varDecl_nn;
+}
 
+std::shared_ptr<ast::ReturnStmt> requireReturnStmt(
+    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+{
     std::shared_ptr<ast::ReturnStmt> returnStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
@@ -94,10 +81,39 @@ void testConstExpressionsFoldToNumbers()
                 returnStmt_nn = stmtAlt;
             }
         },
-        returnNode_nn->m_stmt);
+        stmtNode_nn->m_stmt);
     require(returnStmt_nn != nullptr, "expected return statement");
-    require(requireNumberExp(returnStmt_nn->m_exp_nn)->m_value == 44,
-        "return expression should fold const-backed arithmetic to a number literal");
+    return returnStmt_nn;
+}
+
+void testConstExpressionsRecordFoldedValues()
+{
+    const auto output = analyzeSource(
+        "int main(){const int answer = 40 + 2; int value = answer + 1 * 2; return answer + 1 * 2;}");
+    require(output.success(), "expected semantic success");
+
+    const auto& blockItems = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto constDecl_nn = requireConstDecl(requireDeclNode(blockItems[0]));
+    const auto varDecl_nn = requireVarDecl(requireDeclNode(blockItems[1]));
+    const auto returnStmt_nn = requireReturnStmt(requireStmtNode(blockItems[2]));
+
+    const auto& constExp = *constDecl_nn->m_constDefs[0]
+                                ->m_constInitVal_nn->m_constExp_nn->m_exp_nn;
+    require(requireConstantValue(output, constExp) == 42,
+        "const initializer should fold to a constant value");
+
+    const auto& constSymbol = requireSymbol(output, *constDecl_nn->m_constDefs[0]);
+    require(constSymbol.m_hasConstantValue,
+        "const declaration should cache its folded constant value");
+    require(constSymbol.m_constantValue == 42,
+        "const declaration should expose the folded constant value");
+
+    const auto& varInitExp = *varDecl_nn->m_varDefs[0]->m_initVal_nn->m_exp_nn;
+    require(requireConstantValue(output, varInitExp) == 44,
+        "var initializer should fold const-backed arithmetic");
+
+    require(requireConstantValue(output, *returnStmt_nn->m_exp_nn) == 44,
+        "return expression should fold const-backed arithmetic");
 }
 
 void testConstSemanticDiagnostics()
@@ -123,7 +139,7 @@ void testConstSemanticDiagnostics()
 
 int main()
 {
-    testConstExpressionsFoldToNumbers();
+    testConstExpressionsRecordFoldedValues();
     testConstSemanticDiagnostics();
     return 0;
 }

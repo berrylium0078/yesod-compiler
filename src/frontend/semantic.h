@@ -9,141 +9,171 @@
 #include <vector>
 
 #include "frontend/ast.h"
-#include "frontend/semantic_ast.h"
 
 namespace yesod::frontend {
 
-    enum class SemanticDiagnosticKind {
-        useBeforeDefinition,
-        doubleDefinition,
-        nonConstantConstInitializer,
-        assignToConst,
-        breakOutsideWhile,
-        continueOutsideWhile,
-    };
+enum class SemanticDiagnosticKind {
+    useBeforeDefinition,
+    doubleDefinition,
+    nonConstantConstInitializer,
+    assignToConst,
+    breakOutsideWhile,
+    continueOutsideWhile,
+};
 
-    struct SemanticDiagnostic {
-        SemanticDiagnosticKind m_kind;
-        int32_t m_offset;
-        std::string m_message;
-    };
+struct SemanticDiagnostic {
+    SemanticDiagnosticKind m_kind;
+    int32_t m_offset;
+    std::string m_message;
+};
 
-    struct SemanticOutput {
-        std::shared_ptr<semantic::CompUnit> m_root;
-        std::vector<SemanticDiagnostic> m_diagnostics;
+enum class SemanticExpValueKind {
+    arithmetic,
+    boolean,
+};
 
-        [[nodiscard]] bool success() const
-        {
-            return m_root != nullptr && m_diagnostics.empty();
+struct SemanticSymbol {
+    int32_t m_id;
+    std::string m_name;
+    bool m_isConst;
+    bool m_hasConstantValue;
+    int32_t m_constantValue;
+};
+
+struct SemanticInfo {
+    std::unordered_map<int32_t, SemanticSymbol> m_symbolsById;
+    std::unordered_map<AstNodeId, int32_t> m_symbolIdByNodeId;
+    std::unordered_map<AstNodeId, SemanticExpValueKind> m_exprKindByNodeId;
+    std::unordered_map<AstNodeId, int32_t> m_constantValueByNodeId;
+    std::unordered_map<AstNodeId, int32_t> m_loopIdByNodeId;
+
+    [[nodiscard]] const SemanticSymbol* findSymbolById(int32_t symbolId) const
+    {
+        const auto symbolIt = m_symbolsById.find(symbolId);
+        if (symbolIt == m_symbolsById.end()) {
+            return nullptr;
         }
+        return &symbolIt->second;
+    }
+
+    [[nodiscard]] const SemanticSymbol* findSymbolByNodeId(
+        AstNodeId nodeId) const
+    {
+        const auto bindingIt = m_symbolIdByNodeId.find(nodeId);
+        if (bindingIt == m_symbolIdByNodeId.end()) {
+            return nullptr;
+        }
+        return findSymbolById(bindingIt->second);
+    }
+
+    [[nodiscard]] std::optional<SemanticExpValueKind> findExpValueKind(
+        AstNodeId nodeId) const
+    {
+        const auto kindIt = m_exprKindByNodeId.find(nodeId);
+        if (kindIt == m_exprKindByNodeId.end()) {
+            return std::nullopt;
+        }
+        return kindIt->second;
+    }
+
+    [[nodiscard]] std::optional<int32_t> findConstantValue(
+        AstNodeId nodeId) const
+    {
+        const auto constantIt = m_constantValueByNodeId.find(nodeId);
+        if (constantIt == m_constantValueByNodeId.end()) {
+            return std::nullopt;
+        }
+        return constantIt->second;
+    }
+
+    [[nodiscard]] std::optional<int32_t> findLoopId(AstNodeId nodeId) const
+    {
+        const auto loopIt = m_loopIdByNodeId.find(nodeId);
+        if (loopIt == m_loopIdByNodeId.end()) {
+            return std::nullopt;
+        }
+        return loopIt->second;
+    }
+};
+
+struct SemanticOutput {
+    std::shared_ptr<CompUnit> m_root;
+    SemanticInfo m_info;
+    std::vector<SemanticDiagnostic> m_diagnostics;
+
+    [[nodiscard]] bool success() const
+    {
+        return m_root != nullptr && m_diagnostics.empty();
+    }
+};
+
+class SemanticAnalyzer {
+  public:
+    [[nodiscard]] SemanticOutput analyze(
+        const std::shared_ptr<CompUnit>& compUnit_nn);
+
+  private:
+    struct AnalyzedExp {
+        SemanticExpValueKind m_valueKind = SemanticExpValueKind::arithmetic;
+        bool m_isConstant = false;
+        int32_t m_constantValue = 0;
     };
 
-    class SemanticAnalyzer {
-      public:
-        [[nodiscard]] SemanticOutput analyze(const CompUnit& compUnit);
+    void analyzeCompUnit(const CompUnit& compUnit);
+    void analyzeFuncDef(const FuncDef& funcDef);
+    void analyzeBlock(const Block& block);
+    void analyzeBlockItemNode(const BlockItemNode& blockItemNode);
+    void analyzeDeclNode(const DeclNode& declNode);
+    void analyzeConstDecl(const ConstDecl& constDecl);
+    void analyzeVarDecl(const VarDecl& varDecl);
+    void analyzeStmtNode(const StmtNode& stmtNode);
+    void analyzeIfStmt(const IfStmt& ifStmt);
+    void analyzeWhileStmt(const WhileStmt& whileStmt);
+    void analyzeBreakStmt(const BreakStmt& breakStmt);
+    void analyzeContinueStmt(const ContinueStmt& continueStmt);
+    void analyzeAssignStmt(const AssignStmt& assignStmt);
+    void analyzeExpStmt(const ExpStmt& expStmt);
+    void analyzeReturnStmt(const ReturnStmt& returnStmt);
+    [[nodiscard]] AnalyzedExp analyzeExp(const Exp& exp);
+    [[nodiscard]] AnalyzedExp analyzeCondExp(const Exp& exp);
+    [[nodiscard]] AnalyzedExp analyzeLOrExp(const LOrExp& lOrExp);
+    [[nodiscard]] AnalyzedExp analyzeLAndExp(const LAndExp& lAndExp);
+    [[nodiscard]] AnalyzedExp analyzeEqExp(const EqExp& eqExp);
+    [[nodiscard]] AnalyzedExp analyzeRelExp(const RelExp& relExp);
+    [[nodiscard]] AnalyzedExp analyzeAddExp(const AddExp& addExp);
+    [[nodiscard]] AnalyzedExp analyzeMulExp(const MulExp& mulExp);
+    [[nodiscard]] AnalyzedExp analyzeUnaryExp(const UnaryExp& unaryExp);
+    [[nodiscard]] AnalyzedExp analyzePrimaryExp(const PrimaryExp& primaryExp);
+    [[nodiscard]] std::optional<int32_t> lookupSymbol(
+        const std::string& name) const;
+    [[nodiscard]] int32_t resolveSymbol(const Identifier& identifier);
+    [[nodiscard]] int32_t makePlaceholderSymbol(const Identifier& identifier);
+    [[nodiscard]] int32_t makeSymbol(const Identifier& identifier,
+        bool isConst, bool hasConstantValue, int32_t constantValue);
+    [[nodiscard]] AnalyzedExp normalizeToArithmetic(
+        const AstNode& node, AnalyzedExp analyzedExp);
+    [[nodiscard]] AnalyzedExp normalizeToBoolean(
+        const AstNode& node, AnalyzedExp analyzedExp);
+    void bindSymbol(const AstNode& node, int32_t symbolId);
+    void bindLoop(const AstNode& node, int32_t loopId);
+    void recordExpFacts(const AstNode& node, const AnalyzedExp& analyzedExp);
+    void pushScope();
+    void popScope();
+    [[nodiscard]] bool defineSymbol(const std::string& name, int32_t symbolId);
+    [[nodiscard]] std::optional<int32_t> currentLoopId() const;
+    void recordDiagnostic(SemanticDiagnosticKind kind, int32_t offset,
+        std::string message);
 
-      private:
-        enum class ExpValueKind {
-            arithmetic,
-            boolean,
-        };
+    using Scope = std::unordered_map<std::string, int32_t>;
 
-        struct AnalyzedExp {
-            std::shared_ptr<semantic::Exp> m_exp_nn;
-            ExpValueKind m_valueKind = ExpValueKind::arithmetic;
-            bool m_isConstant = false;
-            int32_t m_constantValue = 0;
-        };
-
-        [[nodiscard]] std::shared_ptr<semantic::CompUnit> analyzeCompUnit(
-            const CompUnit& compUnit);
-        [[nodiscard]] std::shared_ptr<semantic::FuncDef> analyzeFuncDef(
-            const FuncDef& funcDef);
-        [[nodiscard]] std::shared_ptr<semantic::Block> analyzeBlock(
-            const Block& block);
-        [[nodiscard]] std::shared_ptr<semantic::BlockItemNode>
-        analyzeBlockItemNode(const BlockItemNode& blockItemNode);
-        [[nodiscard]] std::shared_ptr<semantic::DeclNode> analyzeDeclNode(
-            const DeclNode& declNode);
-        [[nodiscard]] std::shared_ptr<semantic::ConstDecl> analyzeConstDecl(
-            const ConstDecl& constDecl);
-        [[nodiscard]] std::shared_ptr<semantic::VarDecl> analyzeVarDecl(
-            const VarDecl& varDecl);
-        [[nodiscard]] std::shared_ptr<semantic::StmtNode> analyzeStmtNode(
-            const StmtNode& stmtNode);
-        [[nodiscard]] std::shared_ptr<semantic::IfStmt> analyzeIfStmt(
-            const IfStmt& ifStmt);
-        [[nodiscard]] std::shared_ptr<semantic::WhileStmt> analyzeWhileStmt(
-            const WhileStmt& whileStmt);
-        [[nodiscard]] std::shared_ptr<semantic::BreakStmt> analyzeBreakStmt(
-            const BreakStmt& breakStmt);
-        [[nodiscard]] std::shared_ptr<semantic::ContinueStmt>
-        analyzeContinueStmt(const ContinueStmt& continueStmt);
-        [[nodiscard]] std::shared_ptr<semantic::AssignStmt> analyzeAssignStmt(
-            const AssignStmt& assignStmt);
-        [[nodiscard]] std::shared_ptr<semantic::ExpStmt> analyzeExpStmt(
-            const ExpStmt& expStmt);
-        [[nodiscard]] std::shared_ptr<semantic::ReturnStmt> analyzeReturnStmt(
-            const ReturnStmt& returnStmt);
-        [[nodiscard]] AnalyzedExp analyzeExp(const Exp& exp);
-        [[nodiscard]] AnalyzedExp analyzeCondExp(const Exp& exp);
-        [[nodiscard]] AnalyzedExp analyzeLOrExp(const LOrExp& lOrExp);
-        [[nodiscard]] AnalyzedExp analyzeLAndExp(const LAndExp& lAndExp);
-        [[nodiscard]] AnalyzedExp analyzeEqExp(const EqExp& eqExp);
-        [[nodiscard]] AnalyzedExp analyzeRelExp(const RelExp& relExp);
-        [[nodiscard]] AnalyzedExp analyzeAddExp(const AddExp& addExp);
-        [[nodiscard]] AnalyzedExp analyzeMulExp(const MulExp& mulExp);
-        [[nodiscard]] AnalyzedExp analyzeUnaryExp(const UnaryExp& unaryExp);
-        [[nodiscard]] AnalyzedExp analyzePrimaryExp(
-            const PrimaryExp& primaryExp);
-        [[nodiscard]] std::optional<std::shared_ptr<semantic::Symbol>>
-        lookupSymbol(const std::string& name) const;
-        [[nodiscard]] std::shared_ptr<semantic::Symbol> resolveSymbol(
-            const Identifier& identifier);
-        [[nodiscard]] std::shared_ptr<semantic::Symbol> makePlaceholderSymbol(
-            const Identifier& identifier) const;
-        [[nodiscard]] std::shared_ptr<semantic::Symbol> makeSymbol(
-            const Identifier& identifier, bool isConst, bool hasConstantValue,
-            int32_t constantValue) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeNumberExp(
-            int32_t startOffset, int32_t value) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeLValExp(
-            int32_t startOffset,
-            const std::shared_ptr<semantic::Symbol>& symbol_nn) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeUnaryExp(
-            int32_t startOffset, UnaryOpKeyword op,
-            const std::shared_ptr<semantic::Exp>& operand_nn) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeBinaryExp(
-            int32_t startOffset, semantic::BinaryExp::Op op,
-            const std::shared_ptr<semantic::Exp>& lhs_nn,
-            const std::shared_ptr<semantic::Exp>& rhs_nn) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeIntToBoolExp(
-            int32_t startOffset,
-            const std::shared_ptr<semantic::Exp>& operand_nn) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeBoolToIntExp(
-            int32_t startOffset,
-            const std::shared_ptr<semantic::Exp>& operand_nn) const;
-        [[nodiscard]] std::shared_ptr<semantic::Exp> makeBooleanConstantExp(
-            int32_t startOffset, int32_t value) const;
-        [[nodiscard]] AnalyzedExp normalizeToArithmetic(
-            int32_t startOffset, AnalyzedExp analyzedExp) const;
-        [[nodiscard]] AnalyzedExp normalizeToBoolean(
-            int32_t startOffset, AnalyzedExp analyzedExp) const;
-        void pushScope();
-        void popScope();
-        [[nodiscard]] bool defineSymbol(
-            const std::shared_ptr<semantic::Symbol>& symbol_nn);
-        [[nodiscard]] std::shared_ptr<semantic::LoopTarget>
-        currentLoopTarget() const;
-        void recordDiagnostic(SemanticDiagnosticKind kind, int32_t offset,
-            std::string message);
-
-        using Scope = std::unordered_map<std::string, std::shared_ptr<semantic::Symbol>>;
-
-        std::vector<Scope> m_scopeStack;
-        std::vector<std::shared_ptr<semantic::LoopTarget>> m_loopTargetStack;
-        std::vector<SemanticDiagnostic> m_diagnostics;
-    };
+    std::shared_ptr<CompUnit> m_root_nn;
+    SemanticInfo m_info;
+    std::vector<Scope> m_scopeStack;
+    std::vector<int32_t> m_loopIdStack;
+    std::vector<SemanticDiagnostic> m_diagnostics;
+    int32_t m_nextSymbolId = 0;
+    int32_t m_nextLoopId = 0;
+};
 
 } // namespace yesod::frontend
 

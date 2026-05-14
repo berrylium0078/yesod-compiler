@@ -7,198 +7,185 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace yesod::frontend {
 
 namespace {
 
-    template <typename T>
-    const T& requireNode(const std::shared_ptr<T>& node, const char* message)
-    {
-        if (node == nullptr) {
-            throw std::runtime_error(message);
+template <typename T>
+const T& requireNode(const std::shared_ptr<T>& node, const char* message)
+{
+    if (node == nullptr) {
+        throw std::runtime_error(message);
+    }
+    return *node;
+}
+
+std::optional<int32_t> applyUnaryOp(UnaryOpKeyword op, int32_t operand)
+{
+    switch (op) {
+    case UnaryOpKeyword::plus:
+        return operand;
+    case UnaryOpKeyword::minus:
+        return -operand;
+    case UnaryOpKeyword::bang:
+        return operand == 0 ? 1 : 0;
+    }
+    return std::nullopt;
+}
+
+std::optional<int32_t> applyMulOp(MulOpKeyword op, int32_t lhs, int32_t rhs)
+{
+    switch (op) {
+    case MulOpKeyword::star:
+        return static_cast<int32_t>(static_cast<int64_t>(lhs) * rhs);
+    case MulOpKeyword::slash:
+        if (rhs == 0) {
+            return std::nullopt;
         }
-        return *node;
-    }
-
-    std::optional<int32_t> applyUnaryOp(UnaryOpKeyword op, int32_t operand)
-    {
-        switch (op) {
-        case UnaryOpKeyword::plus:
-            return operand;
-        case UnaryOpKeyword::minus:
-            return -operand;
-        case UnaryOpKeyword::bang:
-            return operand == 0 ? 1 : 0;
+        return lhs / rhs;
+    case MulOpKeyword::percent:
+        if (rhs == 0) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        return lhs % rhs;
     }
+    return std::nullopt;
+}
 
-    std::optional<int32_t> applyMulOp(MulOpKeyword op, int32_t lhs, int32_t rhs)
-    {
-        switch (op) {
-        case MulOpKeyword::star:
-            return static_cast<int32_t>(static_cast<int64_t>(lhs) * rhs);
-        case MulOpKeyword::slash:
-            if (rhs == 0) {
-                return std::nullopt;
-            }
-            return lhs / rhs;
-        case MulOpKeyword::percent:
-            if (rhs == 0) {
-                return std::nullopt;
-            }
-            return lhs % rhs;
-        }
-        return std::nullopt;
+std::optional<int32_t> applyAddOp(AddOpKeyword op, int32_t lhs, int32_t rhs)
+{
+    switch (op) {
+    case AddOpKeyword::plus:
+        return static_cast<int32_t>(static_cast<int64_t>(lhs) + rhs);
+    case AddOpKeyword::minus:
+        return static_cast<int32_t>(static_cast<int64_t>(lhs) - rhs);
     }
+    return std::nullopt;
+}
 
-    std::optional<int32_t> applyAddOp(AddOpKeyword op, int32_t lhs, int32_t rhs)
-    {
-        switch (op) {
-        case AddOpKeyword::plus:
-            return static_cast<int32_t>(static_cast<int64_t>(lhs) + rhs);
-        case AddOpKeyword::minus:
-            return static_cast<int32_t>(static_cast<int64_t>(lhs) - rhs);
-        }
-        return std::nullopt;
+int32_t applyRelOp(RelOpKeyword op, int32_t lhs, int32_t rhs)
+{
+    switch (op) {
+    case RelOpKeyword::less:
+        return lhs < rhs ? 1 : 0;
+    case RelOpKeyword::greater:
+        return lhs > rhs ? 1 : 0;
+    case RelOpKeyword::lessEqual:
+        return lhs <= rhs ? 1 : 0;
+    case RelOpKeyword::greaterEqual:
+        return lhs >= rhs ? 1 : 0;
     }
+    throw std::runtime_error("unsupported relational operator");
+}
 
-    int32_t applyRelOp(RelOpKeyword op, int32_t lhs, int32_t rhs)
-    {
-        switch (op) {
-        case RelOpKeyword::less:
-            return lhs < rhs ? 1 : 0;
-        case RelOpKeyword::greater:
-            return lhs > rhs ? 1 : 0;
-        case RelOpKeyword::lessEqual:
-            return lhs <= rhs ? 1 : 0;
-        case RelOpKeyword::greaterEqual:
-            return lhs >= rhs ? 1 : 0;
-        }
-        throw std::runtime_error("unsupported relational operator");
+int32_t applyEqOp(EqOpKeyword op, int32_t lhs, int32_t rhs)
+{
+    switch (op) {
+    case EqOpKeyword::equal:
+        return lhs == rhs ? 1 : 0;
+    case EqOpKeyword::notEqual:
+        return lhs != rhs ? 1 : 0;
     }
+    throw std::runtime_error("unsupported equality operator");
+}
 
-    int32_t applyEqOp(EqOpKeyword op, int32_t lhs, int32_t rhs)
-    {
-        switch (op) {
-        case EqOpKeyword::equal:
-            return lhs == rhs ? 1 : 0;
-        case EqOpKeyword::notEqual:
-            return lhs != rhs ? 1 : 0;
-        }
-        throw std::runtime_error("unsupported equality operator");
-    }
+int32_t applyLAndOp(LAndOpKeyword, int32_t lhs, int32_t rhs)
+{
+    return (lhs != 0 && rhs != 0) ? 1 : 0;
+}
 
-    int32_t applyLAndOp(LAndOpKeyword, int32_t lhs, int32_t rhs)
-    {
-        return (lhs != 0 && rhs != 0) ? 1 : 0;
-    }
+int32_t applyLOrOp(LOrOpKeyword, int32_t lhs, int32_t rhs)
+{
+    return (lhs != 0 || rhs != 0) ? 1 : 0;
+}
 
-    int32_t applyLOrOp(LOrOpKeyword, int32_t lhs, int32_t rhs)
-    {
-        return (lhs != 0 || rhs != 0) ? 1 : 0;
-    }
-
-    int32_t normalizeBooleanConstant(int32_t value)
-    {
-        return value != 0 ? 1 : 0;
-    }
+int32_t normalizeBooleanConstant(int32_t value)
+{
+    return value != 0 ? 1 : 0;
+}
 
 } // namespace
 
-SemanticOutput SemanticAnalyzer::analyze(const CompUnit& compUnit)
+SemanticOutput SemanticAnalyzer::analyze(
+    const std::shared_ptr<CompUnit>& compUnit_nn)
 {
+    m_root_nn = compUnit_nn;
+    m_info = SemanticInfo {};
     m_scopeStack.clear();
-    m_loopTargetStack.clear();
+    m_loopIdStack.clear();
     m_diagnostics.clear();
+    m_nextSymbolId = 0;
+    m_nextLoopId = 0;
+
+    if (compUnit_nn != nullptr) {
+        analyzeCompUnit(*compUnit_nn);
+    }
+
     return SemanticOutput {
-        .m_root = analyzeCompUnit(compUnit),
+        .m_root = m_root_nn,
+        .m_info = m_info,
         .m_diagnostics = m_diagnostics,
     };
 }
 
-std::shared_ptr<semantic::CompUnit> SemanticAnalyzer::analyzeCompUnit(
-    const CompUnit& compUnit)
+void SemanticAnalyzer::analyzeCompUnit(const CompUnit& compUnit)
 {
-    const auto& funcDef = requireNode(
-        compUnit.m_funcDef_nn, "compilation unit is missing a function");
-    return std::make_shared<semantic::CompUnit>(compUnit.m_startOffset,
-        analyzeFuncDef(funcDef));
+    analyzeFuncDef(requireNode(
+        compUnit.m_funcDef_nn, "compilation unit is missing a function"));
 }
 
-std::shared_ptr<semantic::FuncDef> SemanticAnalyzer::analyzeFuncDef(
-    const FuncDef& funcDef)
+void SemanticAnalyzer::analyzeFuncDef(const FuncDef& funcDef)
 {
-    const auto& identifier = requireNode(
+    (void)requireNode(
         funcDef.m_identifier_nn, "function definition is missing an identifier");
-    return std::make_shared<semantic::FuncDef>(funcDef.m_startOffset,
-        funcDef.m_funcType, identifier.m_name,
-        analyzeBlock(requireNode(funcDef.m_block_nn,
-            "function definition is missing a block")));
+    analyzeBlock(requireNode(
+        funcDef.m_block_nn, "function definition is missing a block"));
 }
 
-std::shared_ptr<semantic::Block> SemanticAnalyzer::analyzeBlock(
-    const Block& block)
+void SemanticAnalyzer::analyzeBlock(const Block& block)
 {
     pushScope();
-    std::vector<std::shared_ptr<semantic::BlockItemNode>> blockItems;
     for (const auto& blockItem : block.m_blockItems) {
-        blockItems.push_back(analyzeBlockItemNode(
-            requireNode(blockItem, "block contains a null item")));
+        analyzeBlockItemNode(requireNode(blockItem, "block contains a null item"));
     }
     popScope();
-    return std::make_shared<semantic::Block>(
-        block.m_startOffset, std::move(blockItems));
 }
 
-std::shared_ptr<semantic::BlockItemNode> SemanticAnalyzer::analyzeBlockItemNode(
-    const BlockItemNode& blockItemNode)
+void SemanticAnalyzer::analyzeBlockItemNode(const BlockItemNode& blockItemNode)
 {
-    return std::visit(
-        [&](const auto& blockItemAlt) -> std::shared_ptr<semantic::BlockItemNode> {
+    std::visit(
+        [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<DeclNode>>) {
-                auto declNode = analyzeDeclNode(requireNode(blockItemAlt,
+                analyzeDeclNode(requireNode(blockItemAlt,
                     "block item declaration payload is missing"));
-                return std::make_shared<semantic::BlockItemNode>(
-                    blockItemNode.m_startOffset, semantic::BlockItem { declNode });
             } else {
-                auto stmtNode = analyzeStmtNode(requireNode(blockItemAlt,
+                analyzeStmtNode(requireNode(blockItemAlt,
                     "block item statement payload is missing"));
-                return std::make_shared<semantic::BlockItemNode>(
-                    blockItemNode.m_startOffset, semantic::BlockItem { stmtNode });
             }
         },
         blockItemNode.m_blockItem);
 }
 
-std::shared_ptr<semantic::DeclNode> SemanticAnalyzer::analyzeDeclNode(
-    const DeclNode& declNode)
+void SemanticAnalyzer::analyzeDeclNode(const DeclNode& declNode)
 {
-    return std::visit(
-        [&](const auto& declAlt) -> std::shared_ptr<semantic::DeclNode> {
+    std::visit(
+        [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<ConstDecl>>) {
-                auto constDecl = analyzeConstDecl(requireNode(declAlt,
+                analyzeConstDecl(requireNode(declAlt,
                     "const declaration payload is missing"));
-                return std::make_shared<semantic::DeclNode>(declNode.m_startOffset,
-                    semantic::Decl { constDecl });
             } else {
-                auto varDecl = analyzeVarDecl(requireNode(declAlt,
+                analyzeVarDecl(requireNode(declAlt,
                     "var declaration payload is missing"));
-                return std::make_shared<semantic::DeclNode>(declNode.m_startOffset,
-                    semantic::Decl { varDecl });
             }
         },
         declNode.m_decl);
 }
 
-std::shared_ptr<semantic::ConstDecl> SemanticAnalyzer::analyzeConstDecl(
-    const ConstDecl& constDecl)
+void SemanticAnalyzer::analyzeConstDecl(const ConstDecl& constDecl)
 {
-    std::vector<std::shared_ptr<semantic::ConstDef>> constDefs;
     for (const auto& constDef : constDecl.m_constDefs) {
         const auto& parsedConstDef = requireNode(
             constDef, "const declaration contains a null declarator");
@@ -217,228 +204,181 @@ std::shared_ptr<semantic::ConstDecl> SemanticAnalyzer::analyzeConstDecl(
                 "const initializer must be a constant expression");
         }
 
-        const auto symbol_nn = makeSymbol(identifier, true,
+        const int32_t symbolId = makeSymbol(identifier, true,
             analyzedInit.m_isConstant, analyzedInit.m_constantValue);
-        if (!defineSymbol(symbol_nn)) {
+        if (!defineSymbol(identifier.m_name, symbolId)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_startOffset,
                 "double definition of '" + identifier.m_name + "'");
         }
-
-        constDefs.push_back(std::make_shared<semantic::ConstDef>(
-            parsedConstDef.m_startOffset, symbol_nn, analyzedInit.m_exp_nn));
+        bindSymbol(parsedConstDef, symbolId);
+        bindSymbol(identifier, symbolId);
     }
-
-    return std::make_shared<semantic::ConstDecl>(constDecl.m_startOffset,
-        constDecl.m_bType, std::move(constDefs));
 }
 
-std::shared_ptr<semantic::VarDecl> SemanticAnalyzer::analyzeVarDecl(
-    const VarDecl& varDecl)
+void SemanticAnalyzer::analyzeVarDecl(const VarDecl& varDecl)
 {
-    std::vector<std::shared_ptr<semantic::VarDef>> varDefs;
     for (const auto& varDef : varDecl.m_varDefs) {
         const auto& parsedVarDef
             = requireNode(varDef, "var declaration contains a null declarator");
         const auto& identifier = requireNode(parsedVarDef.m_identifier_nn,
             "var declarator is missing an identifier");
-        std::shared_ptr<semantic::Exp> initExp_nn;
         if (parsedVarDef.m_initVal_nn != nullptr) {
-            initExp_nn = analyzeExp(requireNode(
+            (void)analyzeExp(requireNode(
                 requireNode(parsedVarDef.m_initVal_nn,
                     "var declarator init payload is missing")
                     .m_exp_nn,
-                "var initializer is missing its expression"))
-                             .m_exp_nn;
+                "var initializer is missing its expression"));
         }
 
-        const auto symbol_nn = makeSymbol(identifier, false, false, 0);
-        if (!defineSymbol(symbol_nn)) {
+        const int32_t symbolId = makeSymbol(identifier, false, false, 0);
+        if (!defineSymbol(identifier.m_name, symbolId)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_startOffset,
                 "double definition of '" + identifier.m_name + "'");
         }
-
-        varDefs.push_back(std::make_shared<semantic::VarDef>(
-            parsedVarDef.m_startOffset, symbol_nn, initExp_nn));
+        bindSymbol(parsedVarDef, symbolId);
+        bindSymbol(identifier, symbolId);
     }
-
-    return std::make_shared<semantic::VarDecl>(
-        varDecl.m_startOffset, varDecl.m_bType, std::move(varDefs));
 }
 
-std::shared_ptr<semantic::StmtNode> SemanticAnalyzer::analyzeStmtNode(
-    const StmtNode& stmtNode)
+void SemanticAnalyzer::analyzeStmtNode(const StmtNode& stmtNode)
 {
-    return std::visit(
-        [&](const auto& stmtAlt) -> std::shared_ptr<semantic::StmtNode> {
+    std::visit(
+        [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<IfStmt>>) {
-                auto ifStmt = analyzeIfStmt(requireNode(
+                analyzeIfStmt(requireNode(
                     stmtAlt, "if statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { ifStmt });
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<WhileStmt>>) {
-                auto whileStmt = analyzeWhileStmt(requireNode(
+                analyzeWhileStmt(requireNode(
                     stmtAlt, "while statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { whileStmt });
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<BreakStmt>>) {
-                auto breakStmt = analyzeBreakStmt(requireNode(
+                analyzeBreakStmt(requireNode(
                     stmtAlt, "break statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { breakStmt });
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<ContinueStmt>>) {
-                auto continueStmt = analyzeContinueStmt(requireNode(
+                analyzeContinueStmt(requireNode(
                     stmtAlt, "continue statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { continueStmt });
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<AssignStmt>>) {
-                auto assignStmt = analyzeAssignStmt(requireNode(stmtAlt,
-                    "assignment statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { assignStmt });
+                analyzeAssignStmt(requireNode(
+                    stmtAlt, "assignment statement payload is missing"));
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<Block>>) {
-                auto block = analyzeBlock(requireNode(stmtAlt,
-                    "block statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { block });
+                analyzeBlock(requireNode(
+                    stmtAlt, "block statement payload is missing"));
             } else if constexpr (std::is_same_v<AltType,
                                      std::shared_ptr<ExpStmt>>) {
-                auto expStmt = analyzeExpStmt(requireNode(stmtAlt,
-                    "expression statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { expStmt });
+                analyzeExpStmt(requireNode(
+                    stmtAlt, "expression statement payload is missing"));
             } else {
-                auto returnStmt = analyzeReturnStmt(requireNode(stmtAlt,
-                    "return statement payload is missing"));
-                return std::make_shared<semantic::StmtNode>(stmtNode.m_startOffset,
-                    semantic::Stmt { returnStmt });
+                analyzeReturnStmt(requireNode(
+                    stmtAlt, "return statement payload is missing"));
             }
         },
         stmtNode.m_stmt);
 }
 
-std::shared_ptr<semantic::IfStmt> SemanticAnalyzer::analyzeIfStmt(
-    const IfStmt& ifStmt)
+void SemanticAnalyzer::analyzeIfStmt(const IfStmt& ifStmt)
 {
-    std::shared_ptr<semantic::StmtNode> elseStmt_nn;
+    (void)analyzeCondExp(requireNode(
+        ifStmt.m_condExp_nn, "if statement is missing its condition"));
+    analyzeStmtNode(requireNode(
+        ifStmt.m_thenStmt_nn, "if statement is missing its then-branch"));
     if (ifStmt.m_elseStmt_nn != nullptr) {
-        elseStmt_nn = analyzeStmtNode(requireNode(
+        analyzeStmtNode(requireNode(
             ifStmt.m_elseStmt_nn, "if statement else-branch is missing"));
     }
-
-    return std::make_shared<semantic::IfStmt>(ifStmt.m_startOffset,
-        analyzeCondExp(requireNode(
-            ifStmt.m_condExp_nn, "if statement is missing its condition"))
-            .m_exp_nn,
-        analyzeStmtNode(requireNode(
-            ifStmt.m_thenStmt_nn, "if statement is missing its then-branch")),
-        elseStmt_nn);
 }
 
-std::shared_ptr<semantic::WhileStmt> SemanticAnalyzer::analyzeWhileStmt(
-    const WhileStmt& whileStmt)
+void SemanticAnalyzer::analyzeWhileStmt(const WhileStmt& whileStmt)
 {
-    const auto loopTarget_nn
-        = std::make_shared<semantic::LoopTarget>(whileStmt.m_startOffset);
-    m_loopTargetStack.push_back(loopTarget_nn);
-    auto bodyStmt_nn = analyzeStmtNode(requireNode(
+    const int32_t loopId = ++m_nextLoopId;
+    bindLoop(whileStmt, loopId);
+    m_loopIdStack.push_back(loopId);
+    (void)analyzeCondExp(requireNode(
+        whileStmt.m_condExp_nn, "while statement is missing its condition"));
+    analyzeStmtNode(requireNode(
         whileStmt.m_bodyStmt_nn, "while statement is missing its body"));
-    m_loopTargetStack.pop_back();
-
-    return std::make_shared<semantic::WhileStmt>(whileStmt.m_startOffset,
-        analyzeCondExp(requireNode(
-            whileStmt.m_condExp_nn, "while statement is missing its condition"))
-            .m_exp_nn,
-        bodyStmt_nn, loopTarget_nn);
+    m_loopIdStack.pop_back();
 }
 
-std::shared_ptr<semantic::BreakStmt> SemanticAnalyzer::analyzeBreakStmt(
-    const BreakStmt& breakStmt)
+void SemanticAnalyzer::analyzeBreakStmt(const BreakStmt& breakStmt)
 {
-    const auto loopTarget_nn = currentLoopTarget();
-    if (loopTarget_nn == nullptr) {
+    const auto loopId = currentLoopId();
+    if (!loopId.has_value()) {
         recordDiagnostic(SemanticDiagnosticKind::breakOutsideWhile,
             breakStmt.m_startOffset, "break statement is not inside a while loop");
+        return;
     }
-    return std::make_shared<semantic::BreakStmt>(
-        breakStmt.m_startOffset, loopTarget_nn);
+    bindLoop(breakStmt, *loopId);
 }
 
-std::shared_ptr<semantic::ContinueStmt> SemanticAnalyzer::analyzeContinueStmt(
-    const ContinueStmt& continueStmt)
+void SemanticAnalyzer::analyzeContinueStmt(const ContinueStmt& continueStmt)
 {
-    const auto loopTarget_nn = currentLoopTarget();
-    if (loopTarget_nn == nullptr) {
+    const auto loopId = currentLoopId();
+    if (!loopId.has_value()) {
         recordDiagnostic(SemanticDiagnosticKind::continueOutsideWhile,
             continueStmt.m_startOffset,
             "continue statement is not inside a while loop");
+        return;
     }
-    return std::make_shared<semantic::ContinueStmt>(
-        continueStmt.m_startOffset, loopTarget_nn);
+    bindLoop(continueStmt, *loopId);
 }
 
-std::shared_ptr<semantic::AssignStmt> SemanticAnalyzer::analyzeAssignStmt(
-    const AssignStmt& assignStmt)
+void SemanticAnalyzer::analyzeAssignStmt(const AssignStmt& assignStmt)
 {
+    const auto& lVal = requireNode(
+        assignStmt.m_lVal_nn, "assignment is missing an lvalue");
     const auto& identifier = requireNode(
-        requireNode(assignStmt.m_lVal_nn, "assignment is missing an lvalue")
-            .m_identifier_nn,
-        "assignment lvalue is missing an identifier");
-    const auto symbol_nn = resolveSymbol(identifier);
-    if (symbol_nn->m_isConst) {
+        lVal.m_identifier_nn, "assignment lvalue is missing an identifier");
+    const int32_t symbolId = resolveSymbol(identifier);
+    bindSymbol(lVal, symbolId);
+    bindSymbol(identifier, symbolId);
+    const auto* symbol = m_info.findSymbolById(symbolId);
+    if (symbol != nullptr && symbol->m_isConst) {
         recordDiagnostic(SemanticDiagnosticKind::assignToConst,
             identifier.m_startOffset,
-            "cannot assign to const '" + symbol_nn->m_name + "'");
+            "cannot assign to const '" + symbol->m_name + "'");
     }
 
-    return std::make_shared<semantic::AssignStmt>(assignStmt.m_startOffset,
-        std::make_shared<semantic::LVal>(identifier.m_startOffset, symbol_nn),
-        analyzeExp(requireNode(assignStmt.m_exp_nn,
-            "assignment statement is missing a value"))
-            .m_exp_nn);
+    (void)analyzeExp(requireNode(assignStmt.m_exp_nn,
+        "assignment statement is missing a value"));
 }
 
-std::shared_ptr<semantic::ExpStmt> SemanticAnalyzer::analyzeExpStmt(
-    const ExpStmt& expStmt)
+void SemanticAnalyzer::analyzeExpStmt(const ExpStmt& expStmt)
 {
-    std::shared_ptr<semantic::Exp> exp_nn;
     if (expStmt.m_exp_nn != nullptr) {
-        exp_nn = analyzeExp(requireNode(
-            expStmt.m_exp_nn, "expression statement is missing its expression"))
-                     .m_exp_nn;
+        (void)analyzeExp(requireNode(
+            expStmt.m_exp_nn, "expression statement is missing its expression"));
     }
-
-    return std::make_shared<semantic::ExpStmt>(expStmt.m_startOffset, exp_nn);
 }
 
-std::shared_ptr<semantic::ReturnStmt> SemanticAnalyzer::analyzeReturnStmt(
-    const ReturnStmt& returnStmt)
+void SemanticAnalyzer::analyzeReturnStmt(const ReturnStmt& returnStmt)
 {
-    return std::make_shared<semantic::ReturnStmt>(returnStmt.m_startOffset,
-        analyzeExp(requireNode(returnStmt.m_exp_nn,
-            "return statement is missing a value"))
-            .m_exp_nn);
+    (void)analyzeExp(requireNode(
+        returnStmt.m_exp_nn, "return statement is missing a value"));
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(const Exp& exp)
 {
-    return normalizeToArithmetic(exp.m_startOffset,
+    auto analyzedExp = normalizeToArithmetic(exp,
         analyzeLOrExp(requireNode(
             exp.m_lOrExp_nn, "expression is missing a logical-or expression")));
+    recordExpFacts(exp, analyzedExp);
+    return analyzedExp;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(const Exp& exp)
 {
-    return normalizeToBoolean(exp.m_startOffset,
+    auto analyzedExp = normalizeToBoolean(exp,
         analyzeLOrExp(requireNode(
             exp.m_lOrExp_nn, "expression is missing a logical-or expression")));
+    recordExpFacts(exp, analyzedExp);
+    return analyzedExp;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLOrExp(
@@ -449,27 +389,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLOrExp(
     for (const auto& tailEntry : lOrExp.m_tail) {
         auto rhs = analyzeLAndExp(requireNode(
             tailEntry.second, "logical-or expression is missing its operand"));
-        current = normalizeToBoolean(lOrExp.m_startOffset, std::move(current));
-        rhs = normalizeToBoolean(lOrExp.m_startOffset, std::move(rhs));
+        current = normalizeToBoolean(lOrExp, std::move(current));
+        rhs = normalizeToBoolean(lOrExp, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyLOrOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeBooleanConstantExp(
-                lOrExp.m_startOffset, current.m_constantValue);
-            current.m_valueKind = ExpValueKind::boolean;
+            current.m_valueKind = SemanticExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(lOrExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::boolean,
+            .m_valueKind = SemanticExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(lOrExp, current);
     return current;
 }
 
@@ -481,27 +417,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLAndExp(
     for (const auto& tailEntry : lAndExp.m_tail) {
         auto rhs = analyzeEqExp(requireNode(
             tailEntry.second, "logical-and expression is missing its operand"));
-        current = normalizeToBoolean(lAndExp.m_startOffset, std::move(current));
-        rhs = normalizeToBoolean(lAndExp.m_startOffset, std::move(rhs));
+        current = normalizeToBoolean(lAndExp, std::move(current));
+        rhs = normalizeToBoolean(lAndExp, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyLAndOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeBooleanConstantExp(
-                lAndExp.m_startOffset, current.m_constantValue);
-            current.m_valueKind = ExpValueKind::boolean;
+            current.m_valueKind = SemanticExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(lAndExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::boolean,
+            .m_valueKind = SemanticExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(lAndExp, current);
     return current;
 }
 
@@ -512,27 +444,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeEqExp(const EqExp& eqExp)
     for (const auto& tailEntry : eqExp.m_tail) {
         auto rhs = analyzeRelExp(requireNode(
             tailEntry.second, "equality expression is missing its operand"));
-        current = normalizeToArithmetic(eqExp.m_startOffset, std::move(current));
-        rhs = normalizeToArithmetic(eqExp.m_startOffset, std::move(rhs));
+        current = normalizeToArithmetic(eqExp, std::move(current));
+        rhs = normalizeToArithmetic(eqExp, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyEqOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeBooleanConstantExp(
-                eqExp.m_startOffset, current.m_constantValue);
-            current.m_valueKind = ExpValueKind::boolean;
+            current.m_valueKind = SemanticExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(eqExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::boolean,
+            .m_valueKind = SemanticExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(eqExp, current);
     return current;
 }
 
@@ -544,27 +472,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeRelExp(
     for (const auto& tailEntry : relExp.m_tail) {
         auto rhs = analyzeAddExp(requireNode(
             tailEntry.second, "relational expression is missing its operand"));
-        current = normalizeToArithmetic(relExp.m_startOffset, std::move(current));
-        rhs = normalizeToArithmetic(relExp.m_startOffset, std::move(rhs));
+        current = normalizeToArithmetic(relExp, std::move(current));
+        rhs = normalizeToArithmetic(relExp, std::move(rhs));
         if (current.m_isConstant && rhs.m_isConstant) {
             current.m_constantValue = applyRelOp(
                 tailEntry.first, current.m_constantValue, rhs.m_constantValue);
-            current.m_exp_nn = makeBooleanConstantExp(
-                relExp.m_startOffset, current.m_constantValue);
-            current.m_valueKind = ExpValueKind::boolean;
+            current.m_valueKind = SemanticExpValueKind::boolean;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(relExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::boolean,
+            .m_valueKind = SemanticExpValueKind::boolean,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(relExp, current);
     return current;
 }
 
@@ -576,28 +500,26 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeAddExp(
     for (const auto& tailEntry : addExp.m_tail) {
         auto rhs = analyzeMulExp(requireNode(
             tailEntry.second, "additive expression is missing its operand"));
-        current = normalizeToArithmetic(addExp.m_startOffset, std::move(current));
-        rhs = normalizeToArithmetic(addExp.m_startOffset, std::move(rhs));
+        current = normalizeToArithmetic(addExp, std::move(current));
+        rhs = normalizeToArithmetic(addExp, std::move(rhs));
         const auto folded = current.m_isConstant && rhs.m_isConstant
             ? applyAddOp(
                   tailEntry.first, current.m_constantValue, rhs.m_constantValue)
             : std::nullopt;
         if (folded.has_value()) {
             current.m_constantValue = *folded;
-            current.m_exp_nn = makeNumberExp(addExp.m_startOffset, *folded);
+            current.m_valueKind = SemanticExpValueKind::arithmetic;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(addExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::arithmetic,
+            .m_valueKind = SemanticExpValueKind::arithmetic,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(addExp, current);
     return current;
 }
 
@@ -610,35 +532,33 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeMulExp(
         auto rhs = analyzeUnaryExp(requireNode(
             tailEntry.second,
             "multiplicative expression is missing its operand"));
-        current = normalizeToArithmetic(mulExp.m_startOffset, std::move(current));
-        rhs = normalizeToArithmetic(mulExp.m_startOffset, std::move(rhs));
+        current = normalizeToArithmetic(mulExp, std::move(current));
+        rhs = normalizeToArithmetic(mulExp, std::move(rhs));
         const auto folded = current.m_isConstant && rhs.m_isConstant
             ? applyMulOp(
                   tailEntry.first, current.m_constantValue, rhs.m_constantValue)
             : std::nullopt;
         if (folded.has_value()) {
             current.m_constantValue = *folded;
-            current.m_exp_nn = makeNumberExp(mulExp.m_startOffset, *folded);
+            current.m_valueKind = SemanticExpValueKind::arithmetic;
             current.m_isConstant = true;
             continue;
         }
 
         current = AnalyzedExp {
-            .m_exp_nn = makeBinaryExp(mulExp.m_startOffset,
-                semantic::BinaryExp::Op { tailEntry.first }, current.m_exp_nn,
-                rhs.m_exp_nn),
-            .m_valueKind = ExpValueKind::arithmetic,
+            .m_valueKind = SemanticExpValueKind::arithmetic,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
+    recordExpFacts(mulExp, current);
     return current;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
     const UnaryExp& unaryExp)
 {
-    return std::visit(
+    auto analyzedExp = std::visit(
         [&](const auto& unaryAlt) -> AnalyzedExp {
             using AltType = std::decay_t<decltype(unaryAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<PrimaryExp>>) {
@@ -648,104 +568,102 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
                 auto operand = analyzeUnaryExp(requireNode(unaryAlt.second,
                     "unary expression is missing its operand"));
                 if (unaryAlt.first == UnaryOpKeyword::bang) {
-                    operand = normalizeToBoolean(
-                        unaryExp.m_startOffset, std::move(operand));
+                    operand = normalizeToBoolean(unaryExp, std::move(operand));
                 } else {
-                    operand = normalizeToArithmetic(
-                        unaryExp.m_startOffset, std::move(operand));
+                    operand = normalizeToArithmetic(unaryExp, std::move(operand));
                 }
                 if (operand.m_isConstant) {
                     const auto folded
                         = applyUnaryOp(unaryAlt.first, operand.m_constantValue);
                     if (folded.has_value()) {
                         return AnalyzedExp {
-                            .m_exp_nn = unaryAlt.first == UnaryOpKeyword::bang
-                                ? makeBooleanConstantExp(
-                                      unaryExp.m_startOffset, *folded)
-                                : makeNumberExp(unaryExp.m_startOffset, *folded),
                             .m_valueKind = unaryAlt.first == UnaryOpKeyword::bang
-                                ? ExpValueKind::boolean
-                                : ExpValueKind::arithmetic,
+                                ? SemanticExpValueKind::boolean
+                                : SemanticExpValueKind::arithmetic,
                             .m_isConstant = true,
                             .m_constantValue = *folded,
                         };
                     }
                 }
                 return AnalyzedExp {
-                    .m_exp_nn = makeUnaryExp(
-                        unaryExp.m_startOffset, unaryAlt.first, operand.m_exp_nn),
                     .m_valueKind = unaryAlt.first == UnaryOpKeyword::bang
-                        ? ExpValueKind::boolean
-                        : ExpValueKind::arithmetic,
+                        ? SemanticExpValueKind::boolean
+                        : SemanticExpValueKind::arithmetic,
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
             }
         },
         unaryExp.m_kind);
+    recordExpFacts(unaryExp, analyzedExp);
+    return analyzedExp;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzePrimaryExp(
     const PrimaryExp& primaryExp)
 {
-    return std::visit(
+    auto analyzedExp = std::visit(
         [&](const auto& primaryAlt) -> AnalyzedExp {
             using AltType = std::decay_t<decltype(primaryAlt)>;
             if constexpr (std::is_same_v<AltType, std::shared_ptr<Exp>>) {
                 return analyzeExp(requireNode(primaryAlt,
                     "parenthesized primary is missing its inner expression"));
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<LVal>>) {
+            } else if constexpr (std::is_same_v<AltType, std::shared_ptr<LVal>>) {
+                const auto& lVal = requireNode(primaryAlt, "lvalue primary is missing");
                 const auto& identifier = requireNode(
-                    requireNode(primaryAlt, "lvalue primary is missing")
-                        .m_identifier_nn,
-                    "lvalue primary is missing its identifier");
-                const auto symbol_nn = resolveSymbol(identifier);
-                if (symbol_nn->m_isConst && symbol_nn->m_hasConstantValue) {
+                    lVal.m_identifier_nn, "lvalue primary is missing its identifier");
+                const int32_t symbolId = resolveSymbol(identifier);
+                bindSymbol(lVal, symbolId);
+                bindSymbol(identifier, symbolId);
+                const auto* symbol = m_info.findSymbolById(symbolId);
+                if (symbol != nullptr && symbol->m_isConst
+                    && symbol->m_hasConstantValue) {
+                    recordExpFacts(lVal,
+                        AnalyzedExp {
+                            .m_valueKind = SemanticExpValueKind::arithmetic,
+                            .m_isConstant = true,
+                            .m_constantValue = symbol->m_constantValue,
+                        });
                     return AnalyzedExp {
-                        .m_exp_nn = makeNumberExp(
-                            primaryExp.m_startOffset, symbol_nn->m_constantValue),
+                        .m_valueKind = SemanticExpValueKind::arithmetic,
                         .m_isConstant = true,
-                        .m_constantValue = symbol_nn->m_constantValue,
+                        .m_constantValue = symbol->m_constantValue,
                     };
                 }
 
+                recordExpFacts(lVal,
+                    AnalyzedExp {
+                        .m_valueKind = SemanticExpValueKind::arithmetic,
+                        .m_isConstant = false,
+                        .m_constantValue = 0,
+                    });
                 return AnalyzedExp {
-                    .m_exp_nn = makeLValExp(primaryExp.m_startOffset, symbol_nn),
-                    .m_valueKind = ExpValueKind::arithmetic,
+                    .m_valueKind = SemanticExpValueKind::arithmetic,
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
             } else {
                 const auto& number = requireNode(
                     primaryAlt, "number primary expression is missing");
+                recordExpFacts(number,
+                    AnalyzedExp {
+                        .m_valueKind = SemanticExpValueKind::arithmetic,
+                        .m_isConstant = true,
+                        .m_constantValue = number.m_value,
+                    });
                 return AnalyzedExp {
-                    .m_exp_nn = makeNumberExp(number.m_startOffset, number.m_value),
-                    .m_valueKind = ExpValueKind::arithmetic,
+                    .m_valueKind = SemanticExpValueKind::arithmetic,
                     .m_isConstant = true,
                     .m_constantValue = number.m_value,
                 };
             }
         },
         primaryExp.m_kind);
+    recordExpFacts(primaryExp, analyzedExp);
+    return analyzedExp;
 }
 
-std::shared_ptr<semantic::Symbol> SemanticAnalyzer::resolveSymbol(
-    const Identifier& identifier)
-{
-    const auto symbol_nn = lookupSymbol(identifier.m_name);
-    if (symbol_nn.has_value()) {
-        return *symbol_nn;
-    }
-
-    recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
-        identifier.m_startOffset,
-        "use of '" + identifier.m_name + "' before definition");
-    return makePlaceholderSymbol(identifier);
-}
-
-std::optional<std::shared_ptr<semantic::Symbol>> SemanticAnalyzer::lookupSymbol(
-    const std::string& name) const
+std::optional<int32_t> SemanticAnalyzer::lookupSymbol(const std::string& name) const
 {
     for (auto scopeIt = m_scopeStack.rbegin(); scopeIt != m_scopeStack.rend();
          ++scopeIt) {
@@ -757,117 +675,88 @@ std::optional<std::shared_ptr<semantic::Symbol>> SemanticAnalyzer::lookupSymbol(
     return std::nullopt;
 }
 
-std::shared_ptr<semantic::Symbol> SemanticAnalyzer::makePlaceholderSymbol(
-    const Identifier& identifier) const
+int32_t SemanticAnalyzer::resolveSymbol(const Identifier& identifier)
 {
-    return std::make_shared<semantic::Symbol>(
-        identifier.m_startOffset, identifier.m_name, false, false, 0);
+    const auto symbolId = lookupSymbol(identifier.m_name);
+    if (symbolId.has_value()) {
+        return *symbolId;
+    }
+
+    recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
+        identifier.m_startOffset,
+        "use of '" + identifier.m_name + "' before definition");
+    return makePlaceholderSymbol(identifier);
 }
 
-std::shared_ptr<semantic::Symbol> SemanticAnalyzer::makeSymbol(
-    const Identifier& identifier, bool isConst, bool hasConstantValue,
-    int32_t constantValue) const
+int32_t SemanticAnalyzer::makePlaceholderSymbol(const Identifier& identifier)
 {
-    return std::make_shared<semantic::Symbol>(identifier.m_startOffset,
-        identifier.m_name, isConst, hasConstantValue, constantValue);
+    return makeSymbol(identifier, false, false, 0);
 }
 
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeNumberExp(
-    int32_t startOffset, int32_t value) const
+int32_t SemanticAnalyzer::makeSymbol(const Identifier& identifier, bool isConst,
+    bool hasConstantValue, int32_t constantValue)
 {
-    return std::make_shared<semantic::Exp>(startOffset,
-        semantic::Exp::Kind {
-            std::make_shared<semantic::Number>(startOffset, value) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeLValExp(int32_t startOffset,
-    const std::shared_ptr<semantic::Symbol>& symbol_nn) const
-{
-    return std::make_shared<semantic::Exp>(startOffset,
-        semantic::Exp::Kind {
-            std::make_shared<semantic::LVal>(startOffset, symbol_nn) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeUnaryExp(
-    int32_t startOffset, UnaryOpKeyword op,
-    const std::shared_ptr<semantic::Exp>& operand_nn) const
-{
-    return std::make_shared<semantic::Exp>(
-        startOffset, semantic::Exp::Kind { std::make_pair(op, operand_nn) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBinaryExp(
-    int32_t startOffset, semantic::BinaryExp::Op op,
-    const std::shared_ptr<semantic::Exp>& lhs_nn,
-    const std::shared_ptr<semantic::Exp>& rhs_nn) const
-{
-    return std::make_shared<semantic::Exp>(startOffset,
-        semantic::Exp::Kind {
-            std::make_shared<semantic::BinaryExp>(startOffset, std::move(op),
-                lhs_nn, rhs_nn) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeIntToBoolExp(
-    int32_t startOffset, const std::shared_ptr<semantic::Exp>& operand_nn) const
-{
-    return std::make_shared<semantic::Exp>(startOffset,
-        semantic::Exp::Kind { std::make_shared<semantic::IntToBoolExp>(
-            startOffset, operand_nn) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBoolToIntExp(
-    int32_t startOffset, const std::shared_ptr<semantic::Exp>& operand_nn) const
-{
-    return std::make_shared<semantic::Exp>(startOffset,
-        semantic::Exp::Kind { std::make_shared<semantic::BoolToIntExp>(
-            startOffset, operand_nn) });
-}
-
-std::shared_ptr<semantic::Exp> SemanticAnalyzer::makeBooleanConstantExp(
-    int32_t startOffset, int32_t value) const
-{
-    return makeIntToBoolExp(
-        startOffset, makeNumberExp(startOffset, normalizeBooleanConstant(value)));
+    const int32_t symbolId = ++m_nextSymbolId;
+    m_info.m_symbolsById.emplace(symbolId,
+        SemanticSymbol {
+            .m_id = symbolId,
+            .m_name = identifier.m_name,
+            .m_isConst = isConst,
+            .m_hasConstantValue = hasConstantValue,
+            .m_constantValue = constantValue,
+        });
+    return symbolId;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToArithmetic(
-    int32_t startOffset, AnalyzedExp analyzedExp) const
+    const AstNode&, AnalyzedExp analyzedExp)
 {
-    if (analyzedExp.m_valueKind == ExpValueKind::arithmetic) {
-        return analyzedExp;
-    }
-    if (analyzedExp.m_isConstant) {
-        analyzedExp.m_exp_nn = makeNumberExp(startOffset,
-            normalizeBooleanConstant(analyzedExp.m_constantValue));
-        analyzedExp.m_constantValue
-            = normalizeBooleanConstant(analyzedExp.m_constantValue);
-        analyzedExp.m_valueKind = ExpValueKind::arithmetic;
+    if (analyzedExp.m_valueKind == SemanticExpValueKind::arithmetic) {
         return analyzedExp;
     }
 
-    analyzedExp.m_exp_nn = makeBoolToIntExp(startOffset, analyzedExp.m_exp_nn);
-    analyzedExp.m_valueKind = ExpValueKind::arithmetic;
+    analyzedExp.m_valueKind = SemanticExpValueKind::arithmetic;
+    if (analyzedExp.m_isConstant) {
+        analyzedExp.m_constantValue
+            = normalizeBooleanConstant(analyzedExp.m_constantValue);
+    }
     return analyzedExp;
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToBoolean(
-    int32_t startOffset, AnalyzedExp analyzedExp) const
+    const AstNode&, AnalyzedExp analyzedExp)
 {
-    if (analyzedExp.m_valueKind == ExpValueKind::boolean) {
-        return analyzedExp;
-    }
-    if (analyzedExp.m_isConstant) {
-        analyzedExp.m_constantValue
-            = normalizeBooleanConstant(analyzedExp.m_constantValue);
-        analyzedExp.m_exp_nn
-            = makeBooleanConstantExp(startOffset, analyzedExp.m_constantValue);
-        analyzedExp.m_valueKind = ExpValueKind::boolean;
+    if (analyzedExp.m_valueKind == SemanticExpValueKind::boolean) {
         return analyzedExp;
     }
 
-    analyzedExp.m_exp_nn = makeIntToBoolExp(startOffset, analyzedExp.m_exp_nn);
-    analyzedExp.m_valueKind = ExpValueKind::boolean;
+    analyzedExp.m_valueKind = SemanticExpValueKind::boolean;
+    if (analyzedExp.m_isConstant) {
+        analyzedExp.m_constantValue
+            = normalizeBooleanConstant(analyzedExp.m_constantValue);
+    }
     return analyzedExp;
+}
+
+void SemanticAnalyzer::bindSymbol(const AstNode& node, int32_t symbolId)
+{
+    m_info.m_symbolIdByNodeId[node.m_id] = symbolId;
+}
+
+void SemanticAnalyzer::bindLoop(const AstNode& node, int32_t loopId)
+{
+    m_info.m_loopIdByNodeId[node.m_id] = loopId;
+}
+
+void SemanticAnalyzer::recordExpFacts(
+    const AstNode& node, const AnalyzedExp& analyzedExp)
+{
+    m_info.m_exprKindByNodeId[node.m_id] = analyzedExp.m_valueKind;
+    if (analyzedExp.m_isConstant) {
+        m_info.m_constantValueByNodeId[node.m_id] = analyzedExp.m_constantValue;
+    } else {
+        m_info.m_constantValueByNodeId.erase(node.m_id);
+    }
 }
 
 void SemanticAnalyzer::pushScope()
@@ -882,29 +771,22 @@ void SemanticAnalyzer::popScope()
     }
 }
 
-bool SemanticAnalyzer::defineSymbol(
-    const std::shared_ptr<semantic::Symbol>& symbol_nn)
+bool SemanticAnalyzer::defineSymbol(const std::string& name, int32_t symbolId)
 {
     if (m_scopeStack.empty()) {
         pushScope();
     }
 
-    const auto existingIt = m_scopeStack.back().find(symbol_nn->m_name);
-    if (existingIt != m_scopeStack.back().end()) {
-        return false;
-    }
-
-    m_scopeStack.back().emplace(symbol_nn->m_name, symbol_nn);
-    return true;
+    auto& currentScope = m_scopeStack.back();
+    return currentScope.emplace(name, symbolId).second;
 }
 
-std::shared_ptr<semantic::LoopTarget> SemanticAnalyzer::currentLoopTarget()
-    const
+std::optional<int32_t> SemanticAnalyzer::currentLoopId() const
 {
-    if (m_loopTargetStack.empty()) {
-        return nullptr;
+    if (m_loopIdStack.empty()) {
+        return std::nullopt;
     }
-    return m_loopTargetStack.back();
+    return m_loopIdStack.back();
 }
 
 void SemanticAnalyzer::recordDiagnostic(SemanticDiagnosticKind kind,

@@ -55,14 +55,16 @@ inline std::shared_ptr<CompUnit> parseRoot(const std::string& source)
 
 inline std::unique_ptr<Program> generateProgram(const std::string& source)
 {
+    const auto root_nn = parseRoot(source);
     SemanticAnalyzer semanticAnalyzer;
-    const auto semanticOutput = semanticAnalyzer.analyze(*parseRoot(source));
+    const auto semanticOutput = semanticAnalyzer.analyze(root_nn);
     if (!semanticOutput.success()) {
         fail("expected semantic success before Koopa generation");
     }
 
     Generator generator;
-    return std::unique_ptr<Program>(generator.generate(*semanticOutput.m_root));
+    return std::unique_ptr<Program>(
+        generator.generate(*semanticOutput.m_root, semanticOutput.m_info));
 }
 
 inline const Function* requireOnlyFunction(const Program& program)
