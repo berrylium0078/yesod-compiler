@@ -37,7 +37,10 @@ namespace {
     using yesod::koopa::BasicBlock;
     using yesod::koopa::BinaryValue;
     using yesod::koopa::BranchValue;
+    using yesod::koopa::CallValue;
+    using yesod::koopa::FuncArgRefValue;
     using yesod::koopa::Function;
+    using yesod::koopa::GlobalAllocValue;
     using yesod::koopa::IntegerValue;
     using yesod::koopa::JumpValue;
     using yesod::koopa::LoadValue;
@@ -46,11 +49,44 @@ namespace {
     using yesod::koopa::StoreValue;
     using yesod::koopa::Value;
 
+    std::string symbolName(const std::string& koopaName)
+    {
+        if (!koopaName.empty() && koopaName.front() == '@') {
+            return koopaName.substr(1);
+        }
+        return koopaName;
+    }
+
+    void emitGlobal(std::ostream& output, const GlobalAllocValue& globalAlloc)
+    {
+        const std::string name = symbolName(globalAlloc.getName());
+        output << "  .globl " << name << "\n";
+        output << name << ":\n";
+
+        const Value* initVal = globalAlloc.getInitVal();
+        if (initVal->isIntegerValue()) {
+            output << "  .word "
+                   << dynamic_cast<const IntegerValue&>(*initVal).getVal()
+                   << "\n";
+            return;
+        }
+        if (initVal->isZeroInitValue()) {
+            output << "  .zero 4\n";
+            return;
+        }
+
+        throw std::runtime_error(
+            "RISC-V backend does not support this global initializer yet");
+    }
+
     class FunctionEmitter {
         std::ostream& m_output;
         std::map<const Value*, int> m_stackSlots;
         std::map<const BasicBlock*, std::string> m_blockLabels;
-        int m_stackSize = 0;
+        int m_outgoingArgAreaSize = 0;
+        int m_frameSize = 0;
+        int m_savedRaOffset = 0;
+        bool m_savesReturnAddress = false;
         const Function* m_currentFunction_nn = nullptr;
 
       public:
@@ -61,18 +97,16 @@ namespace {
 
         void emitFunction(const Function& function)
         {
-            if (function.getNumParams() != 0) {
-                throw std::runtime_error(
-                    "RISC-V backend does not support function parameters yet");
-            }
-
-            assignStackSlots(function);
             m_currentFunction_nn = &function;
+            assignFrameLayout(function);
             assignBlockLabels(function);
 
             m_output << "  .globl " << symbolName(function.getName()) << "\n";
             m_output << symbolName(function.getName()) << ":\n";
-            emitStackAdjustment(-m_stackSize);
+            emitStackAdjustment(-m_frameSize);
+            if (m_savesReturnAddress) {
+                m_output << "  sw ra, " << m_savedRaOffset << "(sp)\n";
+            }
 
             for (const BasicBlock* basicBlock : function.bbs()) {
                 emitBasicBlock(*basicBlock);
@@ -80,14 +114,6 @@ namespace {
         }
 
       private:
-        static std::string symbolName(const std::string& koopaName)
-        {
-            if (!koopaName.empty() && koopaName.front() == '@') {
-                return koopaName.substr(1);
-            }
-            return koopaName;
-        }
-
         static std::string sanitizeBlockName(const BasicBlock& basicBlock)
         {
             std::string label;
@@ -137,26 +163,53 @@ namespace {
             return it->second;
         }
 
-        void assignStackSlots(const Function& function)
+        void assignFrameLayout(const Function& function)
         {
             m_stackSlots.clear();
-            int nextOffset = 0;
+            size_t maxCallArgs = 0;
+            m_savesReturnAddress = false;
+
             for (const BasicBlock* basicBlock : function.bbs()) {
                 for (const Value* instruction : basicBlock->insts()) {
-                    if (needsStackSlot(*instruction)) {
-                        nextOffset += 4;
-                        m_stackSlots.emplace(instruction, nextOffset);
+                    if (instruction->isCallValue()) {
+                        const auto& callValue
+                            = dynamic_cast<const CallValue&>(*instruction);
+                        m_savesReturnAddress = true;
+                        if (callValue.getNumArgs() > maxCallArgs) {
+                            maxCallArgs = callValue.getNumArgs();
+                        }
                     }
                 }
             }
 
-            m_stackSize = align16(nextOffset);
+            m_outgoingArgAreaSize
+                = static_cast<int>(maxCallArgs > 8 ? (maxCallArgs - 8) * 4 : 0);
+
+            int nextOffset = m_outgoingArgAreaSize;
+            for (const BasicBlock* basicBlock : function.bbs()) {
+                for (const Value* instruction : basicBlock->insts()) {
+                    if (needsStackSlot(*instruction)) {
+                        m_stackSlots.emplace(instruction, nextOffset);
+                        nextOffset += 4;
+                    }
+                }
+            }
+
+            if (m_savesReturnAddress) {
+                m_savedRaOffset = nextOffset;
+                nextOffset += 4;
+            } else {
+                m_savedRaOffset = 0;
+            }
+
+            m_frameSize = align16(nextOffset);
         }
 
         static bool needsStackSlot(const Value& value)
         {
             return value.isAllocValue() || value.isLoadValue()
-                || value.isBinaryValue();
+                || value.isBinaryValue()
+                || (value.isCallValue() && !value.getVType()->isUnitType());
         }
 
         static int align16(int value)
@@ -223,6 +276,11 @@ namespace {
                 return;
             }
 
+            if (instruction.isCallValue()) {
+                emitCall(dynamic_cast<const CallValue&>(instruction));
+                return;
+            }
+
             if (instruction.isJumpValue()) {
                 emitJump(dynamic_cast<const JumpValue&>(instruction));
                 return;
@@ -242,23 +300,59 @@ namespace {
                 return;
             }
 
-            m_output << "  lw " << targetRegister << ", -" << stackOffset(value)
+            if (value.isFuncArgRefValue()) {
+                const auto& funcArgRef
+                    = dynamic_cast<const FuncArgRefValue&>(value);
+                if (funcArgRef.getIndex() < 8) {
+                    const std::string sourceRegister
+                        = "a" + std::to_string(funcArgRef.getIndex());
+                    if (sourceRegister != targetRegister) {
+                        m_output << "  mv " << targetRegister << ", "
+                                 << sourceRegister << "\n";
+                    }
+                } else {
+                    const int offset = m_frameSize
+                        + static_cast<int>((funcArgRef.getIndex() - 8) * 4);
+                    m_output << "  lw " << targetRegister << ", " << offset
+                             << "(sp)\n";
+                }
+                return;
+            }
+
+            m_output << "  lw " << targetRegister << ", " << stackOffset(value)
                      << "(sp)\n";
         }
 
         void emitStore(const StoreValue& storeValue)
         {
-            loadValueToRegister(*storeValue.getVal(), "t0");
             const Value* destination = storeValue.getDestination();
-            m_output << "  sw t0, -" << stackOffset(*destination) << "(sp)\n";
+            if (destination->isGlobalAllocValue()) {
+                loadValueToRegister(*storeValue.getVal(), "t2");
+                m_output << "  la t0, "
+                         << symbolName(destination->getName()) << "\n";
+                m_output << "  sw t2, 0(t0)\n";
+                return;
+            }
+
+            loadValueToRegister(*storeValue.getVal(), "t0");
+            m_output << "  sw t0, " << stackOffset(*destination) << "(sp)\n";
         }
 
         void emitLoad(const LoadValue& loadValue)
         {
+            if (loadValue.getSource()->isGlobalAllocValue()) {
+                m_output << "  la t0, "
+                         << symbolName(loadValue.getSource()->getName())
+                         << "\n";
+                m_output << "  lw t1, 0(t0)\n";
+                m_output << "  sw t1, " << stackOffset(loadValue) << "(sp)\n";
+                return;
+            }
+
             const int sourceOffset = stackOffset(*loadValue.getSource());
             const int targetOffset = stackOffset(loadValue);
-            m_output << "  lw t0, -" << sourceOffset << "(sp)\n";
-            m_output << "  sw t0, -" << targetOffset << "(sp)\n";
+            m_output << "  lw t0, " << sourceOffset << "(sp)\n";
+            m_output << "  sw t0, " << targetOffset << "(sp)\n";
         }
 
         void emitBinary(const BinaryValue& binaryValue)
@@ -327,7 +421,7 @@ namespace {
                     "unsupported Koopa binary op in RISC-V backend");
             }
 
-            m_output << "  sw t2, -" << stackOffset(binaryValue) << "(sp)\n";
+            m_output << "  sw t2, " << stackOffset(binaryValue) << "(sp)\n";
         }
 
         void emitBranch(const BranchValue& branchValue)
@@ -358,8 +452,32 @@ namespace {
             if (returnValue.getVal() != nullptr) {
                 loadValueToRegister(*returnValue.getVal(), "a0");
             }
-            emitStackAdjustment(m_stackSize);
+            if (m_savesReturnAddress) {
+                m_output << "  lw ra, " << m_savedRaOffset << "(sp)\n";
+            }
+            emitStackAdjustment(m_frameSize);
             m_output << "  ret\n";
+        }
+
+        void emitCall(const CallValue& callValue)
+        {
+            for (size_t i = 0; i < callValue.getNumArgs(); ++i) {
+                if (i < 8) {
+                    loadValueToRegister(
+                        *callValue.getArg(i), "a" + std::to_string(i));
+                    continue;
+                }
+
+                loadValueToRegister(*callValue.getArg(i), "t0");
+                const int offset = static_cast<int>((i - 8) * 4);
+                m_output << "  sw t0, " << offset << "(sp)\n";
+            }
+
+            m_output << "  call "
+                     << symbolName(callValue.getCallee()->getName()) << "\n";
+            if (!callValue.getVType()->isUnitType()) {
+                m_output << "  sw a0, " << stackOffset(callValue) << "(sp)\n";
+            }
         }
     };
 
@@ -367,16 +485,26 @@ namespace {
 
 void RiscvGenerator::generate(const Program& program, std::ostream& output)
 {
-    if (program.getNumVals() != 0) {
-        throw std::runtime_error("RISC-V backend does not support globals yet");
+    if (program.getNumFuncs() == 0) {
+        throw std::runtime_error(
+            "RISC-V backend expects at least one function");
     }
-    if (program.getNumFuncs() != 1) {
-        throw std::runtime_error("RISC-V backend expects exactly one function");
+
+    if (program.getNumVals() != 0) {
+        output << "  .data\n";
+        for (const auto* value : program.vals()) {
+            emitGlobal(output, dynamic_cast<const GlobalAllocValue&>(*value));
+        }
     }
 
     output << "  .text\n";
     FunctionEmitter functionEmitter(output);
-    functionEmitter.emitFunction(*program.getFunc(0));
+    for (const auto* function : program.funcs()) {
+        if (function->getNumBBs() == 0) {
+            continue;
+        }
+        functionEmitter.emitFunction(*function);
+    }
 }
 
 } // namespace yesod::backend
