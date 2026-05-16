@@ -89,14 +89,15 @@ int main(int argc, const char* argv[])
     try {
         const std::string source = readTextFile(inputPath);
         yesod::frontend::Parser parser(source);
-        const auto parseOutput = parser.parse();
+        auto parseOutput = parser.parse();
         if (!parseOutput.success()) {
             printDiagnostics(parseOutput);
             return 1;
         }
 
         yesod::frontend::SemanticAnalyzer semanticAnalyzer;
-        const auto semanticOutput = semanticAnalyzer.analyze(parseOutput.m_root);
+        auto semanticOutput = semanticAnalyzer.analyze(
+            std::move(parseOutput.m_ast), parseOutput.m_root);
         if (!semanticOutput.success()) {
             printDiagnostics(semanticOutput);
             return 1;
@@ -104,7 +105,8 @@ int main(int argc, const char* argv[])
 
         Generator generator;
         std::unique_ptr<Program> program(
-            generator.generate(*semanticOutput.m_root, semanticOutput.m_info));
+            generator.generate(semanticOutput.m_ast, semanticOutput.m_root,
+                semanticOutput.m_info));
         if (mode == "-koopa") {
             if (!writeKoopaProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate koopa IR" << std::endl;

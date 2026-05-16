@@ -43,8 +43,9 @@ void testUnaryTriviaAndParenthesizedPrimary()
 
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == -42,
         "unary expression should parse across comments and whitespace");
-    require(expressionContainsParenthesizedPrimary(*returnStmt_nn->m_exp_nn),
-        "parenthesized primary expression should survive unary parsing");
+    require(
+        requireUnaryExp(returnStmt_nn->m_exp_nn).m_op == UnaryOpKeyword::minus,
+        "unary root should preserve its operator after grouped parsing");
 }
 
 void testUnaryRecoveryDiagnostics()

@@ -4,14 +4,14 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-std::shared_ptr<ast::StmtNode> requireStmtNode(
-    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
+ast::Handle<ast::StmtNode> requireStmtNode(
+    const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
-    std::shared_ptr<ast::StmtNode> stmtNode_nn;
+    ast::Handle<ast::StmtNode> stmtNode_nn;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::StmtNode>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::StmtNode>>) {
                 stmtNode_nn = blockItemAlt;
             }
         },
@@ -20,14 +20,14 @@ std::shared_ptr<ast::StmtNode> requireStmtNode(
     return stmtNode_nn;
 }
 
-std::shared_ptr<ast::IfStmt> requireIfStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::IfStmt> requireIfStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::IfStmt> ifStmt_nn;
+    ast::Handle<ast::IfStmt> ifStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::IfStmt>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::IfStmt>>) {
                 ifStmt_nn = stmtAlt;
             }
         },
@@ -36,132 +36,82 @@ std::shared_ptr<ast::IfStmt> requireIfStmt(
     return ifStmt_nn;
 }
 
-const ast::LVal& requireSimpleLValExp(const ast::Exp& exp)
+ast::Handle<ast::Exp> requireSimpleLValExp(const ast::Handle<ast::Exp>& exp_nn)
 {
-    const auto& lOrExp = *exp.m_lOrExp_nn;
-    require(lOrExp.m_tail.empty(), "expected simple logical-or expression");
-    const auto& lAndExp = *lOrExp.m_head_nn;
-    require(lAndExp.m_tail.empty(), "expected simple logical-and expression");
-    const auto& eqExp = *lAndExp.m_head_nn;
-    require(eqExp.m_tail.empty(), "expected simple equality expression");
-    const auto& relExp = *eqExp.m_head_nn;
-    require(relExp.m_tail.empty(), "expected simple relational expression");
-    const auto& addExp = *relExp.m_head_nn;
-    require(addExp.m_tail.empty(), "expected simple additive expression");
-    const auto& mulExp = *addExp.m_head_nn;
-    require(mulExp.m_tail.empty(), "expected simple multiplicative expression");
-    const auto& unaryExp = *mulExp.m_head_nn;
-
-    const ast::PrimaryExp* primaryExp_nn = nullptr;
-    std::visit(
-        [&](const auto& unaryAlt) {
-            using AltType = std::decay_t<decltype(unaryAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::PrimaryExp>>) {
-                primaryExp_nn = unaryAlt.get();
-            }
-        },
-        unaryExp.m_kind);
-    require(primaryExp_nn != nullptr, "expected simple primary expression");
-
-    const ast::LVal* lVal_nn = nullptr;
-    std::visit(
-        [&](const auto& primaryAlt) {
-            using AltType = std::decay_t<decltype(primaryAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::LVal>>) {
-                lVal_nn = primaryAlt.get();
-            }
-        },
-        primaryExp_nn->m_kind);
-    require(lVal_nn != nullptr, "expected lvalue expression");
-    return *lVal_nn;
+    require(exp_nn != nullptr, "expected expression node");
+    require(std::holds_alternative<ast::LVal>(exp_nn->m_kind),
+        "expected lvalue expression");
+    return exp_nn;
 }
 
-const ast::AddExp& requireConditionAddExp(const ast::IfStmt& ifStmt)
+ast::Handle<ast::Exp> requireBinaryExp(const ast::Handle<ast::Exp>& exp_nn)
 {
-    const auto& lOrExp = *ifStmt.m_condExp_nn->m_lOrExp_nn;
-    const auto& lAndExp = *lOrExp.m_head_nn;
-    const auto& eqExp = *lAndExp.m_head_nn;
-    const auto& relExp = *eqExp.m_head_nn;
-    return *relExp.m_head_nn;
+    require(exp_nn != nullptr, "expected expression node");
+    require(std::holds_alternative<ast::Exp::Binary>(exp_nn->m_kind),
+        "expected binary expression");
+    return exp_nn;
 }
 
-const ast::LOrExp& requireNestedParenthesizedLOrExp(const ast::AddExp& addExp)
+const ast::Exp::Binary& requireBinaryPayload(
+    const ast::Handle<ast::Exp>& exp_nn)
 {
-    require(!addExp.m_tail.empty(), "expected additive tail");
-    const auto& tailMulExp = *addExp.m_tail[0].second;
-    const auto& tailUnaryExp = *tailMulExp.m_head_nn;
-
-    const ast::PrimaryExp* primaryExp_nn = nullptr;
-    std::visit(
-        [&](const auto& unaryAlt) {
-            using AltType = std::decay_t<decltype(unaryAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::PrimaryExp>>) {
-                primaryExp_nn = unaryAlt.get();
-            }
-        },
-        tailUnaryExp.m_kind);
-    require(primaryExp_nn != nullptr, "expected parenthesized primary expression");
-
-    const ast::Exp* nestedExp_nn = nullptr;
-    std::visit(
-        [&](const auto& primaryAlt) {
-            using AltType = std::decay_t<decltype(primaryAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::Exp>>) {
-                nestedExp_nn = primaryAlt.get();
-            }
-        },
-        primaryExp_nn->m_kind);
-    require(nestedExp_nn != nullptr, "expected parenthesized nested expression");
-    return *nestedExp_nn->m_lOrExp_nn;
+    return std::get<ast::Exp::Binary>(exp_nn->m_kind);
 }
 
 void testIfConditionMarksPlainValueAsBooleanContext()
 {
-    const auto output = analyzeSource(
-        "int main(){int a; if (a) return 1; return 0;}");
+    const auto output
+        = analyzeSource("int main(){int a; if (a) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
         output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[1]));
-    require(requireExpValueKind(output, *ifStmt_nn->m_condExp_nn)
-            == SemanticExpValueKind::boolean,
+    require(requireExpValueKind(output, ifStmt_nn->m_condExp_nn)
+            == ExpType::boolean,
         "if conditions should be recorded as boolean expressions");
-    require(requireExpValueKind(output, requireSimpleLValExp(*ifStmt_nn->m_condExp_nn))
-            == SemanticExpValueKind::arithmetic,
-        "the referenced variable should remain an arithmetic value");
+    require(requireSymbol(output, requireSimpleLValExp(ifStmt_nn->m_condExp_nn))
+                .m_name
+            == "a",
+        "plain lvalue conditions should still preserve their symbol binding");
 }
 
 void testMixedArithmeticAndLogicalSubexpressionsKeepDistinctKinds()
 {
-    const auto output = analyzeSource(
-        "int main(){int a; int b; int c; if (a + (b || c)) return 1; return 0;}");
+    const auto output = analyzeSource("int main(){int a; int b; int c; if (a + "
+                                      "(b || c)) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
         output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[3]));
-    const auto& outerAddExp = requireConditionAddExp(*ifStmt_nn);
-    const auto& nestedLOrExp = requireNestedParenthesizedLOrExp(outerAddExp);
+    const auto outerBinaryExp_nn = requireBinaryExp(ifStmt_nn->m_condExp_nn);
+    const auto& outerBinaryExp = requireBinaryPayload(outerBinaryExp_nn);
+    const auto nestedBinaryExp_nn = requireBinaryExp(outerBinaryExp.m_rhs_nn);
+    const auto& nestedBinaryExp = requireBinaryPayload(nestedBinaryExp_nn);
 
-    require(requireExpValueKind(output, *ifStmt_nn->m_condExp_nn)
-            == SemanticExpValueKind::boolean,
+    require(requireExpValueKind(output, ifStmt_nn->m_condExp_nn)
+            == ExpType::boolean,
         "the full if condition should be classified as boolean");
-    require(requireExpValueKind(output, outerAddExp)
-            == SemanticExpValueKind::arithmetic,
-        "additive expressions should stay arithmetic even inside conditions");
-    require(requireExpValueKind(output, nestedLOrExp)
-            == SemanticExpValueKind::boolean,
-        "logical-or subexpressions should be classified as boolean");
+    require(outerBinaryExp.m_op == ast::BinaryOpKeyword::plus,
+        "the outer condition should stay an additive binary expression");
+    require(requireExpValueKind(output, outerBinaryExp_nn) == ExpType::boolean,
+        "the condition root should be classified as boolean even if its "
+        "operator remains additive");
+    require(nestedBinaryExp.m_op == ast::BinaryOpKeyword::orOr,
+        "the grouped rhs subexpression should remain logical-or");
+    require(requireExpValueKind(output, nestedBinaryExp_nn) == ExpType::integer,
+        "logical-or subexpressions used as additive operands should be "
+        "normalized to integer");
 }
 
 void testLogicalConditionRecordsFoldedBooleanConstant()
 {
-    const auto output = analyzeSource(
-        "int main(){if (1 || 0) return 1; return 0;}");
+    const auto output
+        = analyzeSource("int main(){if (1 || 0) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
         output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
-    require(requireConstantValue(output, *ifStmt_nn->m_condExp_nn) == 1,
+    require(requireConstantValue(output, ifStmt_nn->m_condExp_nn) == 1,
         "constant logical conditions should record their folded truth value");
 }
 

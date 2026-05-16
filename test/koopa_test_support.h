@@ -17,13 +17,14 @@
 namespace yesod::test_support::koopa {
 
 using yesod::frontend::CompUnit;
+using yesod::frontend::Handle;
 using yesod::frontend::ParseOutput;
 using yesod::frontend::Parser;
 using yesod::frontend::SemanticAnalyzer;
 using namespace yesod::koopa;
 
 static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_funcDef_nn),
-    std::shared_ptr<yesod::frontend::FuncDef>>);
+    Handle<yesod::frontend::FuncDef>>);
 
 [[noreturn]] inline void fail(const std::string& message)
 {
@@ -38,33 +39,77 @@ inline void require(bool condition, const std::string& message)
     }
 }
 
-inline ParseOutput parseSource(const std::string& source)
+struct ParsedOutput {
+    ParsedOutput(const ParsedOutput&) = delete;
+    ParsedOutput& operator=(const ParsedOutput&) = delete;
+    ParsedOutput(ParsedOutput&& other)
+        : m_output(std::move(other.m_output))
+        , m_root(m_output.m_root)
+        , m_diagnostics(m_output.m_diagnostics)
+        , m_scope(std::move(other.m_scope))
+    {
+        m_scope.rebind(m_output.m_ast);
+    }
+
+    ParsedOutput& operator=(ParsedOutput&& other)
+    {
+        m_output = std::move(other.m_output);
+        m_root = m_output.m_root;
+        m_diagnostics = m_output.m_diagnostics;
+        m_scope = std::move(other.m_scope);
+        m_scope.rebind(m_output.m_ast);
+        return *this;
+    }
+
+    explicit ParsedOutput(ParseOutput output)
+        : m_output(std::move(output))
+        , m_root(m_output.m_root)
+        , m_diagnostics(m_output.m_diagnostics)
+        , m_scope(m_output.m_ast.bindCurrent())
+    {
+    }
+
+    [[nodiscard]] bool success() const { return m_output.success(); }
+
+    [[nodiscard]] const CompUnit* operator->() const
+    {
+        return m_root ? &m_output.m_ast.get(m_root) : nullptr;
+    }
+
+    ParseOutput m_output;
+    Handle<CompUnit> m_root;
+    std::vector<yesod::frontend::Diagnostic> m_diagnostics;
+    yesod::frontend::AST::ScopedCurrent m_scope;
+};
+
+inline ParsedOutput parseSource(const std::string& source)
 {
     Parser parser(source);
-    return parser.parse();
+    return ParsedOutput(parser.parse());
 }
 
-inline std::shared_ptr<CompUnit> parseRoot(const std::string& source)
+inline ParsedOutput parseRoot(const std::string& source)
 {
     auto output = parseSource(source);
     if (!output.success()) {
         fail("expected parse success before Koopa generation");
     }
-    return output.m_root;
+    return output;
 }
 
 inline std::unique_ptr<Program> generateProgram(const std::string& source)
 {
-    const auto root_nn = parseRoot(source);
+    auto rootOutput = parseRoot(source);
     SemanticAnalyzer semanticAnalyzer;
-    const auto semanticOutput = semanticAnalyzer.analyze(root_nn);
+    auto semanticOutput = semanticAnalyzer.analyze(
+        std::move(rootOutput.m_output.m_ast), rootOutput.m_root);
     if (!semanticOutput.success()) {
         fail("expected semantic success before Koopa generation");
     }
 
     Generator generator;
-    return std::unique_ptr<Program>(
-        generator.generate(*semanticOutput.m_root, semanticOutput.m_info));
+    return std::unique_ptr<Program>(generator.generate(
+        semanticOutput.m_ast, semanticOutput.m_root, semanticOutput.m_info));
 }
 
 inline const Function* requireOnlyFunction(const Program& program)
@@ -78,7 +123,8 @@ inline const BasicBlock* requireEntryBlock(const Function& function)
     require(function.getNumBBs() >= 2,
         "expected entry block plus synthesized guard end block");
     const auto* basicBlock = function.getBB(0);
-    require(basicBlock->isEntry(), "first basic block should be the entry block");
+    require(
+        basicBlock->isEntry(), "first basic block should be the entry block");
     require(basicBlock->getName() == "%entry",
         "entry block should use the documented label");
     return basicBlock;
@@ -89,7 +135,8 @@ inline const BasicBlock* requireEndBlock(const Function& function)
     require(function.getNumBBs() >= 2,
         "expected entry block plus synthesized guard end block");
     const auto* basicBlock = function.getBB(function.getNumBBs() - 1);
-    require(!basicBlock->isEntry(), "guard end block should not be the entry block");
+    require(!basicBlock->isEntry(),
+        "guard end block should not be the entry block");
     require(basicBlock->getName() == "%end",
         "guard end block should use the documented label");
     return basicBlock;
@@ -97,7 +144,8 @@ inline const BasicBlock* requireEndBlock(const Function& function)
 
 inline const BasicBlock* requireBlock(const Function& function, size_t index)
 {
-    require(index < function.getNumBBs(), "expected basic block at requested index");
+    require(index < function.getNumBBs(),
+        "expected basic block at requested index");
     return function.getBB(index);
 }
 
@@ -139,8 +187,8 @@ inline const AllocValue* requireAlloc(
     return allocValue;
 }
 
-inline const LoadValue* requireLoad(
-    const Value* value, const Value* expectedSource, const std::string& expectedName)
+inline const LoadValue* requireLoad(const Value* value,
+    const Value* expectedSource, const std::string& expectedName)
 {
     require(value != nullptr, "expected load value");
     require(value->isLoadValue(), "expected load instruction");
@@ -189,8 +237,7 @@ inline const JumpValue* requireJump(
 }
 
 inline const BranchValue* requireBranch(const Value* value,
-    const BasicBlock* expectedTrueTarget,
-    const BasicBlock* expectedFalseTarget)
+    const BasicBlock* expectedTrueTarget, const BasicBlock* expectedFalseTarget)
 {
     require(value != nullptr, "expected branch value");
     require(value->isBranchValue(), "expected branch instruction");

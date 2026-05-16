@@ -14,12 +14,13 @@ void testBinaryTriviaIsSkippedAtParserBoundaries()
     const auto returnStmt_nn = extractReturnStmt(
         root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
-    require(root_nn->m_startOffset == 2,
+    require(root_nn->m_sourcePos.m_offset == 2,
         "leading trivia should be skipped before the first token");
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == 15,
         "binary expression should parse across trivia boundaries");
-    require(expressionContainsParenthesizedPrimary(*returnStmt_nn->m_exp_nn),
-        "binary expression should preserve parenthesized primary expressions");
+    require(
+        requireBinaryExp(returnStmt_nn->m_exp_nn).m_op == BinaryOpKeyword::plus,
+        "binary root should preserve precedence after grouped parsing");
 }
 
 void testPrecedenceAndAssociativity()
@@ -60,22 +61,18 @@ void testPrecedenceAndAssociativity()
 void testOrderedChoiceSensitiveOperators()
 {
     const auto relRoot_nn = parseRoot("int rel(){return 1 <= 2 < 3;}");
-    const auto& relExp = requireRelExp(requireEqExp(
-        requireLAndExp(
-            requireLOrExp(
-                extractReturnStmt(
-                    relRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front())
-                    ->m_exp_nn->m_lOrExp_nn)
-                .m_head_nn)
-            .m_head_nn)
-                                           .m_head_nn);
+    const auto returnStmt_nn = extractReturnStmt(
+        relRoot_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
+    const auto& rootBinaryExp = requireBinaryExp(*returnStmt_nn->m_exp_nn);
+    const auto& lhsBinaryExp = requireBinaryExp(rootBinaryExp.m_lhs_nn);
 
-    require(relExp.m_tail.size() == 2,
-        "relational chain should preserve both operators");
-    require(relExp.m_tail[0].first == RelOpKeyword::lessEqual,
-        "<= must be parsed before <");
-    require(relExp.m_tail[1].first == RelOpKeyword::less,
+    require(rootBinaryExp.m_op == BinaryOpKeyword::less,
         "< should remain available after <=");
+    require(lhsBinaryExp.m_op == BinaryOpKeyword::lessEqual,
+        "<= must be parsed before <");
+    require(evaluateExp(*returnStmt_nn->m_exp_nn) == 1,
+        "relational chains should stay left-associated under the generic "
+        "binary tree");
 }
 
 } // namespace

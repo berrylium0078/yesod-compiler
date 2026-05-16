@@ -710,7 +710,7 @@ class GetElemPtrValue : public Value {
               PointerType::get(dynamic_cast<ArrayType*>(
                   dynamic_cast<PointerType*>(Source->getVType())
                       ->getPointeeType())
-                      ->getElementType()),
+                                   ->getElementType()),
               std::move(Name))
         , Source(Source)
         , Index(Index)
@@ -1071,11 +1071,11 @@ class BasicBlock {
 
     static BasicBlock* createEntry(string&& Name = "")
     {
-        return new BasicBlock(true, { }, { }, std::move(Name));
+        return new BasicBlock(true, {}, {}, std::move(Name));
     }
     static BasicBlock* createNonEntry(string&& Name = "")
     {
-        return new BasicBlock(false, { }, { }, std::move(Name));
+        return new BasicBlock(false, {}, {}, std::move(Name));
     }
     void pushParam(Value* Param) { Params.push_back(Param); }
     void pushInst(Value* Inst) { Insts.push_back(Inst); }
@@ -1138,7 +1138,7 @@ class Function {
 
     static Function* create(Type* FuncType, string&& Name = "")
     {
-        return new Function(FuncType, { }, { }, std::move(Name));
+        return new Function(FuncType, {}, {}, std::move(Name));
     }
     void pushParam(Value* Param) { Params.push_back(Param); }
     void pushBB(BasicBlock* BB) { BBs.push_back(BB); }
@@ -1200,7 +1200,7 @@ class Program {
         return get(Builder, vector<Value*>(Vals), vector<Function*>(Funcs));
     }
 
-    static Program* create() { return get(nullptr, { }, { }); }
+    static Program* create() { return get(nullptr, {}, {}); }
     void pushVal(Value* Val)
     {
         assert(

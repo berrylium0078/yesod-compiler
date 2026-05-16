@@ -27,10 +27,10 @@ void testIfElseParses()
 
 void testDanglingElseBindsInnermostIf()
 {
-    const auto root_nn = parseRoot(
-        "int main(){if (1) if (2) return 3; else return 4;}");
-    const auto outerIf_nn = extractIfStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto root_nn
+        = parseRoot("int main(){if (1) if (2) return 3; else return 4;}");
+    const auto outerIf_nn
+        = extractIfStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
 
     require(outerIf_nn->m_elseStmt_nn == nullptr,
         "dangling else should not attach to the outer if");

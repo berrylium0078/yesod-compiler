@@ -20,8 +20,8 @@ void testConstAndVarDeclarationsParse()
         "const declaration should keep its declarator list");
     require(constDecl_nn->m_constDefs[0]->m_identifier_nn->m_name == "answer",
         "identifier payload should only store the source text");
-    require(evaluateExp(*constDecl_nn->m_constDefs[0]
-                             ->m_constInitVal_nn->m_constExp_nn->m_exp_nn)
+    require(
+        evaluateExp(*constDecl_nn->m_constDefs[0]->m_constInitVal_nn->m_exp_nn)
             == 42,
         "const initializer should reuse the expression grammar");
 
@@ -44,7 +44,8 @@ void testConstAndVarDeclarationsParse()
 
 void testDeclarationRecoveryDiagnostics()
 {
-    const auto malformedDecl = parseSource("int main(){const int = 1; return 0;}");
+    const auto malformedDecl
+        = parseSource("int main(){const int = 1; return 0;}");
     require(!malformedDecl.success(), "malformed declarator should fail");
     require(firstDiagnostic(malformedDecl).m_kind
             == DiagnosticKind::malformedDeclItem,

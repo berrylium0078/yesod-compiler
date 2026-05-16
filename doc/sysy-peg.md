@@ -11,7 +11,7 @@ Assumptions for the current subset:
 - declarations are limited to scalar `const int` and `int`
 - `ConstDef ::= IDENT "=" ConstInitVal`
 - `VarDef ::= IDENT | IDENT "=" InitVal`
-- `ConstInitVal ::= ConstExp`
+- grammar-level `ConstInitVal ::= ConstExp` remains a useful way to describe the language, but the implemented AST stores the child directly as `Exp`
 - `InitVal ::= Exp`
 - `LVal ::= IDENT`
 - `Stmt ::= LVal "=" Exp ";" | [Exp] ";" | Block | "return" Exp ";" | "if" "(" Exp ")" Stmt ["else" Stmt] | "while" "(" Exp ")" Stmt | "break" ";" | "continue" ";"`
@@ -33,17 +33,30 @@ The operator-precedence ladder is the usual SysY one:
 - `UnaryExp ::= PrimaryExp | UnaryOp UnaryExp`
 - `PrimaryExp ::= "(" Exp ")" | LVal | Number`
 
+Implementation gap to keep in mind:
+
+- The parser continues to use the usual precedence-layer grammar (`LOrExp`, `LAndExp`, `EqExp`, `RelExp`, `AddExp`, `MulExp`) to ensure correct precedence and associativity during parsing.
+- The implemented AST intentionally flattens those precedence layers: the AST represents every expression as a single `Exp` node (allocated in `Arena<Exp>`). `Exp::Kind` is a discriminated variant with the concrete payloads used by the implementation:
+  - `Exp::Binary`: holds a `BinaryOpKeyword`, a `Handle<Exp>` for the left operand, and a `Handle<Exp>` for the right operand (binary operators are encoded by the enum `BinaryOpKeyword`).
+  - `Exp::Unary`: holds a `UnaryOp` and a `Handle<Exp>` for its operand.
+  - `LVal`: a payload for identifier-access expressions (stores the identifier and any necessary symbol handle).
+  - `Number`: integer literal payload.
+- Parentheses are parsed for grouping but do not produce a dedicated parenthesized-`PrimaryExp` node in the final AST; a parenthesized expression yields the inner `Exp` directly. Tools and tests should not rely on parentheses being preserved as AST nodes.
+- `ConstExp` and other grammar-level aliases remain useful in the PEG and for reader documentation, but `ConstExp` is a grammar-only alias: constant-ness is discovered during semantic analysis and recorded in typed side-tables (e.g. `SemanticExpInfo`) rather than by a special AST node type.
+- Consequences: tests, analyzers, and lowering passes must operate over `Exp::Kind` variants and typed `Handle<Exp>` keys. They must not assume separate `PrimaryExp`, `UnaryExp`, or `BinaryExp` arena identities or node-key types.
+
 ## 2. Baseline Delta
 
 Relative to the previous `doc/sysy-peg.md` baseline, the delta for this revision is:
 
-- unchanged: the compilation-unit shell, declaration forms, `if` / `if-else`, assignment and expression statements, expression precedence ladder, identifier and integer-literal tokenization, and trivia skipping
+- unchanged: the compilation-unit shell, declaration forms, `if` / `if-else`, assignment and expression statements, the parser's expression precedence ladder, identifier and integer-literal tokenization, and trivia skipping
 - changed: `Stmt` grows three new keyword-led alternatives for `while`, `break`, and `continue`
 - added: `WhileStmt` as the explicit helper for `"while" "(" Exp ")" Stmt`
 - added: `BreakStmt` and `ContinueStmt` as keyword-led simple statements
 - reordered: `Stmt` keeps `AssignStmt` before `ExpStmt` for the existing `IDENT` ambiguity, while inserting `WhileStmt`, `BreakStmt`, and `ContinueStmt` ahead of the expression fallback because their prefixes are keyword-distinct
 - token layer: add `while`, `break`, and `continue` keywords; existing tokens stay unchanged
 - recovery: existing function-header, declaration, block, `if`, return, and parenthesized-primary recovery remain valid; block-item and statement-boundary synchronization must now recognize `while`, `break`, and `continue` heads
+-- implementation note: the grammar still names precedence layers and `ConstExp`, but the AST now flattens binary precedence layers into a single `Exp` variant (see Implementation gap above). Constantness is determined by semantic analysis (constant folding) and recorded in semantic side-tables rather than as distinct AST node kinds.
 
 ## 3. Left-Recursion Elimination
 
@@ -64,7 +77,7 @@ The `while` and loop-control additions introduce no new left recursion. The PEG-
 | `decimal-const ::= nonzero-digit | decimal-const digit` | `DecimalConst <- NonZeroDigit Digit*` | same decimal token language |
 | `octal-const ::= "0" | octal-const octal-digit` | `OctalConst <- "0" OctalDigit*` | same octal token language |
 | `hexadecimal-const ::= hexadecimal-prefix hexadecimal-digit | hexadecimal-const hexadecimal-digit` | `HexadecimalConst <- HexadecimalPrefix HexadecimalDigit+` | same hexadecimal token language |
-| `ConstExp ::= Exp` | `ConstExp <- Exp` | direct alias; const-ness remains semantic |
+| `ConstExp ::= Exp` | `ConstExp <- Exp` | direct grammar alias; the implemented AST stores `Exp` directly and const-ness remains semantic |
 
 ## 4. Plain PEG Grammar
 
@@ -450,6 +463,8 @@ This order is currently safe because declaration heads (`const`, `int`) are disj
 
 ## 8. Short Design Rationale
 
-The final grammar stays close to the source EBNF while making PEG-sensitive choices explicit only where needed. This revision is a minimal extension of the existing statement grammar: it adds one recursive loop form and two simple loop-control statements without disturbing declarations, expressions, or the established `if-else` shape. The precedence ladder stays unchanged, and the only token-layer delta is the addition of `while`, `break`, and `continue`.
+The final grammar stays close to the source EBNF while making PEG-sensitive choices explicit only where needed. This revision is a minimal extension of the existing statement grammar: it adds one recursive loop form and two simple loop-control statements without disturbing declarations, expressions, or the established `if-else` shape. The parser still uses the standard precedence ladder, and the only token-layer delta is the addition of `while`, `break`, and `continue`.
+
+The implementation intentionally diverges from the grammar in the shape of the expression AST. The grammar keeps named precedence layers because they remain the clearest way to describe parsing behavior and PEG rewrites, but the AST now records only generic binary operators and unary structure. Likewise, `ConstExp` remains useful in the grammar as a language-level alias, while the implementation treats constant-ness as a semantic property discovered by folding expressions rather than as a separate AST node category.
 
 The recovery design is intentionally conservative. It attaches labels to outer user-visible constructs, not to low-level helpers, and uses only a few robust synchronization anchors: function-header end, statement boundary, declaration boundary, block-item boundary, `)`, `}`, and statement heads for `if` and `while`. Stopping statement recovery at `else` remains the key `if`-specific safeguard, while recognizing `while`, `break`, and `continue` as statement starts prevents loop-control syntax errors from cascading into the following statement.

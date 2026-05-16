@@ -28,21 +28,21 @@ If the input is incomplete or has multiple plausible interpretations because key
 ### Mapping
 
 1. Keep the design idiomatic modern C++ and favor clear ownership and value semantics.
-2. Grouped inner types become nested `struct` definitions inside the parent type. For example:
+2. Decide which fields are embedded directly and which require links. Use a link only when recursion forces it, or when a field must be shared or mutated independently of its parent.
+3. For ASTs in this project, prefer arena-backed storage with typed handles over smart pointers. Model recursive links as `Handle<T>` values into an owning `AST` container that stores `Arena<T>` instances, ideally in a `std::tuple<Arena<T1>, ...>`.
+4. State the ownership model for each linked field. For this project, the default is append-only arena ownership with whole-arena destruction. Use `std::shared_ptr` or `std::unique_ptr` only when the caller explicitly asks for pointer-based ownership instead of arena handles.
    ```cpp
    struct Stmt {
        struct IfStmt { /* ... */ };
        struct WhileStmt { /* ... */ }; 
        /* ... */
    };
-   ```
+4. Map optional fields to `std::optional<T>`, or for arena-backed ASTs use a null `Handle<T>` with a negative raw index.
 3. If a type has more than one constructor or production alternative, model it with `std::variant` instead of inheritance. For example, `Stmt` would have a field of type `std::variant<IfStmt, WhileStmt>` to represent the alternatives.
+6. Do not introduce a shared AST base class just to carry ids or virtual dispatch when `std::variant` plus typed handles already encode node identity and alternatives.
 4. Map optional fields to `std::optional<T>`, or links that might be null.
 5. Map fields that may appear arbitrary times to `std::vector<T>`.
-
-## Output Format
-
-Produce the answer in this order.
+- Where `std::optional`, `std::vector`, `std::variant`, `Arena<T>`, and `Handle<T>` are used
 
 ### 1. EBNF Type Definition
 
@@ -64,6 +64,7 @@ Write the modern C++ type definitions, but prioritizes the following guidelines:
 - Use `struct` by default unless a `class` is justified.
 - Use meaningful names for alternatives and grouped inner types.
 - Preserve the grammar structure as provided in the input, and avoid transforming it into a simplified or alternative form unless explicitly required.
+- For this project, add `SourcePos` to each node type and keep ownership in the top-level `AST` object rather than inside individual nodes.
 
 ### 4. Short Rationale
 

@@ -54,7 +54,8 @@ std::string generateAssembly(const Program& program)
 void requireContains(const std::string& text, const std::string& needle)
 {
     require(text.find(needle) != std::string::npos,
-        "expected generated assembly to contain: " + needle + "\nactual output:\n" + text);
+        "expected generated assembly to contain: " + needle
+            + "\nactual output:\n" + text);
 }
 
 void testLiteralReturn()
@@ -70,8 +71,8 @@ void testLiteralReturn()
 
 void testStackAllocatedStraightLineLowering()
 {
-    const std::string assembly
-        = generateAssembly("int main(){int value = 4; value = value + 5; return value;}");
+    const std::string assembly = generateAssembly(
+        "int main(){int value = 4; value = value + 5; return value;}");
 
     requireContains(assembly, "  addi sp, sp, -16\n");
     requireContains(assembly, "  li t0, 4\n");
@@ -102,12 +103,14 @@ void testConditionalBranchLowering()
 void testSanitizedBlockLabelUniqueness()
 {
     auto program = std::unique_ptr<Program>(Program::create());
-    auto function = Function::create(FunctionType::get(yesod::koopa::Int32Type::get(), {}), "@main");
+    auto function = Function::create(
+        FunctionType::get(yesod::koopa::Int32Type::get(), {}), "@main");
     auto entry = BasicBlock::createEntry("%entry");
     auto firstTarget = BasicBlock::createNonEntry("%branch-target");
     auto secondTarget = BasicBlock::createNonEntry("%branch_target");
 
-    entry->pushInst(BranchValue::get(IntegerValue::get(1), firstTarget, {}, secondTarget, {}));
+    entry->pushInst(BranchValue::get(
+        IntegerValue::get(1), firstTarget, {}, secondTarget, {}));
     firstTarget->pushInst(ReturnValue::get(IntegerValue::get(1)));
     secondTarget->pushInst(ReturnValue::get(IntegerValue::get(0)));
 

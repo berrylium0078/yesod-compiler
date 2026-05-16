@@ -32,8 +32,8 @@ void testNestedWhileLoopParsesInnerLoopControlStatements()
 {
     const auto root_nn = parseRoot(
         "int main(){while (1) {while (2) {break; continue;}} return 0;}");
-    const auto outerWhile_nn = extractWhileStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto outerWhile_nn
+        = extractWhileStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
     const auto outerBody_nn = extractBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn = extractWhileStmt(outerBody_nn->m_blockItems[0]);
     const auto innerBody_nn = extractBlockStmt(innerWhile_nn->m_bodyStmt_nn);
@@ -50,10 +50,10 @@ void testNestedWhileLoopParsesInnerLoopControlStatements()
 
 void testLoopControlInsideWhileIfParses()
 {
-    const auto root_nn
-        = parseRoot("int main(){while (1) if (2) break; else continue; return 0;}");
-    const auto whileStmt_nn = extractWhileStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto root_nn = parseRoot(
+        "int main(){while (1) if (2) break; else continue; return 0;}");
+    const auto whileStmt_nn
+        = extractWhileStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
     const auto ifStmt_nn = extractIfStmt(whileStmt_nn->m_bodyStmt_nn);
 
     require(evaluateExp(*ifStmt_nn->m_condExp_nn) == 2,
@@ -98,10 +98,11 @@ void testBreakAndContinueRecoveryMakeForwardProgress()
     require(missingBreakSemicolon.m_root->m_funcDef_nn->m_block_nn->m_blockItems
                 .size()
             == 2,
-        "missing break semicolon recovery should continue to the following statement");
+        "missing break semicolon recovery should continue to the following "
+        "statement");
 
-    const auto missingContinueSemicolon = parseSource(
-        "int main(){while (1) {continue return 0;} return 1;}");
+    const auto missingContinueSemicolon
+        = parseSource("int main(){while (1) {continue return 0;} return 1;}");
     require(!missingContinueSemicolon.success(),
         "missing continue semicolon should report recovery diagnostics");
     require(firstDiagnostic(missingContinueSemicolon).m_kind

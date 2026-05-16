@@ -4,14 +4,14 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-std::shared_ptr<ast::StmtNode> requireStmtNode(
-    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
+ast::Handle<ast::StmtNode> requireStmtNode(
+    const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
-    std::shared_ptr<ast::StmtNode> stmtNode_nn;
+    ast::Handle<ast::StmtNode> stmtNode_nn;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::StmtNode>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::StmtNode>>) {
                 stmtNode_nn = blockItemAlt;
             }
         },
@@ -20,14 +20,15 @@ std::shared_ptr<ast::StmtNode> requireStmtNode(
     return stmtNode_nn;
 }
 
-std::shared_ptr<ast::WhileStmt> requireWhileStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::WhileStmt> requireWhileStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::WhileStmt> whileStmt_nn;
+    ast::Handle<ast::WhileStmt> whileStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::WhileStmt>>) {
+            if constexpr (std::is_same_v<AltType,
+                              ast::Handle<ast::WhileStmt>>) {
                 whileStmt_nn = stmtAlt;
             }
         },
@@ -36,14 +37,14 @@ std::shared_ptr<ast::WhileStmt> requireWhileStmt(
     return whileStmt_nn;
 }
 
-std::shared_ptr<ast::IfStmt> requireIfStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::IfStmt> requireIfStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::IfStmt> ifStmt_nn;
+    ast::Handle<ast::IfStmt> ifStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::IfStmt>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::IfStmt>>) {
                 ifStmt_nn = stmtAlt;
             }
         },
@@ -52,14 +53,15 @@ std::shared_ptr<ast::IfStmt> requireIfStmt(
     return ifStmt_nn;
 }
 
-std::shared_ptr<ast::BreakStmt> requireBreakStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::BreakStmt> requireBreakStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::BreakStmt> breakStmt_nn;
+    ast::Handle<ast::BreakStmt> breakStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::BreakStmt>>) {
+            if constexpr (std::is_same_v<AltType,
+                              ast::Handle<ast::BreakStmt>>) {
                 breakStmt_nn = stmtAlt;
             }
         },
@@ -68,15 +70,15 @@ std::shared_ptr<ast::BreakStmt> requireBreakStmt(
     return breakStmt_nn;
 }
 
-std::shared_ptr<ast::ContinueStmt> requireContinueStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::ContinueStmt> requireContinueStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::ContinueStmt> continueStmt_nn;
+    ast::Handle<ast::ContinueStmt> continueStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
             if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<ast::ContinueStmt>>) {
+                              ast::Handle<ast::ContinueStmt>>) {
                 continueStmt_nn = stmtAlt;
             }
         },
@@ -85,14 +87,14 @@ std::shared_ptr<ast::ContinueStmt> requireContinueStmt(
     return continueStmt_nn;
 }
 
-std::shared_ptr<ast::Block> requireBlockStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::Block> requireBlockStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::Block> block_nn;
+    ast::Handle<ast::Block> block_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::Block>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::Block>>) {
                 block_nn = stmtAlt;
             }
         },
@@ -107,24 +109,24 @@ void testLoopControlStatementsBindToInnermostWhile()
         "int main(){while (1) {while (2) {continue;} break;} return 0;}");
     require(output.success(), "expected semantic success");
 
-    const auto outerWhile_nn = requireWhileStmt(
-        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+    const auto outerWhile_nn = requireWhileStmt(requireStmtNode(
+        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
-    const auto innerWhile_nn = requireWhileStmt(requireStmtNode(
-        outerBody_nn->m_blockItems[0]));
+    const auto innerWhile_nn
+        = requireWhileStmt(requireStmtNode(outerBody_nn->m_blockItems[0]));
     const auto innerBody_nn = requireBlockStmt(innerWhile_nn->m_bodyStmt_nn);
-    const auto continueStmt_nn = requireContinueStmt(requireStmtNode(
-        innerBody_nn->m_blockItems[0]));
-    const auto breakStmt_nn = requireBreakStmt(requireStmtNode(
-        outerBody_nn->m_blockItems[1]));
+    const auto continueStmt_nn
+        = requireContinueStmt(requireStmtNode(innerBody_nn->m_blockItems[0]));
+    const auto breakStmt_nn
+        = requireBreakStmt(requireStmtNode(outerBody_nn->m_blockItems[1]));
 
-    const auto outerLoopId = requireLoopId(output, *outerWhile_nn);
-    const auto innerLoopId = requireLoopId(output, *innerWhile_nn);
-    require(requireLoopId(output, *continueStmt_nn) == innerLoopId,
+    const auto outerLoop = requireLoop(output, outerWhile_nn);
+    const auto innerLoop = requireLoop(output, innerWhile_nn);
+    require(requireLoop(output, continueStmt_nn) == innerLoop,
         "continue should bind to the innermost containing while");
-    require(requireLoopId(output, *breakStmt_nn) == outerLoopId,
+    require(requireLoop(output, breakStmt_nn) == outerLoop,
         "break should bind to the innermost containing while");
-    require(innerLoopId != outerLoopId,
+    require(innerLoop != outerLoop,
         "nested while statements should keep distinct loop identities");
 }
 
@@ -134,23 +136,23 @@ void testNestedInnerLoopBreakAndContinueBothBindInnermostWhile()
         "int main(){while (1) {while (2) {break; continue;}} return 0;}");
     require(output.success(), "expected semantic success");
 
-    const auto outerWhile_nn = requireWhileStmt(
-        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+    const auto outerWhile_nn = requireWhileStmt(requireStmtNode(
+        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
-    const auto innerWhile_nn = requireWhileStmt(requireStmtNode(
-        outerBody_nn->m_blockItems[0]));
+    const auto innerWhile_nn
+        = requireWhileStmt(requireStmtNode(outerBody_nn->m_blockItems[0]));
     const auto innerBody_nn = requireBlockStmt(innerWhile_nn->m_bodyStmt_nn);
-    const auto breakStmt_nn = requireBreakStmt(requireStmtNode(
-        innerBody_nn->m_blockItems[0]));
-    const auto continueStmt_nn = requireContinueStmt(requireStmtNode(
-        innerBody_nn->m_blockItems[1]));
+    const auto breakStmt_nn
+        = requireBreakStmt(requireStmtNode(innerBody_nn->m_blockItems[0]));
+    const auto continueStmt_nn
+        = requireContinueStmt(requireStmtNode(innerBody_nn->m_blockItems[1]));
 
-    const auto innerLoopId = requireLoopId(output, *innerWhile_nn);
-    require(requireLoopId(output, *breakStmt_nn) == innerLoopId,
+    const auto innerLoop = requireLoop(output, innerWhile_nn);
+    require(requireLoop(output, breakStmt_nn) == innerLoop,
         "break inside the inner loop should bind to the innermost while");
-    require(requireLoopId(output, *continueStmt_nn) == innerLoopId,
+    require(requireLoop(output, continueStmt_nn) == innerLoop,
         "continue inside the inner loop should bind to the innermost while");
-    require(innerLoopId != requireLoopId(output, *outerWhile_nn),
+    require(innerLoop != requireLoop(output, outerWhile_nn),
         "inner-loop control flow should not bind to the outer while");
 }
 
@@ -160,16 +162,16 @@ void testLoopControlInsideWhileIfBindsContainingWhile()
         "int main(){while (1) if (2) break; else continue; return 0;}");
     require(output.success(), "expected semantic success");
 
-    const auto whileStmt_nn = requireWhileStmt(
-        requireStmtNode(output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+    const auto whileStmt_nn = requireWhileStmt(requireStmtNode(
+        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto ifStmt_nn = requireIfStmt(whileStmt_nn->m_bodyStmt_nn);
     const auto breakStmt_nn = requireBreakStmt(ifStmt_nn->m_thenStmt_nn);
     const auto continueStmt_nn = requireContinueStmt(ifStmt_nn->m_elseStmt_nn);
 
-    const auto whileLoopId = requireLoopId(output, *whileStmt_nn);
-    require(requireLoopId(output, *breakStmt_nn) == whileLoopId,
+    const auto whileLoop = requireLoop(output, whileStmt_nn);
+    require(requireLoop(output, breakStmt_nn) == whileLoop,
         "break inside while-if should bind to the containing while");
-    require(requireLoopId(output, *continueStmt_nn) == whileLoopId,
+    require(requireLoop(output, continueStmt_nn) == whileLoop,
         "continue inside while-if should bind to the containing while");
 }
 

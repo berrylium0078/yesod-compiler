@@ -9,7 +9,8 @@ size_t countBranchInstructions(const Function& function)
     size_t branchCount = 0;
     for (size_t bbIndex = 0; bbIndex < function.getNumBBs(); ++bbIndex) {
         const auto* basicBlock = function.getBB(bbIndex);
-        for (size_t instIndex = 0; instIndex < basicBlock->getNumInsts(); ++instIndex) {
+        for (size_t instIndex = 0; instIndex < basicBlock->getNumInsts();
+             ++instIndex) {
             if (basicBlock->getInst(instIndex)->isBranchValue()) {
                 ++branchCount;
             }
@@ -41,8 +42,8 @@ void testIfElseLoweringUsesExplicitBranchBlocks()
 
 void testIfWithoutElseFallsThroughToContinuation()
 {
-    auto program = generateProgram(
-        "int main(){int a = 1; if (a) return 1; return 0;}");
+    auto program
+        = generateProgram("int main(){int a = 1; if (a) return 1; return 0;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
     const auto* thenBlock = requireBlock(*function, 1);
@@ -50,7 +51,8 @@ void testIfWithoutElseFallsThroughToContinuation()
     const auto* endBlock = requireEndBlock(*function);
 
     require(function->getNumBBs() == 4,
-        "if-without-else lowering should reuse the continuation as the false branch");
+        "if-without-else lowering should reuse the continuation as the false "
+        "branch");
     (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
         thenBlock, contBlock);
     requireInteger(requireReturn(thenBlock->getInst(0))->getVal(), 1);
@@ -60,8 +62,8 @@ void testIfWithoutElseFallsThroughToContinuation()
 
 void testDanglingElseLowersAsNestedBranches()
 {
-    auto program = generateProgram(
-        "int main(){int a = 1; int b = 1; if (a) if (b) return 1; else return 2; return 3;}");
+    auto program = generateProgram("int main(){int a = 1; int b = 1; if (a) if "
+                                   "(b) return 1; else return 2; return 3;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
     const auto* outerThenBlock = requireBlock(*function, 1);
@@ -72,12 +74,13 @@ void testDanglingElseLowersAsNestedBranches()
     const auto* endBlock = requireEndBlock(*function);
 
     require(function->getNumBBs() == 7,
-        "dangling-else lowering should produce distinct outer and inner control-flow blocks");
+        "dangling-else lowering should produce distinct outer and inner "
+        "control-flow blocks");
     (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
         outerThenBlock, outerContBlock);
     (void)requireBranch(
-        outerThenBlock->getInst(outerThenBlock->getNumInsts() - 1), innerThenBlock,
-        innerElseBlock);
+        outerThenBlock->getInst(outerThenBlock->getNumInsts() - 1),
+        innerThenBlock, innerElseBlock);
     requireInteger(requireReturn(innerThenBlock->getInst(0))->getVal(), 1);
     requireInteger(requireReturn(innerElseBlock->getInst(0))->getVal(), 2);
     (void)requireJump(innerContBlock->getInst(0), outerContBlock);
@@ -88,7 +91,8 @@ void testDanglingElseLowersAsNestedBranches()
 void testMixedArithmeticBooleanIfBuildsMultipleBranchSites()
 {
     auto program = generateProgram(
-        "int main(){int a = 1; int b = 0; int c = 1; int d = 1; if (a + ((b || c) && d)) return 1; else return 0;}");
+        "int main(){int a = 1; int b = 0; int c = 1; int d = 1; if (a + ((b || "
+        "c) && d)) return 1; else return 0;}");
     const auto* function = requireOnlyFunction(*program);
     auto rawProgram = Program::dumpRaw(program.get());
     koopa_program_t koopaProgram = nullptr;
@@ -96,11 +100,13 @@ void testMixedArithmeticBooleanIfBuildsMultipleBranchSites()
         = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
 
     require(function->getNumBBs() >= 10,
-        "mixed arithmetic/boolean if conditions should introduce multiple control-flow blocks");
+        "mixed integer/boolean if conditions should introduce multiple "
+        "control-flow blocks");
     require(countBranchInstructions(*function) >= 4,
-        "mixed arithmetic/boolean lowering should emit nested short-circuit branches before the final if branch");
+        "mixed integer/boolean lowering should emit nested short-circuit "
+        "branches before the final if branch");
     require(errorCode == KOOPA_EC_SUCCESS,
-        "mixed arithmetic/boolean if lowering should still validate as raw Koopa");
+        "mixed integer/boolean if lowering should still validate as raw Koopa");
     koopa_delete_program(koopaProgram);
 }
 

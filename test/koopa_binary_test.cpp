@@ -12,7 +12,7 @@ void testArithmeticPrecedenceLowering()
     const auto* endBlock = requireEndBlock(*function);
 
     require(basicBlock->getNumInsts() == 1,
-        "constant arithmetic should fold to a literal return");
+        "constant integer should fold to a literal return");
     requireInteger(requireReturn(basicBlock->getInst(0))->getVal(), 7);
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
@@ -45,7 +45,8 @@ void testLogicalOperatorsBooleanizeOperands()
 
 void testLogicalAndShortCircuitsThroughBranchBlocks()
 {
-    auto program = generateProgram("int main(){int a = 1; int b = 0; return a && b;}");
+    auto program
+        = generateProgram("int main(){int a = 1; int b = 0; return a && b;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
     const auto* trueBlock = requireBlock(*function, 1);
@@ -55,21 +56,24 @@ void testLogicalAndShortCircuitsThroughBranchBlocks()
     const auto* endBlock = requireEndBlock(*function);
 
     require(function->getNumBBs() == 6,
-        "non-constant logical-and should materialize short-circuit control-flow blocks");
+        "non-constant logical-and should materialize short-circuit "
+        "control-flow blocks");
     (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
         rhsBlock, falseBlock);
-    (void)requireBranch(rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock,
-        falseBlock);
+    (void)requireBranch(
+        rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock, falseBlock);
     (void)requireJump(trueBlock->getInst(1), contBlock);
     (void)requireJump(falseBlock->getInst(1), contBlock);
     require(contBlock->getInst(contBlock->getNumInsts() - 1)->isReturnValue(),
-        "materialized logical-and continuation should return the loaded boolean result");
+        "materialized logical-and continuation should return the loaded "
+        "boolean result");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
 void testLogicalOrShortCircuitsThroughBranchBlocks()
 {
-    auto program = generateProgram("int main(){int a = 1; int b = 0; return a || b;}");
+    auto program
+        = generateProgram("int main(){int a = 1; int b = 0; return a || b;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
     const auto* trueBlock = requireBlock(*function, 1);
@@ -79,15 +83,17 @@ void testLogicalOrShortCircuitsThroughBranchBlocks()
     const auto* endBlock = requireEndBlock(*function);
 
     require(function->getNumBBs() == 6,
-        "non-constant logical-or should materialize short-circuit control-flow blocks");
+        "non-constant logical-or should materialize short-circuit control-flow "
+        "blocks");
     (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
         trueBlock, rhsBlock);
-    (void)requireBranch(rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock,
-        falseBlock);
+    (void)requireBranch(
+        rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock, falseBlock);
     (void)requireJump(trueBlock->getInst(1), contBlock);
     (void)requireJump(falseBlock->getInst(1), contBlock);
     require(contBlock->getInst(contBlock->getNumInsts() - 1)->isReturnValue(),
-        "materialized logical-or continuation should return the loaded boolean result");
+        "materialized logical-or continuation should return the loaded boolean "
+        "result");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 

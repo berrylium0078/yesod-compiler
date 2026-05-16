@@ -16,6 +16,8 @@ The source grammar and token-layer assumptions are:
 
 The current PEG design baseline is documented in `doc/sysy-peg.md` and should be treated as the existing design when the task is an incremental language extension.
 
+Implementation note for prompt authors: some implementations intentionally diverge from the grammar's named precedence layers by flattening expression nodes into a single AST `Exp` variant (for example: `Exp::Binary`, `Exp::Unary`, `LVal`, `Number`). When producing or updating a PEG design, include an explicit "Implementation note" that distinguishes grammar-level nonterminals (used for parsing and precedence exposition) from the actual runtime AST shape and explain how `ConstExp` is treated (grammar alias vs. semantic property discovered by constant folding).
+
 ## Requirements
 
 1. Preserve the original EBNF structure unless a PEG constraint explicitly requires a redesign. Keep the PEG extension minimal, and preserve the existing token layer unless the input explicitly requires lexical changes.

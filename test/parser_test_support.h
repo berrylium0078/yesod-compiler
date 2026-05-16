@@ -4,10 +4,8 @@
 #include <cstdlib>
 
 #include <iostream>
-#include <memory>
 #include <string>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -24,29 +22,26 @@ static_assert(
     std::is_same_v<decltype(std::declval<Number>().m_value), int32_t>);
 static_assert(std::is_same_v<decltype(std::declval<FuncDef>().m_funcType),
     FuncTypeKeyword>);
-static_assert(std::is_same_v<decltype(std::declval<ConstDecl>().m_bType),
-    BTypeKeyword>);
-static_assert(std::is_same_v<decltype(std::declval<ReturnStmt>().m_exp_nn),
-    std::shared_ptr<Exp>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<ConstDecl>().m_bType), BTypeKeyword>);
+static_assert(
+    std::is_same_v<decltype(std::declval<ReturnStmt>().m_exp_nn), Handle<Exp>>);
 static_assert(std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn),
-    std::shared_ptr<LVal>>);
-static_assert(std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn),
-    std::shared_ptr<Exp>>);
-static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_condExp_nn),
-    std::shared_ptr<Exp>>);
+    Handle<Exp>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn), Handle<Exp>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<IfStmt>().m_condExp_nn), Handle<Exp>>);
 static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_thenStmt_nn),
-    std::shared_ptr<StmtNode>>);
+    Handle<StmtNode>>);
 static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_elseStmt_nn),
-    std::shared_ptr<StmtNode>>);
+    Handle<StmtNode>>);
 static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_condExp_nn),
-    std::shared_ptr<Exp>>);
+    Handle<Exp>>);
 static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_bodyStmt_nn),
-    std::shared_ptr<StmtNode>>);
+    Handle<StmtNode>>);
 static_assert(std::is_enum_v<UnaryOpKeyword>);
-static_assert(std::is_enum_v<MulOpKeyword>);
-static_assert(std::is_enum_v<AddOpKeyword>);
-static_assert(std::is_enum_v<RelOpKeyword>);
-static_assert(std::is_enum_v<EqOpKeyword>);
+static_assert(std::is_enum_v<BinaryOpKeyword>);
 static_assert(
     std::variant_size_v<decltype(std::declval<DeclNode>().m_decl)> == 2);
 static_assert(
@@ -54,8 +49,7 @@ static_assert(
 static_assert(
     std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
     == 2);
-static_assert(std::variant_size_v<PrimaryExp::Kind> == 3);
-static_assert(std::variant_size_v<UnaryExp::Kind> == 2);
+static_assert(std::variant_size_v<Exp::Kind> == 4);
 
 [[noreturn]] inline void fail(const std::string& message)
 {
@@ -70,13 +64,56 @@ inline void require(bool condition, const std::string& message)
     }
 }
 
-inline ParseOutput parseSource(const std::string& source)
+struct ParsedOutput {
+    explicit ParsedOutput(ParseOutput output)
+        : m_output(std::move(output))
+        , m_root(m_output.m_root)
+        , m_diagnostics(m_output.m_diagnostics)
+        , m_scope(m_output.m_ast.bindCurrent())
+    {
+    }
+
+    ParsedOutput(const ParsedOutput&) = delete;
+    ParsedOutput& operator=(const ParsedOutput&) = delete;
+    ParsedOutput(ParsedOutput&& other)
+        : m_output(std::move(other.m_output))
+        , m_root(m_output.m_root)
+        , m_diagnostics(m_output.m_diagnostics)
+        , m_scope(std::move(other.m_scope))
+    {
+        m_scope.rebind(m_output.m_ast);
+    }
+
+    ParsedOutput& operator=(ParsedOutput&& other)
+    {
+        m_output = std::move(other.m_output);
+        m_root = m_output.m_root;
+        m_diagnostics = m_output.m_diagnostics;
+        m_scope = std::move(other.m_scope);
+        m_scope.rebind(m_output.m_ast);
+        return *this;
+    }
+
+    [[nodiscard]] bool success() const { return m_output.success(); }
+
+    [[nodiscard]] const CompUnit* operator->() const
+    {
+        return m_root ? &m_output.m_ast.get(m_root) : nullptr;
+    }
+
+    ParseOutput m_output;
+    Handle<CompUnit> m_root;
+    std::vector<Diagnostic> m_diagnostics;
+    AST::ScopedCurrent m_scope;
+};
+
+inline ParsedOutput parseSource(const std::string& source)
 {
     Parser parser(source);
-    return parser.parse();
+    return ParsedOutput(parser.parse());
 }
 
-inline std::shared_ptr<CompUnit> parseRoot(const std::string& source)
+inline ParsedOutput parseRoot(const std::string& source)
 {
     auto output = parseSource(source);
     if (!output.success()) {
@@ -87,7 +124,7 @@ inline std::shared_ptr<CompUnit> parseRoot(const std::string& source)
         }
         fail(message);
     }
-    return output.m_root;
+    return output;
 }
 
 inline const Diagnostic& firstDiagnostic(const ParseOutput& output)
@@ -96,83 +133,81 @@ inline const Diagnostic& firstDiagnostic(const ParseOutput& output)
     return output.m_diagnostics.front();
 }
 
-inline const Exp& requireExp(const std::shared_ptr<Exp>& exp_nn)
+inline const Diagnostic& firstDiagnostic(const ParsedOutput& output)
+{
+    require(!output.m_diagnostics.empty(), "expected at least one diagnostic");
+    return output.m_diagnostics.front();
+}
+
+inline const Exp& requireExp(const Handle<Exp>& exp_nn)
 {
     require(exp_nn != nullptr, "expected expression node");
     return *exp_nn;
 }
 
-inline const LOrExp& requireLOrExp(const std::shared_ptr<LOrExp>& lOrExp_nn)
+inline const Exp::Binary& requireBinaryExp(const Exp& exp)
 {
-    require(lOrExp_nn != nullptr, "expected logical-or expression node");
-    return *lOrExp_nn;
+    const auto* binaryExp = std::get_if<Exp::Binary>(&exp.m_kind);
+    require(binaryExp != nullptr, "expected binary expression root");
+    return *binaryExp;
 }
 
-inline const LAndExp& requireLAndExp(const std::shared_ptr<LAndExp>& lAndExp_nn)
+inline const Exp::Binary& requireBinaryExp(const Handle<Exp>& exp_nn)
 {
-    require(lAndExp_nn != nullptr, "expected logical-and expression node");
-    return *lAndExp_nn;
+    return requireBinaryExp(requireExp(exp_nn));
 }
 
-inline const EqExp& requireEqExp(const std::shared_ptr<EqExp>& eqExp_nn)
+inline const Exp::Unary& requireUnaryExp(const Exp& exp)
 {
-    require(eqExp_nn != nullptr, "expected equality expression node");
-    return *eqExp_nn;
+    const auto* unaryExp = std::get_if<Exp::Unary>(&exp.m_kind);
+    require(unaryExp != nullptr, "expected unary expression root");
+    return *unaryExp;
 }
 
-inline const RelExp& requireRelExp(const std::shared_ptr<RelExp>& relExp_nn)
+inline const Exp::Unary& requireUnaryExp(const Handle<Exp>& exp_nn)
 {
-    require(relExp_nn != nullptr, "expected relational expression node");
-    return *relExp_nn;
+    return requireUnaryExp(requireExp(exp_nn));
 }
 
-inline const AddExp& requireAddExp(const std::shared_ptr<AddExp>& addExp_nn)
+inline const LVal& requireLVal(const Exp& exp)
 {
-    require(addExp_nn != nullptr, "expected additive expression node");
-    return *addExp_nn;
+    const auto* lVal = std::get_if<LVal>(&exp.m_kind);
+    require(lVal != nullptr, "expected lvalue expression");
+    return *lVal;
 }
 
-inline const MulExp& requireMulExp(const std::shared_ptr<MulExp>& mulExp_nn)
+inline const LVal& requireLVal(const Handle<Exp>& exp_nn)
 {
-    require(mulExp_nn != nullptr, "expected multiplicative expression node");
-    return *mulExp_nn;
+    return requireLVal(requireExp(exp_nn));
 }
 
-inline const UnaryExp& requireUnaryExp(
-    const std::shared_ptr<UnaryExp>& unaryExp_nn)
+inline const Number& requireNumber(const Exp& exp)
 {
-    require(unaryExp_nn != nullptr, "expected unary expression node");
-    return *unaryExp_nn;
+    const auto* number = std::get_if<Number>(&exp.m_kind);
+    require(number != nullptr, "expected number expression");
+    return *number;
 }
 
-inline const PrimaryExp& requirePrimaryExp(
-    const std::shared_ptr<PrimaryExp>& primaryExp_nn)
+inline const Number& requireNumber(const Handle<Exp>& exp_nn)
 {
-    require(primaryExp_nn != nullptr, "expected primary expression node");
-    return *primaryExp_nn;
+    return requireNumber(requireExp(exp_nn));
 }
 
-inline const LVal& requireLVal(const std::shared_ptr<LVal>& lVal_nn)
-{
-    require(lVal_nn != nullptr, "expected lvalue node");
-    return *lVal_nn;
-}
-
-inline std::shared_ptr<BlockItemNode> requireBlockItem(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<BlockItemNode> requireBlockItem(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     require(blockItemNode_nn != nullptr, "expected block item node");
     return blockItemNode_nn;
 }
 
-inline std::shared_ptr<StmtNode> extractStmtNode(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<StmtNode> extractStmtNode(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
-    std::shared_ptr<StmtNode> stmtNode;
+    Handle<StmtNode> stmtNode;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<StmtNode>>) {
+            if constexpr (std::is_same_v<AltType, Handle<StmtNode>>) {
                 stmtNode = blockItemAlt;
             }
         },
@@ -181,14 +216,14 @@ inline std::shared_ptr<StmtNode> extractStmtNode(
     return stmtNode;
 }
 
-inline std::shared_ptr<DeclNode> extractDeclNode(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<DeclNode> extractDeclNode(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
-    std::shared_ptr<DeclNode> declNode;
+    Handle<DeclNode> declNode;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<DeclNode>>) {
+            if constexpr (std::is_same_v<AltType, Handle<DeclNode>>) {
                 declNode = blockItemAlt;
             }
         },
@@ -197,14 +232,13 @@ inline std::shared_ptr<DeclNode> extractDeclNode(
     return declNode;
 }
 
-inline std::shared_ptr<ReturnStmt> extractReturnStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<ReturnStmt> extractReturnStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ReturnStmt> returnStmt;
+    Handle<ReturnStmt> returnStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ReturnStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<ReturnStmt>>) {
                 returnStmt = stmtAlt;
             }
         },
@@ -213,20 +247,19 @@ inline std::shared_ptr<ReturnStmt> extractReturnStmt(
     return returnStmt;
 }
 
-inline std::shared_ptr<ReturnStmt> extractReturnStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<ReturnStmt> extractReturnStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractReturnStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<IfStmt> extractIfStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<IfStmt> extractIfStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<IfStmt> ifStmt;
+    Handle<IfStmt> ifStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<IfStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<IfStmt>>) {
                 ifStmt = stmtAlt;
             }
         },
@@ -235,20 +268,19 @@ inline std::shared_ptr<IfStmt> extractIfStmt(
     return ifStmt;
 }
 
-inline std::shared_ptr<IfStmt> extractIfStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<IfStmt> extractIfStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractIfStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<WhileStmt> extractWhileStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<WhileStmt> extractWhileStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<WhileStmt> whileStmt;
+    Handle<WhileStmt> whileStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<WhileStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<WhileStmt>>) {
                 whileStmt = stmtAlt;
             }
         },
@@ -257,20 +289,19 @@ inline std::shared_ptr<WhileStmt> extractWhileStmt(
     return whileStmt;
 }
 
-inline std::shared_ptr<WhileStmt> extractWhileStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<WhileStmt> extractWhileStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractWhileStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<BreakStmt> extractBreakStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<BreakStmt> extractBreakStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<BreakStmt> breakStmt;
+    Handle<BreakStmt> breakStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<BreakStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<BreakStmt>>) {
                 breakStmt = stmtAlt;
             }
         },
@@ -279,15 +310,14 @@ inline std::shared_ptr<BreakStmt> extractBreakStmt(
     return breakStmt;
 }
 
-inline std::shared_ptr<ContinueStmt> extractContinueStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<ContinueStmt> extractContinueStmt(
+    const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ContinueStmt> continueStmt;
+    Handle<ContinueStmt> continueStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<ContinueStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<ContinueStmt>>) {
                 continueStmt = stmtAlt;
             }
         },
@@ -296,14 +326,13 @@ inline std::shared_ptr<ContinueStmt> extractContinueStmt(
     return continueStmt;
 }
 
-inline std::shared_ptr<AssignStmt> extractAssignStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<AssignStmt> extractAssignStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<AssignStmt> assignStmt;
+    Handle<AssignStmt> assignStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<AssignStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<AssignStmt>>) {
                 assignStmt = stmtAlt;
             }
         },
@@ -312,20 +341,19 @@ inline std::shared_ptr<AssignStmt> extractAssignStmt(
     return assignStmt;
 }
 
-inline std::shared_ptr<AssignStmt> extractAssignStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<AssignStmt> extractAssignStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractAssignStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<ExpStmt> extractExpStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<ExpStmt> extractExpStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ExpStmt> expStmt;
+    Handle<ExpStmt> expStmt;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ExpStmt>>) {
+            if constexpr (std::is_same_v<AltType, Handle<ExpStmt>>) {
                 expStmt = stmtAlt;
             }
         },
@@ -334,20 +362,19 @@ inline std::shared_ptr<ExpStmt> extractExpStmt(
     return expStmt;
 }
 
-inline std::shared_ptr<ExpStmt> extractExpStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<ExpStmt> extractExpStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractExpStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<Block> extractBlockStmt(
-    const std::shared_ptr<StmtNode>& stmtNode_nn)
+inline Handle<Block> extractBlockStmt(const Handle<StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<Block> block;
+    Handle<Block> block;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<Block>>) {
+            if constexpr (std::is_same_v<AltType, Handle<Block>>) {
                 block = stmtAlt;
             }
         },
@@ -356,20 +383,19 @@ inline std::shared_ptr<Block> extractBlockStmt(
     return block;
 }
 
-inline std::shared_ptr<Block> extractBlockStmt(
-    const std::shared_ptr<BlockItemNode>& blockItemNode_nn)
+inline Handle<Block> extractBlockStmt(
+    const Handle<BlockItemNode>& blockItemNode_nn)
 {
     return extractBlockStmt(extractStmtNode(blockItemNode_nn));
 }
 
-inline std::shared_ptr<ConstDecl> extractConstDecl(
-    const std::shared_ptr<DeclNode>& declNode_nn)
+inline Handle<ConstDecl> extractConstDecl(const Handle<DeclNode>& declNode_nn)
 {
-    std::shared_ptr<ConstDecl> constDecl;
+    Handle<ConstDecl> constDecl;
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ConstDecl>>) {
+            if constexpr (std::is_same_v<AltType, Handle<ConstDecl>>) {
                 constDecl = declAlt;
             }
         },
@@ -378,14 +404,13 @@ inline std::shared_ptr<ConstDecl> extractConstDecl(
     return constDecl;
 }
 
-inline std::shared_ptr<VarDecl> extractVarDecl(
-    const std::shared_ptr<DeclNode>& declNode_nn)
+inline Handle<VarDecl> extractVarDecl(const Handle<DeclNode>& declNode_nn)
 {
-    std::shared_ptr<VarDecl> varDecl;
+    Handle<VarDecl> varDecl;
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<VarDecl>>) {
+            if constexpr (std::is_same_v<AltType, Handle<VarDecl>>) {
                 varDecl = declAlt;
             }
         },
@@ -394,131 +419,47 @@ inline std::shared_ptr<VarDecl> extractVarDecl(
     return varDecl;
 }
 
-inline int32_t evaluateExp(const Exp& exp);
-inline int32_t evaluateLOrExp(const LOrExp& lOrExp);
-inline int32_t evaluateLAndExp(const LAndExp& lAndExp);
-inline int32_t evaluateEqExp(const EqExp& eqExp);
-inline int32_t evaluateRelExp(const RelExp& relExp);
-inline int32_t evaluateAddExp(const AddExp& addExp);
-inline int32_t evaluateMulExp(const MulExp& mulExp);
-inline int32_t evaluateUnaryExp(const UnaryExp& unaryExp);
-inline int32_t evaluatePrimaryExp(const PrimaryExp& primaryExp);
-
 inline int32_t evaluateExp(const Exp& exp)
 {
-    return evaluateLOrExp(requireLOrExp(exp.m_lOrExp_nn));
-}
-
-inline int32_t evaluateLOrExp(const LOrExp& lOrExp)
-{
-    auto currentValue = evaluateLAndExp(requireLAndExp(lOrExp.m_head_nn));
-    for (const auto& tailEntry : lOrExp.m_tail) {
-        const auto rhsValue = evaluateLAndExp(requireLAndExp(tailEntry.second));
-        currentValue = (currentValue != 0 || rhsValue != 0) ? 1 : 0;
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateLAndExp(const LAndExp& lAndExp)
-{
-    auto currentValue = evaluateEqExp(requireEqExp(lAndExp.m_head_nn));
-    for (const auto& tailEntry : lAndExp.m_tail) {
-        const auto rhsValue = evaluateEqExp(requireEqExp(tailEntry.second));
-        currentValue = (currentValue != 0 && rhsValue != 0) ? 1 : 0;
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateEqExp(const EqExp& eqExp)
-{
-    auto currentValue = evaluateRelExp(requireRelExp(eqExp.m_head_nn));
-    for (const auto& tailEntry : eqExp.m_tail) {
-        const auto rhsValue = evaluateRelExp(requireRelExp(tailEntry.second));
-        switch (tailEntry.first) {
-        case EqOpKeyword::equal:
-            currentValue = currentValue == rhsValue ? 1 : 0;
-            break;
-        case EqOpKeyword::notEqual:
-            currentValue = currentValue != rhsValue ? 1 : 0;
-            break;
-        }
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateRelExp(const RelExp& relExp)
-{
-    auto currentValue = evaluateAddExp(requireAddExp(relExp.m_head_nn));
-    for (const auto& tailEntry : relExp.m_tail) {
-        const auto rhsValue = evaluateAddExp(requireAddExp(tailEntry.second));
-        switch (tailEntry.first) {
-        case RelOpKeyword::less:
-            currentValue = currentValue < rhsValue ? 1 : 0;
-            break;
-        case RelOpKeyword::greater:
-            currentValue = currentValue > rhsValue ? 1 : 0;
-            break;
-        case RelOpKeyword::lessEqual:
-            currentValue = currentValue <= rhsValue ? 1 : 0;
-            break;
-        case RelOpKeyword::greaterEqual:
-            currentValue = currentValue >= rhsValue ? 1 : 0;
-            break;
-        }
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateAddExp(const AddExp& addExp)
-{
-    auto currentValue = evaluateMulExp(requireMulExp(addExp.m_head_nn));
-    for (const auto& tailEntry : addExp.m_tail) {
-        const auto rhsValue = evaluateMulExp(requireMulExp(tailEntry.second));
-        switch (tailEntry.first) {
-        case AddOpKeyword::plus:
-            currentValue += rhsValue;
-            break;
-        case AddOpKeyword::minus:
-            currentValue -= rhsValue;
-            break;
-        }
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateMulExp(const MulExp& mulExp)
-{
-    auto currentValue = evaluateUnaryExp(requireUnaryExp(mulExp.m_head_nn));
-    for (const auto& tailEntry : mulExp.m_tail) {
-        const auto rhsValue
-            = evaluateUnaryExp(requireUnaryExp(tailEntry.second));
-        switch (tailEntry.first) {
-        case MulOpKeyword::star:
-            currentValue *= rhsValue;
-            break;
-        case MulOpKeyword::slash:
-            currentValue /= rhsValue;
-            break;
-        case MulOpKeyword::percent:
-            currentValue %= rhsValue;
-            break;
-        }
-    }
-    return currentValue;
-}
-
-inline int32_t evaluateUnaryExp(const UnaryExp& unaryExp)
-{
     return std::visit(
-        [&](const auto& unaryAlt) -> int32_t {
-            using AltType = std::decay_t<decltype(unaryAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<PrimaryExp>>) {
-                return evaluatePrimaryExp(requirePrimaryExp(unaryAlt));
-            } else {
+        [&](const auto& expAlt) -> int32_t {
+            using AltType = std::decay_t<decltype(expAlt)>;
+            if constexpr (std::is_same_v<AltType, Exp::Binary>) {
+                const auto lhsValue = evaluateExp(requireExp(expAlt.m_lhs_nn));
+                const auto rhsValue = evaluateExp(requireExp(expAlt.m_rhs_nn));
+                switch (expAlt.m_op) {
+                case BinaryOpKeyword::star:
+                    return lhsValue * rhsValue;
+                case BinaryOpKeyword::slash:
+                    return lhsValue / rhsValue;
+                case BinaryOpKeyword::percent:
+                    return lhsValue % rhsValue;
+                case BinaryOpKeyword::plus:
+                    return lhsValue + rhsValue;
+                case BinaryOpKeyword::minus:
+                    return lhsValue - rhsValue;
+                case BinaryOpKeyword::less:
+                    return lhsValue < rhsValue ? 1 : 0;
+                case BinaryOpKeyword::greater:
+                    return lhsValue > rhsValue ? 1 : 0;
+                case BinaryOpKeyword::lessEqual:
+                    return lhsValue <= rhsValue ? 1 : 0;
+                case BinaryOpKeyword::greaterEqual:
+                    return lhsValue >= rhsValue ? 1 : 0;
+                case BinaryOpKeyword::equal:
+                    return lhsValue == rhsValue ? 1 : 0;
+                case BinaryOpKeyword::notEqual:
+                    return lhsValue != rhsValue ? 1 : 0;
+                case BinaryOpKeyword::andAnd:
+                    return (lhsValue != 0 && rhsValue != 0) ? 1 : 0;
+                case BinaryOpKeyword::orOr:
+                    return (lhsValue != 0 || rhsValue != 0) ? 1 : 0;
+                }
+                fail("unexpected binary operator");
+            } else if constexpr (std::is_same_v<AltType, Exp::Unary>) {
                 const auto operandValue
-                    = evaluateUnaryExp(requireUnaryExp(unaryAlt.second));
-                switch (unaryAlt.first) {
+                    = evaluateExp(requireExp(expAlt.m_lhs_nn));
+                switch (expAlt.m_op) {
                 case UnaryOpKeyword::plus:
                     return operandValue;
                 case UnaryOpKeyword::minus:
@@ -526,135 +467,14 @@ inline int32_t evaluateUnaryExp(const UnaryExp& unaryExp)
                 case UnaryOpKeyword::bang:
                     return operandValue == 0 ? 1 : 0;
                 }
-            }
-            fail("unexpected unary operator");
-        },
-        unaryExp.m_kind);
-}
-
-inline int32_t evaluatePrimaryExp(const PrimaryExp& primaryExp)
-{
-    return std::visit(
-        [&](const auto& primaryAlt) -> int32_t {
-            using AltType = std::decay_t<decltype(primaryAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<Exp>>) {
-                return evaluateExp(requireExp(primaryAlt));
-            } else if constexpr (std::is_same_v<AltType,
-                                     std::shared_ptr<LVal>>) {
-                fail("cannot evaluate lvalue-backed primary expression");
+                fail("unexpected unary operator");
+            } else if constexpr (std::is_same_v<AltType, LVal>) {
+                fail("cannot evaluate lvalue expression");
             } else {
-                return primaryAlt->m_value;
+                return expAlt.m_value;
             }
         },
-        primaryExp.m_kind);
-}
-
-inline bool primaryIsParenthesized(const PrimaryExp& primaryExp)
-{
-    return std::visit(
-        [&](const auto& primaryAlt) -> bool {
-            using AltType = std::decay_t<decltype(primaryAlt)>;
-            return std::is_same_v<AltType, std::shared_ptr<Exp>>;
-        },
-        primaryExp.m_kind);
-}
-
-inline bool containsParenthesizedUnary(const UnaryExp& unaryExp)
-{
-    return std::visit(
-        [&](const auto& unaryAlt) -> bool {
-            using AltType = std::decay_t<decltype(unaryAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<PrimaryExp>>) {
-                if (primaryIsParenthesized(requirePrimaryExp(unaryAlt))) {
-                    return true;
-                }
-                return false;
-            } else {
-                return containsParenthesizedUnary(
-                    requireUnaryExp(unaryAlt.second));
-            }
-        },
-        unaryExp.m_kind);
-}
-
-inline bool containsParenthesizedMul(const MulExp& mulExp)
-{
-    if (containsParenthesizedUnary(requireUnaryExp(mulExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : mulExp.m_tail) {
-        if (containsParenthesizedUnary(requireUnaryExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool containsParenthesizedAdd(const AddExp& addExp)
-{
-    if (containsParenthesizedMul(requireMulExp(addExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : addExp.m_tail) {
-        if (containsParenthesizedMul(requireMulExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool containsParenthesizedRel(const RelExp& relExp)
-{
-    if (containsParenthesizedAdd(requireAddExp(relExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : relExp.m_tail) {
-        if (containsParenthesizedAdd(requireAddExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool containsParenthesizedEq(const EqExp& eqExp)
-{
-    if (containsParenthesizedRel(requireRelExp(eqExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : eqExp.m_tail) {
-        if (containsParenthesizedRel(requireRelExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool containsParenthesizedLAnd(const LAndExp& lAndExp)
-{
-    if (containsParenthesizedEq(requireEqExp(lAndExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : lAndExp.m_tail) {
-        if (containsParenthesizedEq(requireEqExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool expressionContainsParenthesizedPrimary(const Exp& exp)
-{
-    const auto& lOrExp = requireLOrExp(exp.m_lOrExp_nn);
-    if (containsParenthesizedLAnd(requireLAndExp(lOrExp.m_head_nn))) {
-        return true;
-    }
-    for (const auto& tailEntry : lOrExp.m_tail) {
-        if (containsParenthesizedLAnd(requireLAndExp(tailEntry.second))) {
-            return true;
-        }
-    }
-    return false;
+        exp.m_kind);
 }
 
 } // namespace yesod::test_support::parser

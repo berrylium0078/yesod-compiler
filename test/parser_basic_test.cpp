@@ -10,7 +10,7 @@ void testMinimalFunctionParse()
     const auto returnStmt_nn = extractReturnStmt(
         root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
-    require(root_nn->m_startOffset == 0,
+    require(root_nn->m_sourcePos.m_offset == 0,
         "root start offset should be the first token");
     require(root_nn->m_funcDef_nn->m_funcType == FuncTypeKeyword::intKeyword,
         "function type should use enum keyword");
@@ -18,9 +18,9 @@ void testMinimalFunctionParse()
         "identifier payload should only store text");
     require(root_nn->m_funcDef_nn->m_block_nn->m_blockItems.size() == 1,
         "block should contain the single documented statement");
-    require(returnStmt_nn->m_startOffset == 11,
+    require(returnStmt_nn->m_sourcePos.m_offset == 11,
         "statement start offset should point to the return keyword");
-    require(returnStmt_nn->m_exp_nn->m_startOffset == 18,
+    require(returnStmt_nn->m_exp_nn->m_sourcePos.m_offset == 18,
         "expression start offset should match source byte offset");
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == 42,
         "number literal should parse decimal values");
@@ -34,11 +34,11 @@ void testWhitespaceIsSkippedBetweenTokens()
     const auto returnStmt_nn = extractReturnStmt(
         root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
 
-    require(root_nn->m_startOffset == 3,
+    require(root_nn->m_sourcePos.m_offset == 3,
         "leading whitespace should be skipped before the first token");
     require(root_nn->m_funcDef_nn->m_identifier_nn->m_name == "spaced_name",
         "identifier should survive trivia skipping");
-    require(returnStmt_nn->m_startOffset == 27,
+    require(returnStmt_nn->m_sourcePos.m_offset == 27,
         "statement start offset should point to the return keyword");
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == 7,
         "number should parse after trivia");
@@ -87,12 +87,12 @@ void testIntegerLiteralForms()
         "hexadecimal literal should parse");
 }
 
-    void testEmptyBlockParses()
-    {
-        const auto root_nn = parseRoot("int main(){/*I am empty*/}");
-        require(root_nn->m_funcDef_nn->m_block_nn->m_blockItems.empty(),
+void testEmptyBlockParses()
+{
+    const auto root_nn = parseRoot("int main(){/*I am empty*/}");
+    require(root_nn->m_funcDef_nn->m_block_nn->m_blockItems.empty(),
         "block grammar should allow zero block items");
-    }
+}
 
 void testHexOrderedChoiceWinsBeforeOctal()
 {
@@ -150,7 +150,8 @@ void testMalformedInputsFailWithFocusedDiagnostics()
         !malformedStmtHead.success(), "malformed statement head should fail");
     require(firstDiagnostic(malformedStmtHead).m_kind
             == DiagnosticKind::missingSemicolon,
-        "bare identifier statement should now report the expression-statement semicolon label");
+        "bare identifier statement should now report the expression-statement "
+        "semicolon label");
 
     const auto malformedReturnValue = parseSource("int main(){return ;}");
     require(

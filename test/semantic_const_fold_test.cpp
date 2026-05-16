@@ -4,14 +4,14 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-std::shared_ptr<ast::DeclNode> requireDeclNode(
-    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
+ast::Handle<ast::DeclNode> requireDeclNode(
+    const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
-    std::shared_ptr<ast::DeclNode> declNode_nn;
+    ast::Handle<ast::DeclNode> declNode_nn;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::DeclNode>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::DeclNode>>) {
                 declNode_nn = blockItemAlt;
             }
         },
@@ -20,14 +20,14 @@ std::shared_ptr<ast::DeclNode> requireDeclNode(
     return declNode_nn;
 }
 
-std::shared_ptr<ast::StmtNode> requireStmtNode(
-    const std::shared_ptr<ast::BlockItemNode>& blockItem_nn)
+ast::Handle<ast::StmtNode> requireStmtNode(
+    const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
-    std::shared_ptr<ast::StmtNode> stmtNode_nn;
+    ast::Handle<ast::StmtNode> stmtNode_nn;
     std::visit(
         [&](const auto& blockItemAlt) {
             using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::StmtNode>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::StmtNode>>) {
                 stmtNode_nn = blockItemAlt;
             }
         },
@@ -36,15 +36,15 @@ std::shared_ptr<ast::StmtNode> requireStmtNode(
     return stmtNode_nn;
 }
 
-std::shared_ptr<ast::ConstDecl> requireConstDecl(
-    const std::shared_ptr<ast::DeclNode>& declNode_nn)
+ast::Handle<ast::ConstDecl> requireConstDecl(
+    const ast::Handle<ast::DeclNode>& declNode_nn)
 {
-    std::shared_ptr<ast::ConstDecl> constDecl_nn;
+    ast::Handle<ast::ConstDecl> constDecl_nn;
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
             if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<ast::ConstDecl>>) {
+                              ast::Handle<ast::ConstDecl>>) {
                 constDecl_nn = declAlt;
             }
         },
@@ -53,14 +53,14 @@ std::shared_ptr<ast::ConstDecl> requireConstDecl(
     return constDecl_nn;
 }
 
-std::shared_ptr<ast::VarDecl> requireVarDecl(
-    const std::shared_ptr<ast::DeclNode>& declNode_nn)
+ast::Handle<ast::VarDecl> requireVarDecl(
+    const ast::Handle<ast::DeclNode>& declNode_nn)
 {
-    std::shared_ptr<ast::VarDecl> varDecl_nn;
+    ast::Handle<ast::VarDecl> varDecl_nn;
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType, std::shared_ptr<ast::VarDecl>>) {
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::VarDecl>>) {
                 varDecl_nn = declAlt;
             }
         },
@@ -69,15 +69,15 @@ std::shared_ptr<ast::VarDecl> requireVarDecl(
     return varDecl_nn;
 }
 
-std::shared_ptr<ast::ReturnStmt> requireReturnStmt(
-    const std::shared_ptr<ast::StmtNode>& stmtNode_nn)
+ast::Handle<ast::ReturnStmt> requireReturnStmt(
+    const ast::Handle<ast::StmtNode>& stmtNode_nn)
 {
-    std::shared_ptr<ast::ReturnStmt> returnStmt_nn;
+    ast::Handle<ast::ReturnStmt> returnStmt_nn;
     std::visit(
         [&](const auto& stmtAlt) {
             using AltType = std::decay_t<decltype(stmtAlt)>;
             if constexpr (std::is_same_v<AltType,
-                              std::shared_ptr<ast::ReturnStmt>>) {
+                              ast::Handle<ast::ReturnStmt>>) {
                 returnStmt_nn = stmtAlt;
             }
         },
@@ -88,46 +88,51 @@ std::shared_ptr<ast::ReturnStmt> requireReturnStmt(
 
 void testConstExpressionsRecordFoldedValues()
 {
-    const auto output = analyzeSource(
-        "int main(){const int answer = 40 + 2; int value = answer + 1 * 2; return answer + 1 * 2;}");
+    const auto output
+        = analyzeSource("int main(){const int answer = 40 + 2; int value = "
+                        "answer + 1 * 2; return answer + 1 * 2;}");
     require(output.success(), "expected semantic success");
 
-    const auto& blockItems = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto& blockItems
+        = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
     const auto constDecl_nn = requireConstDecl(requireDeclNode(blockItems[0]));
     const auto varDecl_nn = requireVarDecl(requireDeclNode(blockItems[1]));
-    const auto returnStmt_nn = requireReturnStmt(requireStmtNode(blockItems[2]));
+    const auto returnStmt_nn
+        = requireReturnStmt(requireStmtNode(blockItems[2]));
 
-    const auto& constExp = *constDecl_nn->m_constDefs[0]
-                                ->m_constInitVal_nn->m_constExp_nn->m_exp_nn;
+    const auto constExp
+        = constDecl_nn->m_constDefs[0]->m_constInitVal_nn->m_exp_nn;
     require(requireConstantValue(output, constExp) == 42,
         "const initializer should fold to a constant value");
 
-    const auto& constSymbol = requireSymbol(output, *constDecl_nn->m_constDefs[0]);
+    const auto& constSymbol
+        = requireSymbol(output, constDecl_nn->m_constDefs[0]);
     require(constSymbol.m_hasConstantValue,
         "const declaration should cache its folded constant value");
     require(constSymbol.m_constantValue == 42,
         "const declaration should expose the folded constant value");
 
-    const auto& varInitExp = *varDecl_nn->m_varDefs[0]->m_initVal_nn->m_exp_nn;
+    const auto varInitExp = varDecl_nn->m_varDefs[0]->m_initVal_nn->m_exp_nn;
     require(requireConstantValue(output, varInitExp) == 44,
-        "var initializer should fold const-backed arithmetic");
+        "var initializer should fold const-backed integer");
 
-    require(requireConstantValue(output, *returnStmt_nn->m_exp_nn) == 44,
-        "return expression should fold const-backed arithmetic");
+    require(requireConstantValue(output, returnStmt_nn->m_exp_nn) == 44,
+        "return expression should fold const-backed integer");
 }
 
 void testConstSemanticDiagnostics()
 {
-    const auto nonConstantInit
-        = analyzeSource("int main(){int value = 1; const int answer = value; return answer;}");
+    const auto nonConstantInit = analyzeSource(
+        "int main(){int value = 1; const int answer = value; return answer;}");
     require(!nonConstantInit.success(),
         "non-constant const initializer should fail semantic analysis");
     require(firstDiagnostic(nonConstantInit).m_kind
             == SemanticDiagnosticKind::nonConstantConstInitializer,
-        "non-constant const initializer should report the expected semantic label");
+        "non-constant const initializer should report the expected semantic "
+        "label");
 
-    const auto assignToConst
-        = analyzeSource("int main(){const int answer = 1; answer = 2; return answer;}");
+    const auto assignToConst = analyzeSource(
+        "int main(){const int answer = 1; answer = 2; return answer;}");
     require(!assignToConst.success(),
         "assignment to const should fail semantic analysis");
     require(firstDiagnostic(assignToConst).m_kind

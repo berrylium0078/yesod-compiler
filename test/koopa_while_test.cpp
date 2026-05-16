@@ -6,9 +6,8 @@ namespace {
 
 void testWhileLoopAccumulatorLowersAndValidates()
 {
-    auto program = generateProgram(
-        "int main(){int x = 0, y = 0; while (x <= 10) { y = y + x; x = x + 1; } return y;}"
-    );
+    auto program = generateProgram("int main(){int x = 0, y = 0; while (x <= "
+                                   "10) { y = y + x; x = x + 1; } return y;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
     const auto* condBlock = requireBlock(*function, 1);
@@ -36,9 +35,9 @@ void testWhileLoopAccumulatorLowersAndValidates()
     (void)requireBranch(condBlock->getInst(2), bodyBlock, whileEndBlock);
 
     const auto* yLoad = requireLoad(bodyBlock->getInst(0), yAlloc, "%3");
-    const auto* xLoadForY
-        = requireLoad(bodyBlock->getInst(1), xAlloc, "%4");
-    const auto* addY = requireBinary(bodyBlock->getInst(2), KOOPA_RBO_ADD, "%5");
+    const auto* xLoadForY = requireLoad(bodyBlock->getInst(1), xAlloc, "%4");
+    const auto* addY
+        = requireBinary(bodyBlock->getInst(2), KOOPA_RBO_ADD, "%5");
     require(addY->getLhs() == yLoad,
         "accumulator update should use the current y value");
     require(addY->getRhs() == xLoadForY,
@@ -47,9 +46,9 @@ void testWhileLoopAccumulatorLowersAndValidates()
     require(yStore->getVal() == addY,
         "accumulator update should store the computed y temporary");
 
-    const auto* xLoadForInc
-        = requireLoad(bodyBlock->getInst(4), xAlloc, "%6");
-    const auto* addX = requireBinary(bodyBlock->getInst(5), KOOPA_RBO_ADD, "%7");
+    const auto* xLoadForInc = requireLoad(bodyBlock->getInst(4), xAlloc, "%6");
+    const auto* addX
+        = requireBinary(bodyBlock->getInst(5), KOOPA_RBO_ADD, "%7");
     require(addX->getLhs() == xLoadForInc,
         "loop increment should use the current x value");
     requireInteger(addX->getRhs(), 1);

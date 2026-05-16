@@ -2,33 +2,27 @@
 #define _YESOD_FRONTEND_AST_H_
 
 #include <cstdint>
-#include <atomic>
-#include <memory>
+#include <stdexcept>
 #include <string>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "frontend/arena.h"
+
 namespace yesod::frontend {
 
-using AstNodeId = int32_t;
+struct SourcePos {
+    constexpr SourcePos() = default;
 
-inline AstNodeId nextAstNodeId()
-{
-    static std::atomic<AstNodeId> nextId { 0 };
-    return ++nextId;
-}
-
-struct AstNode {
-    explicit AstNode(int32_t startOffset)
-        : m_id(nextAstNodeId())
-        , m_startOffset(startOffset)
+    explicit constexpr SourcePos(int32_t offset)
+        : m_offset(offset)
     {
     }
-    virtual ~AstNode() = default;
 
-    AstNodeId m_id;
-    int32_t m_startOffset;
+    int32_t m_offset = 0;
 };
 
 enum class FuncTypeKeyword {
@@ -45,48 +39,25 @@ enum class UnaryOpKeyword {
     bang,
 };
 
-enum class MulOpKeyword {
+enum class BinaryOpKeyword {
     star,
     slash,
     percent,
-};
-
-enum class AddOpKeyword {
     plus,
     minus,
-};
-
-enum class RelOpKeyword {
     less,
     greater,
     lessEqual,
     greaterEqual,
-};
-
-enum class EqOpKeyword {
     equal,
     notEqual,
-};
-
-enum class LAndOpKeyword {
     andAnd,
-};
-
-enum class LOrOpKeyword {
     orOr,
 };
 
 struct Exp;
-struct LOrExp;
-struct LAndExp;
-struct EqExp;
-struct RelExp;
-struct AddExp;
-struct MulExp;
-struct PrimaryExp;
-struct UnaryExp;
 struct LVal;
-struct ConstExp;
+struct Number;
 struct ConstInitVal;
 struct InitVal;
 struct ConstDef;
@@ -105,395 +76,706 @@ struct StmtNode;
 struct BlockItemNode;
 struct Block;
 
-struct Identifier final : AstNode {
+struct Identifier {
+    Identifier() = default;
+
     Identifier(int32_t startOffset, std::string name)
-        : AstNode(startOffset)
+        : m_sourcePos(startOffset)
         , m_name(std::move(name))
     {
     }
 
+    Identifier(SourcePos sourcePos, std::string name)
+        : m_sourcePos(sourcePos)
+        , m_name(std::move(name))
+    {
+    }
+
+    SourcePos m_sourcePos;
     std::string m_name;
 };
 
-struct Number final : AstNode {
-    Number(int32_t startOffset, int32_t value)
-        : AstNode(startOffset)
-        , m_value(value)
+struct Number {
+    Number() = default;
+
+    explicit Number(int32_t value)
+        : m_value(value)
     {
     }
 
-    int32_t m_value;
-};
-
-struct LVal final : AstNode {
-    LVal(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn)
-        : AstNode(startOffset)
-        , m_identifier_nn(std::move(identifier_nn))
+    explicit Number(SourcePos, int32_t value)
+        : m_value(value)
     {
     }
 
-    std::shared_ptr<Identifier> m_identifier_nn;
+    int32_t m_value = 0;
 };
 
-struct PrimaryExp final : AstNode {
-    using Kind = std::variant<std::shared_ptr<Exp>, std::shared_ptr<LVal>,
-        std::shared_ptr<Number>>;
+struct LVal {
+    LVal() = default;
 
-    PrimaryExp(int32_t startOffset, Kind kind)
-        : AstNode(startOffset)
+    explicit LVal(Handle<Identifier> identifier_nn)
+        : m_identifier_nn(identifier_nn)
+    {
+    }
+
+    explicit LVal(SourcePos, Handle<Identifier> identifier_nn)
+        : m_identifier_nn(identifier_nn)
+    {
+    }
+
+    Handle<Identifier> m_identifier_nn;
+};
+
+struct Exp {
+    struct Binary {
+        Handle<Exp> m_lhs_nn;
+        Handle<Exp> m_rhs_nn;
+        BinaryOpKeyword m_op = BinaryOpKeyword::plus;
+    };
+
+    struct Unary {
+        Handle<Exp> m_lhs_nn;
+        UnaryOpKeyword m_op = UnaryOpKeyword::plus;
+    };
+
+    using Kind = std::variant<Binary, Unary, LVal, Number>;
+
+    Exp()
+        : m_kind(Number {})
+    {
+    }
+
+    Exp(int32_t startOffset, Kind kind)
+        : m_sourcePos(startOffset)
         , m_kind(std::move(kind))
     {
     }
 
-    Kind m_kind;
-};
-
-struct UnaryExp final : AstNode {
-    using Kind = std::variant<std::shared_ptr<PrimaryExp>,
-        std::pair<UnaryOpKeyword, std::shared_ptr<UnaryExp>>>;
-
-    UnaryExp(int32_t startOffset, Kind kind)
-        : AstNode(startOffset)
+    Exp(SourcePos sourcePos, Kind kind)
+        : m_sourcePos(sourcePos)
         , m_kind(std::move(kind))
     {
     }
 
+    SourcePos m_sourcePos;
     Kind m_kind;
 };
 
-struct MulExp final : AstNode {
-    using Tail = std::pair<MulOpKeyword, std::shared_ptr<UnaryExp>>;
+struct ConstInitVal {
+    ConstInitVal() = default;
 
-    MulExp(int32_t startOffset, std::shared_ptr<UnaryExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    ConstInitVal(int32_t startOffset, Handle<Exp> exp_nn)
+        : m_sourcePos(startOffset)
+        , m_exp_nn(exp_nn)
     {
     }
 
-    std::shared_ptr<UnaryExp> m_head_nn;
-    std::vector<Tail> m_tail;
-};
-
-struct AddExp final : AstNode {
-    using Tail = std::pair<AddOpKeyword, std::shared_ptr<MulExp>>;
-
-    AddExp(int32_t startOffset, std::shared_ptr<MulExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    ConstInitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
+        : m_sourcePos(sourcePos)
+        , m_exp_nn(exp_nn)
     {
     }
 
-    std::shared_ptr<MulExp> m_head_nn;
-    std::vector<Tail> m_tail;
+    SourcePos m_sourcePos;
+    Handle<Exp> m_exp_nn;
 };
 
-struct RelExp final : AstNode {
-    using Tail = std::pair<RelOpKeyword, std::shared_ptr<AddExp>>;
+struct InitVal {
+    InitVal() = default;
 
-    RelExp(int32_t startOffset, std::shared_ptr<AddExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    InitVal(int32_t startOffset, Handle<Exp> exp_nn)
+        : m_sourcePos(startOffset)
+        , m_exp_nn(exp_nn)
     {
     }
 
-    std::shared_ptr<AddExp> m_head_nn;
-    std::vector<Tail> m_tail;
-};
-
-struct EqExp final : AstNode {
-    using Tail = std::pair<EqOpKeyword, std::shared_ptr<RelExp>>;
-
-    EqExp(int32_t startOffset, std::shared_ptr<RelExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    InitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
+        : m_sourcePos(sourcePos)
+        , m_exp_nn(exp_nn)
     {
     }
 
-    std::shared_ptr<RelExp> m_head_nn;
-    std::vector<Tail> m_tail;
+    SourcePos m_sourcePos;
+    Handle<Exp> m_exp_nn;
 };
 
-struct LAndExp final : AstNode {
-    using Tail = std::pair<LAndOpKeyword, std::shared_ptr<EqExp>>;
+struct ConstDef {
+    ConstDef() = default;
 
-    LAndExp(int32_t startOffset, std::shared_ptr<EqExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    ConstDef(int32_t startOffset, Handle<Identifier> identifier_nn,
+        Handle<ConstInitVal> constInitVal_nn)
+        : m_sourcePos(startOffset)
+        , m_identifier_nn(identifier_nn)
+        , m_constInitVal_nn(constInitVal_nn)
     {
     }
 
-    std::shared_ptr<EqExp> m_head_nn;
-    std::vector<Tail> m_tail;
-};
-
-struct LOrExp final : AstNode {
-    using Tail = std::pair<LOrOpKeyword, std::shared_ptr<LAndExp>>;
-
-    LOrExp(int32_t startOffset, std::shared_ptr<LAndExp> head_nn,
-        std::vector<Tail> tail)
-        : AstNode(startOffset)
-        , m_head_nn(std::move(head_nn))
-        , m_tail(std::move(tail))
+    ConstDef(SourcePos sourcePos, Handle<Identifier> identifier_nn,
+        Handle<ConstInitVal> constInitVal_nn)
+        : m_sourcePos(sourcePos)
+        , m_identifier_nn(identifier_nn)
+        , m_constInitVal_nn(constInitVal_nn)
     {
     }
 
-    std::shared_ptr<LAndExp> m_head_nn;
-    std::vector<Tail> m_tail;
+    SourcePos m_sourcePos;
+    Handle<Identifier> m_identifier_nn;
+    Handle<ConstInitVal> m_constInitVal_nn;
 };
 
-struct Exp final : AstNode {
-    Exp(int32_t startOffset, std::shared_ptr<LOrExp> lOrExp_nn)
-        : AstNode(startOffset)
-        , m_lOrExp_nn(std::move(lOrExp_nn))
+struct VarDef {
+    VarDef() = default;
+
+    VarDef(int32_t startOffset, Handle<Identifier> identifier_nn,
+        Handle<InitVal> initVal_nn)
+        : m_sourcePos(startOffset)
+        , m_identifier_nn(identifier_nn)
+        , m_initVal_nn(initVal_nn)
     {
     }
 
-    std::shared_ptr<LOrExp> m_lOrExp_nn;
-};
-
-struct ConstExp final : AstNode {
-    ConstExp(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
-        : AstNode(startOffset)
-        , m_exp_nn(std::move(exp_nn))
+    VarDef(SourcePos sourcePos, Handle<Identifier> identifier_nn,
+        Handle<InitVal> initVal_nn)
+        : m_sourcePos(sourcePos)
+        , m_identifier_nn(identifier_nn)
+        , m_initVal_nn(initVal_nn)
     {
     }
 
-    std::shared_ptr<Exp> m_exp_nn;
+    SourcePos m_sourcePos;
+    Handle<Identifier> m_identifier_nn;
+    Handle<InitVal> m_initVal_nn;
 };
 
-struct ConstInitVal final : AstNode {
-    ConstInitVal(int32_t startOffset, std::shared_ptr<ConstExp> constExp_nn)
-        : AstNode(startOffset)
-        , m_constExp_nn(std::move(constExp_nn))
-    {
-    }
+struct ConstDecl {
+    ConstDecl() = default;
 
-    std::shared_ptr<ConstExp> m_constExp_nn;
-};
-
-struct InitVal final : AstNode {
-    InitVal(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
-        : AstNode(startOffset)
-        , m_exp_nn(std::move(exp_nn))
-    {
-    }
-
-    std::shared_ptr<Exp> m_exp_nn;
-};
-
-struct ConstDef final : AstNode {
-    ConstDef(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn,
-        std::shared_ptr<ConstInitVal> constInitVal_nn)
-        : AstNode(startOffset)
-        , m_identifier_nn(std::move(identifier_nn))
-        , m_constInitVal_nn(std::move(constInitVal_nn))
-    {
-    }
-
-    std::shared_ptr<Identifier> m_identifier_nn;
-    std::shared_ptr<ConstInitVal> m_constInitVal_nn;
-};
-
-struct VarDef final : AstNode {
-    VarDef(int32_t startOffset, std::shared_ptr<Identifier> identifier_nn,
-        std::shared_ptr<InitVal> initVal_nn)
-        : AstNode(startOffset)
-        , m_identifier_nn(std::move(identifier_nn))
-        , m_initVal_nn(std::move(initVal_nn))
-    {
-    }
-
-    std::shared_ptr<Identifier> m_identifier_nn;
-    std::shared_ptr<InitVal> m_initVal_nn;
-};
-
-struct ConstDecl final : AstNode {
     ConstDecl(int32_t startOffset, BTypeKeyword bType,
-        std::vector<std::shared_ptr<ConstDef>> constDefs)
-        : AstNode(startOffset)
+        std::vector<Handle<ConstDef>> constDefs)
+        : m_sourcePos(startOffset)
         , m_bType(bType)
         , m_constDefs(std::move(constDefs))
     {
     }
 
-    BTypeKeyword m_bType;
-    std::vector<std::shared_ptr<ConstDef>> m_constDefs;
+    ConstDecl(SourcePos sourcePos, BTypeKeyword bType,
+        std::vector<Handle<ConstDef>> constDefs)
+        : m_sourcePos(sourcePos)
+        , m_bType(bType)
+        , m_constDefs(std::move(constDefs))
+    {
+    }
+
+    SourcePos m_sourcePos;
+    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
+    std::vector<Handle<ConstDef>> m_constDefs;
 };
 
-struct VarDecl final : AstNode {
+struct VarDecl {
+    VarDecl() = default;
+
     VarDecl(int32_t startOffset, BTypeKeyword bType,
-        std::vector<std::shared_ptr<VarDef>> varDefs)
-        : AstNode(startOffset)
+        std::vector<Handle<VarDef>> varDefs)
+        : m_sourcePos(startOffset)
         , m_bType(bType)
         , m_varDefs(std::move(varDefs))
     {
     }
 
-    BTypeKeyword m_bType;
-    std::vector<std::shared_ptr<VarDef>> m_varDefs;
+    VarDecl(SourcePos sourcePos, BTypeKeyword bType,
+        std::vector<Handle<VarDef>> varDefs)
+        : m_sourcePos(sourcePos)
+        , m_bType(bType)
+        , m_varDefs(std::move(varDefs))
+    {
+    }
+
+    SourcePos m_sourcePos;
+    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
+    std::vector<Handle<VarDef>> m_varDefs;
 };
 
-using Decl = std::variant<std::shared_ptr<ConstDecl>, std::shared_ptr<VarDecl>>;
+using Decl = std::variant<Handle<ConstDecl>, Handle<VarDecl>>;
 
-struct DeclNode final : AstNode {
+struct DeclNode {
+    DeclNode() = default;
+
     DeclNode(int32_t startOffset, Decl decl)
-        : AstNode(startOffset)
+        : m_sourcePos(startOffset)
         , m_decl(std::move(decl))
     {
     }
 
+    DeclNode(SourcePos sourcePos, Decl decl)
+        : m_sourcePos(sourcePos)
+        , m_decl(std::move(decl))
+    {
+    }
+
+    SourcePos m_sourcePos;
     Decl m_decl;
 };
 
-struct IfStmt final : AstNode {
-    IfStmt(int32_t startOffset, std::shared_ptr<Exp> condExp_nn,
-        std::shared_ptr<StmtNode> thenStmt_nn,
-        std::shared_ptr<StmtNode> elseStmt_nn)
-        : AstNode(startOffset)
-        , m_condExp_nn(std::move(condExp_nn))
-        , m_thenStmt_nn(std::move(thenStmt_nn))
-        , m_elseStmt_nn(std::move(elseStmt_nn))
+struct IfStmt {
+    IfStmt() = default;
+
+    IfStmt(int32_t startOffset, Handle<Exp> condExp_nn,
+        Handle<StmtNode> thenStmt_nn, Handle<StmtNode> elseStmt_nn)
+        : m_sourcePos(startOffset)
+        , m_condExp_nn(condExp_nn)
+        , m_thenStmt_nn(thenStmt_nn)
+        , m_elseStmt_nn(elseStmt_nn)
     {
     }
 
-    std::shared_ptr<Exp> m_condExp_nn;
-    std::shared_ptr<StmtNode> m_thenStmt_nn;
-    std::shared_ptr<StmtNode> m_elseStmt_nn;
-};
-
-struct WhileStmt final : AstNode {
-    WhileStmt(int32_t startOffset, std::shared_ptr<Exp> condExp_nn,
-        std::shared_ptr<StmtNode> bodyStmt_nn)
-        : AstNode(startOffset)
-        , m_condExp_nn(std::move(condExp_nn))
-        , m_bodyStmt_nn(std::move(bodyStmt_nn))
+    IfStmt(SourcePos sourcePos, Handle<Exp> condExp_nn,
+        Handle<StmtNode> thenStmt_nn, Handle<StmtNode> elseStmt_nn)
+        : m_sourcePos(sourcePos)
+        , m_condExp_nn(condExp_nn)
+        , m_thenStmt_nn(thenStmt_nn)
+        , m_elseStmt_nn(elseStmt_nn)
     {
     }
 
-    std::shared_ptr<Exp> m_condExp_nn;
-    std::shared_ptr<StmtNode> m_bodyStmt_nn;
+    SourcePos m_sourcePos;
+    Handle<Exp> m_condExp_nn;
+    Handle<StmtNode> m_thenStmt_nn;
+    Handle<StmtNode> m_elseStmt_nn;
 };
 
-struct BreakStmt final : AstNode {
+struct WhileStmt {
+    WhileStmt() = default;
+
+    WhileStmt(int32_t startOffset, Handle<Exp> condExp_nn,
+        Handle<StmtNode> bodyStmt_nn)
+        : m_sourcePos(startOffset)
+        , m_condExp_nn(condExp_nn)
+        , m_bodyStmt_nn(bodyStmt_nn)
+    {
+    }
+
+    WhileStmt(SourcePos sourcePos, Handle<Exp> condExp_nn,
+        Handle<StmtNode> bodyStmt_nn)
+        : m_sourcePos(sourcePos)
+        , m_condExp_nn(condExp_nn)
+        , m_bodyStmt_nn(bodyStmt_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    Handle<Exp> m_condExp_nn;
+    Handle<StmtNode> m_bodyStmt_nn;
+};
+
+struct BreakStmt {
+    BreakStmt() = default;
+
     explicit BreakStmt(int32_t startOffset)
-        : AstNode(startOffset)
+        : m_sourcePos(startOffset)
     {
     }
+
+    explicit BreakStmt(SourcePos sourcePos)
+        : m_sourcePos(sourcePos)
+    {
+    }
+
+    SourcePos m_sourcePos;
 };
 
-struct ContinueStmt final : AstNode {
+struct ContinueStmt {
+    ContinueStmt() = default;
+
     explicit ContinueStmt(int32_t startOffset)
-        : AstNode(startOffset)
-    {
-    }
-};
-
-struct AssignStmt final : AstNode {
-    AssignStmt(int32_t startOffset, std::shared_ptr<LVal> lVal_nn,
-        std::shared_ptr<Exp> exp_nn)
-        : AstNode(startOffset)
-        , m_lVal_nn(std::move(lVal_nn))
-        , m_exp_nn(std::move(exp_nn))
+        : m_sourcePos(startOffset)
     {
     }
 
-    std::shared_ptr<LVal> m_lVal_nn;
-    std::shared_ptr<Exp> m_exp_nn;
-};
-
-struct ExpStmt final : AstNode {
-    ExpStmt(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
-        : AstNode(startOffset)
-        , m_exp_nn(std::move(exp_nn))
+    explicit ContinueStmt(SourcePos sourcePos)
+        : m_sourcePos(sourcePos)
     {
     }
 
-    std::shared_ptr<Exp> m_exp_nn;
+    SourcePos m_sourcePos;
 };
 
-struct ReturnStmt final : AstNode {
-    ReturnStmt(int32_t startOffset, std::shared_ptr<Exp> exp_nn)
-        : AstNode(startOffset)
-        , m_exp_nn(std::move(exp_nn))
+struct AssignStmt {
+    AssignStmt() = default;
+
+    AssignStmt(int32_t startOffset, Handle<Exp> lVal_nn, Handle<Exp> exp_nn)
+        : m_sourcePos(startOffset)
+        , m_lVal_nn(lVal_nn)
+        , m_exp_nn(exp_nn)
     {
     }
 
-    std::shared_ptr<Exp> m_exp_nn;
+    AssignStmt(SourcePos sourcePos, Handle<Exp> lVal_nn, Handle<Exp> exp_nn)
+        : m_sourcePos(sourcePos)
+        , m_lVal_nn(lVal_nn)
+        , m_exp_nn(exp_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    Handle<Exp> m_lVal_nn;
+    Handle<Exp> m_exp_nn;
 };
 
-using Stmt = std::variant<std::shared_ptr<IfStmt>, std::shared_ptr<WhileStmt>,
-    std::shared_ptr<BreakStmt>, std::shared_ptr<ContinueStmt>,
-    std::shared_ptr<AssignStmt>, std::shared_ptr<Block>,
-    std::shared_ptr<ReturnStmt>, std::shared_ptr<ExpStmt>>;
+struct ExpStmt {
+    ExpStmt() = default;
 
-struct StmtNode final : AstNode {
+    ExpStmt(int32_t startOffset, Handle<Exp> exp_nn)
+        : m_sourcePos(startOffset)
+        , m_exp_nn(exp_nn)
+    {
+    }
+
+    ExpStmt(SourcePos sourcePos, Handle<Exp> exp_nn)
+        : m_sourcePos(sourcePos)
+        , m_exp_nn(exp_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    Handle<Exp> m_exp_nn;
+};
+
+struct ReturnStmt {
+    ReturnStmt() = default;
+
+    ReturnStmt(int32_t startOffset, Handle<Exp> exp_nn)
+        : m_sourcePos(startOffset)
+        , m_exp_nn(exp_nn)
+    {
+    }
+
+    ReturnStmt(SourcePos sourcePos, Handle<Exp> exp_nn)
+        : m_sourcePos(sourcePos)
+        , m_exp_nn(exp_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    Handle<Exp> m_exp_nn;
+};
+
+using Stmt = std::variant<Handle<IfStmt>, Handle<WhileStmt>, Handle<BreakStmt>,
+    Handle<ContinueStmt>, Handle<AssignStmt>, Handle<Block>, Handle<ReturnStmt>,
+    Handle<ExpStmt>>;
+
+struct StmtNode {
+    StmtNode() = default;
+
     StmtNode(int32_t startOffset, Stmt stmt)
-        : AstNode(startOffset)
+        : m_sourcePos(startOffset)
         , m_stmt(std::move(stmt))
     {
     }
 
+    StmtNode(SourcePos sourcePos, Stmt stmt)
+        : m_sourcePos(sourcePos)
+        , m_stmt(std::move(stmt))
+    {
+    }
+
+    SourcePos m_sourcePos;
     Stmt m_stmt;
 };
 
-using BlockItem = std::variant<std::shared_ptr<DeclNode>, std::shared_ptr<StmtNode>>;
+using BlockItem = std::variant<Handle<DeclNode>, Handle<StmtNode>>;
 
-struct BlockItemNode final : AstNode {
+struct BlockItemNode {
+    BlockItemNode() = default;
+
     BlockItemNode(int32_t startOffset, BlockItem blockItem)
-        : AstNode(startOffset)
+        : m_sourcePos(startOffset)
         , m_blockItem(std::move(blockItem))
     {
     }
 
+    BlockItemNode(SourcePos sourcePos, BlockItem blockItem)
+        : m_sourcePos(sourcePos)
+        , m_blockItem(std::move(blockItem))
+    {
+    }
+
+    SourcePos m_sourcePos;
     BlockItem m_blockItem;
 };
 
-struct Block final : AstNode {
-    Block(int32_t startOffset,
-        std::vector<std::shared_ptr<BlockItemNode>> blockItems)
-        : AstNode(startOffset)
+struct Block {
+    Block() = default;
+
+    Block(int32_t startOffset, std::vector<Handle<BlockItemNode>> blockItems)
+        : m_sourcePos(startOffset)
         , m_blockItems(std::move(blockItems))
     {
     }
 
-    std::vector<std::shared_ptr<BlockItemNode>> m_blockItems;
+    Block(SourcePos sourcePos, std::vector<Handle<BlockItemNode>> blockItems)
+        : m_sourcePos(sourcePos)
+        , m_blockItems(std::move(blockItems))
+    {
+    }
+
+    SourcePos m_sourcePos;
+    std::vector<Handle<BlockItemNode>> m_blockItems;
 };
 
-struct FuncDef final : AstNode {
+struct FuncDef {
+    FuncDef() = default;
+
     FuncDef(int32_t startOffset, FuncTypeKeyword funcType,
-        std::shared_ptr<Identifier> identifier_nn,
-        std::shared_ptr<Block> block_nn)
-        : AstNode(startOffset)
+        Handle<Identifier> identifier_nn, Handle<Block> block_nn)
+        : m_sourcePos(startOffset)
         , m_funcType(funcType)
-        , m_identifier_nn(std::move(identifier_nn))
-        , m_block_nn(std::move(block_nn))
+        , m_identifier_nn(identifier_nn)
+        , m_block_nn(block_nn)
     {
     }
 
-    FuncTypeKeyword m_funcType;
-    std::shared_ptr<Identifier> m_identifier_nn;
-    std::shared_ptr<Block> m_block_nn;
-};
-
-struct CompUnit final : AstNode {
-    CompUnit(int32_t startOffset, std::shared_ptr<FuncDef> funcDef_nn)
-        : AstNode(startOffset)
-        , m_funcDef_nn(std::move(funcDef_nn))
+    FuncDef(SourcePos sourcePos, FuncTypeKeyword funcType,
+        Handle<Identifier> identifier_nn, Handle<Block> block_nn)
+        : m_sourcePos(sourcePos)
+        , m_funcType(funcType)
+        , m_identifier_nn(identifier_nn)
+        , m_block_nn(block_nn)
     {
     }
 
-    std::shared_ptr<FuncDef> m_funcDef_nn;
+    SourcePos m_sourcePos;
+    FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
+    Handle<Identifier> m_identifier_nn;
+    Handle<Block> m_block_nn;
 };
+
+struct CompUnit {
+    CompUnit() = default;
+
+    CompUnit(int32_t startOffset, Handle<FuncDef> funcDef_nn)
+        : m_sourcePos(startOffset)
+        , m_funcDef_nn(funcDef_nn)
+    {
+    }
+
+    CompUnit(SourcePos sourcePos, Handle<FuncDef> funcDef_nn)
+        : m_sourcePos(sourcePos)
+        , m_funcDef_nn(funcDef_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    Handle<FuncDef> m_funcDef_nn;
+};
+
+class AST {
+  public:
+    class ScopedCurrent {
+      public:
+        ScopedCurrent() = default;
+
+        explicit ScopedCurrent(AST& ast_nn)
+            : m_previousAst_nn(s_currentAst_nn)
+            , m_previousConstAst_nn(s_currentConstAst_nn)
+            , m_active(true)
+        {
+            s_currentAst_nn = &ast_nn;
+            s_currentConstAst_nn = &ast_nn;
+        }
+
+        explicit ScopedCurrent(const AST& ast_nn)
+            : m_previousAst_nn(s_currentAst_nn)
+            , m_previousConstAst_nn(s_currentConstAst_nn)
+            , m_active(true)
+        {
+            s_currentAst_nn = nullptr;
+            s_currentConstAst_nn = &ast_nn;
+        }
+
+        ScopedCurrent(const ScopedCurrent&) = delete;
+        ScopedCurrent& operator=(const ScopedCurrent&) = delete;
+
+        ScopedCurrent(ScopedCurrent&& other) noexcept
+            : m_previousAst_nn(other.m_previousAst_nn)
+            , m_previousConstAst_nn(other.m_previousConstAst_nn)
+            , m_active(other.m_active)
+        {
+            other.m_active = false;
+        }
+
+        ScopedCurrent& operator=(ScopedCurrent&& other) noexcept
+        {
+            if (this == &other) {
+                return *this;
+            }
+
+            reset();
+            m_previousAst_nn = other.m_previousAst_nn;
+            m_previousConstAst_nn = other.m_previousConstAst_nn;
+            m_active = other.m_active;
+            other.m_active = false;
+            return *this;
+        }
+
+        ~ScopedCurrent() { reset(); }
+
+        void rebind(AST& ast_nn)
+        {
+            if (!m_active) {
+                m_previousAst_nn = s_currentAst_nn;
+                m_previousConstAst_nn = s_currentConstAst_nn;
+                m_active = true;
+            }
+
+            s_currentAst_nn = &ast_nn;
+            s_currentConstAst_nn = &ast_nn;
+        }
+
+      private:
+        void reset()
+        {
+            if (!m_active) {
+                return;
+            }
+
+            s_currentAst_nn = m_previousAst_nn;
+            s_currentConstAst_nn = m_previousConstAst_nn;
+            m_active = false;
+        }
+
+        AST* m_previousAst_nn = nullptr;
+        const AST* m_previousConstAst_nn = nullptr;
+        bool m_active = false;
+    };
+
+    template <typename T, typename TAst> class BasicRef {
+      public:
+        using Pointer = typename std::conditional<std::is_const<TAst>::value,
+            const T*, T*>::type;
+        using Reference = typename std::conditional<std::is_const<TAst>::value,
+            const T&, T&>::type;
+
+        BasicRef() = default;
+
+        BasicRef(TAst* ast_nn, Handle<T> handle)
+            : m_ast_nn(ast_nn)
+            , m_handle(handle)
+        {
+        }
+
+        [[nodiscard]] explicit operator bool() const
+        {
+            return m_ast_nn != nullptr && static_cast<bool>(m_handle);
+        }
+
+        [[nodiscard]] Pointer operator->() const
+        {
+            return &m_ast_nn->get(m_handle);
+        }
+
+        [[nodiscard]] Reference operator*() const
+        {
+            return m_ast_nn->get(m_handle);
+        }
+
+        [[nodiscard]] Handle<T> handle() const { return m_handle; }
+
+      private:
+        TAst* m_ast_nn = nullptr;
+        Handle<T> m_handle {};
+    };
+
+    template <typename T> using Ref = BasicRef<T, AST>;
+    template <typename T> using ConstRef = BasicRef<T, const AST>;
+
+    using Arenas = std::tuple<Arena<Identifier>, Arena<Exp>,
+        Arena<ConstInitVal>, Arena<InitVal>, Arena<ConstDef>, Arena<VarDef>,
+        Arena<ConstDecl>, Arena<VarDecl>, Arena<DeclNode>, Arena<IfStmt>,
+        Arena<WhileStmt>, Arena<BreakStmt>, Arena<ContinueStmt>,
+        Arena<AssignStmt>, Arena<ExpStmt>, Arena<ReturnStmt>, Arena<StmtNode>,
+        Arena<BlockItemNode>, Arena<Block>, Arena<FuncDef>, Arena<CompUnit>>;
+
+    template <typename T> [[nodiscard]] Arena<T>& arena()
+    {
+        return std::get<Arena<T>>(m_arenas);
+    }
+
+    template <typename T> [[nodiscard]] const Arena<T>& arena() const
+    {
+        return std::get<Arena<T>>(m_arenas);
+    }
+
+    template <typename T, typename... Args>
+    [[nodiscard]] Handle<T> emplace(Args&&... args)
+    {
+        return arena<T>().emplace(std::forward<Args>(args)...);
+    }
+
+    template <typename T> [[nodiscard]] T& get(Handle<T> handle)
+    {
+        return handle(m_arenas);
+    }
+
+    template <typename T> [[nodiscard]] const T& get(Handle<T> handle) const
+    {
+        return handle(m_arenas);
+    }
+
+    template <typename T> [[nodiscard]] Ref<T> ref(Handle<T> handle)
+    {
+        return Ref<T>(this, handle);
+    }
+
+    template <typename T> [[nodiscard]] ConstRef<T> ref(Handle<T> handle) const
+    {
+        return ConstRef<T>(this, handle);
+    }
+
+    [[nodiscard]] Arenas& arenas() { return m_arenas; }
+
+    [[nodiscard]] const Arenas& arenas() const { return m_arenas; }
+
+    void clear() { m_arenas = Arenas {}; }
+
+    [[nodiscard]] ScopedCurrent bindCurrent() { return ScopedCurrent(*this); }
+
+    [[nodiscard]] ScopedCurrent bindCurrent() const
+    {
+        return ScopedCurrent(*this);
+    }
+
+  private:
+    template <typename T> friend T& detail::currentAstGet(int32_t index);
+    template <typename T>
+    friend const T& detail::currentAstGetConst(int32_t index);
+
+    inline static thread_local AST* s_currentAst_nn = nullptr;
+    inline static thread_local const AST* s_currentConstAst_nn = nullptr;
+
+    Arenas m_arenas;
+};
+
+namespace detail {
+
+    template <typename T> T& currentAstGet(int32_t index)
+    {
+        if (AST::s_currentAst_nn == nullptr || index < 0) {
+            throw std::runtime_error(
+                "handle dereference requires a bound mutable AST");
+        }
+        return AST::s_currentAst_nn->get(Handle<T>(index));
+    }
+
+    template <typename T> const T& currentAstGetConst(int32_t index)
+    {
+        if (AST::s_currentConstAst_nn == nullptr || index < 0) {
+            throw std::runtime_error("handle dereference requires a bound AST");
+        }
+        return AST::s_currentConstAst_nn->get(Handle<T>(index));
+    }
+
+} // namespace detail
 
 } // namespace yesod::frontend
 
