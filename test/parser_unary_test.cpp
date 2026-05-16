@@ -7,26 +7,26 @@ namespace {
 void testUnaryOperatorsAndParentheses()
 {
     require(evaluateExp(*extractReturnStmt(
-                parseRoot("int plus(){return +42;}")
-                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
+                firstFuncDef(parseRoot("int plus(){return +42;}").m_root)
+                    ->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 42,
         "unary plus should parse");
     require(evaluateExp(*extractReturnStmt(
-                parseRoot("int minus(){return -42;}")
-                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
+                firstFuncDef(parseRoot("int minus(){return -42;}").m_root)
+                    ->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == -42,
         "unary minus should parse");
     require(evaluateExp(*extractReturnStmt(
-                parseRoot("int bang(){return !0;}")
-                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
+                firstFuncDef(parseRoot("int bang(){return !0;}").m_root)
+                    ->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == 1,
         "logical not should parse");
     require(evaluateExp(*extractReturnStmt(
-                parseRoot("int nested(){return -(+42);}")
-                    ->m_funcDef_nn->m_block_nn->m_blockItems.front())
+                firstFuncDef(parseRoot("int nested(){return -(+42);}").m_root)
+                    ->m_block_nn->m_blockItems.front())
                              ->m_exp_nn)
             == -42,
         "nested unary expressions should parse recursively");
@@ -38,8 +38,9 @@ void testUnaryTriviaAndParenthesizedPrimary()
                                "  return /* unary */ - ( /* number */ 052 ) ;\n"
                                "}\n";
     const auto root_nn = parseRoot(source);
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
     const auto returnStmt_nn = extractReturnStmt(
-        root_nn->m_funcDef_nn->m_block_nn->m_blockItems.front());
+        funcDef_nn->m_block_nn->m_blockItems.front());
 
     require(evaluateExp(*returnStmt_nn->m_exp_nn) == -42,
         "unary expression should parse across comments and whitespace");
@@ -77,7 +78,7 @@ void testUnaryRecoveryDiagnostics()
         "missing ')' in primary expression should report the "
         "primary-expression delimiter diagnostic");
     require(
-        evaluateExp(*extractReturnStmt(missingPrimaryRParen.m_root->m_funcDef_nn
+        evaluateExp(*extractReturnStmt(firstFuncDef(missingPrimaryRParen.m_root)
                                            ->m_block_nn->m_blockItems.front())
                          ->m_exp_nn)
             == 1,

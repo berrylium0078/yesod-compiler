@@ -26,6 +26,7 @@ struct SourcePos {
 };
 
 enum class FuncTypeKeyword {
+    voidKeyword,
     intKeyword,
 };
 
@@ -65,6 +66,7 @@ struct VarDef;
 struct ConstDecl;
 struct VarDecl;
 struct DeclNode;
+struct FuncFParam;
 struct IfStmt;
 struct WhileStmt;
 struct BreakStmt;
@@ -75,6 +77,7 @@ struct ReturnStmt;
 struct StmtNode;
 struct BlockItemNode;
 struct Block;
+struct TopLevelItemNode;
 
 struct Identifier {
     Identifier() = default;
@@ -139,7 +142,12 @@ struct Exp {
         UnaryOpKeyword m_op = UnaryOpKeyword::plus;
     };
 
-    using Kind = std::variant<Binary, Unary, LVal, Number>;
+    struct Call {
+        Handle<Identifier> m_func_nn;
+        std::vector<Handle<Exp>> m_params;
+    };
+
+    using Kind = std::variant<Binary, Unary, Call, LVal, Number>;
 
     Exp()
         : m_kind(Number {})
@@ -523,23 +531,51 @@ struct Block {
     std::vector<Handle<BlockItemNode>> m_blockItems;
 };
 
+struct FuncFParam {
+    FuncFParam() = default;
+
+    FuncFParam(int32_t startOffset, BTypeKeyword bType,
+        Handle<Identifier> identifier_nn)
+        : m_sourcePos(startOffset)
+        , m_bType(bType)
+        , m_identifier_nn(identifier_nn)
+    {
+    }
+
+    FuncFParam(SourcePos sourcePos, BTypeKeyword bType,
+        Handle<Identifier> identifier_nn)
+        : m_sourcePos(sourcePos)
+        , m_bType(bType)
+        , m_identifier_nn(identifier_nn)
+    {
+    }
+
+    SourcePos m_sourcePos;
+    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
+    Handle<Identifier> m_identifier_nn;
+};
+
 struct FuncDef {
     FuncDef() = default;
 
     FuncDef(int32_t startOffset, FuncTypeKeyword funcType,
-        Handle<Identifier> identifier_nn, Handle<Block> block_nn)
+        Handle<Identifier> identifier_nn,
+        std::vector<Handle<FuncFParam>> funcFParams, Handle<Block> block_nn)
         : m_sourcePos(startOffset)
         , m_funcType(funcType)
         , m_identifier_nn(identifier_nn)
+        , m_funcFParams(std::move(funcFParams))
         , m_block_nn(block_nn)
     {
     }
 
     FuncDef(SourcePos sourcePos, FuncTypeKeyword funcType,
-        Handle<Identifier> identifier_nn, Handle<Block> block_nn)
+        Handle<Identifier> identifier_nn,
+        std::vector<Handle<FuncFParam>> funcFParams, Handle<Block> block_nn)
         : m_sourcePos(sourcePos)
         , m_funcType(funcType)
         , m_identifier_nn(identifier_nn)
+        , m_funcFParams(std::move(funcFParams))
         , m_block_nn(block_nn)
     {
     }
@@ -547,26 +583,50 @@ struct FuncDef {
     SourcePos m_sourcePos;
     FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
     Handle<Identifier> m_identifier_nn;
+    std::vector<Handle<FuncFParam>> m_funcFParams;
     Handle<Block> m_block_nn;
+};
+
+using TopLevelItem = std::variant<Handle<DeclNode>, Handle<FuncDef>>;
+
+struct TopLevelItemNode {
+    TopLevelItemNode() = default;
+
+    TopLevelItemNode(int32_t startOffset, TopLevelItem topLevelItem)
+        : m_sourcePos(startOffset)
+        , m_topLevelItem(std::move(topLevelItem))
+    {
+    }
+
+    TopLevelItemNode(SourcePos sourcePos, TopLevelItem topLevelItem)
+        : m_sourcePos(sourcePos)
+        , m_topLevelItem(std::move(topLevelItem))
+    {
+    }
+
+    SourcePos m_sourcePos;
+    TopLevelItem m_topLevelItem;
 };
 
 struct CompUnit {
     CompUnit() = default;
 
-    CompUnit(int32_t startOffset, Handle<FuncDef> funcDef_nn)
+    CompUnit(int32_t startOffset,
+        std::vector<Handle<TopLevelItemNode>> topLevelItems)
         : m_sourcePos(startOffset)
-        , m_funcDef_nn(funcDef_nn)
+        , m_topLevelItems(std::move(topLevelItems))
     {
     }
 
-    CompUnit(SourcePos sourcePos, Handle<FuncDef> funcDef_nn)
+    CompUnit(SourcePos sourcePos,
+        std::vector<Handle<TopLevelItemNode>> topLevelItems)
         : m_sourcePos(sourcePos)
-        , m_funcDef_nn(funcDef_nn)
+        , m_topLevelItems(std::move(topLevelItems))
     {
     }
 
     SourcePos m_sourcePos;
-    Handle<FuncDef> m_funcDef_nn;
+    std::vector<Handle<TopLevelItemNode>> m_topLevelItems;
 };
 
 class AST {
@@ -691,10 +751,11 @@ class AST {
 
     using Arenas = std::tuple<Arena<Identifier>, Arena<Exp>,
         Arena<ConstInitVal>, Arena<InitVal>, Arena<ConstDef>, Arena<VarDef>,
-        Arena<ConstDecl>, Arena<VarDecl>, Arena<DeclNode>, Arena<IfStmt>,
-        Arena<WhileStmt>, Arena<BreakStmt>, Arena<ContinueStmt>,
-        Arena<AssignStmt>, Arena<ExpStmt>, Arena<ReturnStmt>, Arena<StmtNode>,
-        Arena<BlockItemNode>, Arena<Block>, Arena<FuncDef>, Arena<CompUnit>>;
+        Arena<ConstDecl>, Arena<VarDecl>, Arena<DeclNode>, Arena<FuncFParam>,
+        Arena<IfStmt>, Arena<WhileStmt>, Arena<BreakStmt>,
+        Arena<ContinueStmt>, Arena<AssignStmt>, Arena<ExpStmt>,
+        Arena<ReturnStmt>, Arena<StmtNode>, Arena<BlockItemNode>, Arena<Block>,
+        Arena<FuncDef>, Arena<TopLevelItemNode>, Arena<CompUnit>>;
 
     template <typename T> [[nodiscard]] Arena<T>& arena()
     {

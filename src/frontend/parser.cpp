@@ -124,8 +124,99 @@ ParseResult<Handle<CompUnit>> Parser::parseCompUnit(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
-    const auto funcDef = parseFuncDef(normalizedOffset);
-    if (!funcDef.m_success) {
+    std::vector<Handle<TopLevelItemNode>> topLevelItems;
+    auto nextOffset = normalizedOffset;
+
+    while (true) {
+        const auto currentOffset = skipTrivia(nextOffset);
+        if (isAtEnd(currentOffset)) {
+            break;
+        }
+
+        const auto constKeyword = matchKeyword(currentOffset, "const");
+        if (constKeyword.m_success) {
+            const auto decl = parseDecl(currentOffset);
+            if (!decl.m_success) {
+                const auto failure = ParseResult<Handle<CompUnit>> {
+                    .m_success = false,
+                    .m_nextOffset = decl.m_nextOffset,
+                    .m_value = {},
+                };
+                m_compUnitMemo.emplace(offset, failure);
+                return failure;
+            }
+
+            topLevelItems.push_back(m_ast.emplace<TopLevelItemNode>(
+                currentOffset, TopLevelItem { decl.m_value }));
+            nextOffset = decl.m_nextOffset;
+            continue;
+        }
+
+        const auto voidKeyword = matchKeyword(currentOffset, "void");
+        if (voidKeyword.m_success) {
+            const auto funcDef = parseFuncDef(currentOffset);
+            if (!funcDef.m_success) {
+                const auto failure = ParseResult<Handle<CompUnit>> {
+                    .m_success = false,
+                    .m_nextOffset = funcDef.m_nextOffset,
+                    .m_value = {},
+                };
+                m_compUnitMemo.emplace(offset, failure);
+                return failure;
+            }
+
+            topLevelItems.push_back(m_ast.emplace<TopLevelItemNode>(
+                currentOffset, TopLevelItem { funcDef.m_value }));
+            nextOffset = funcDef.m_nextOffset;
+            continue;
+        }
+
+        const auto intKeyword = matchKeyword(currentOffset, "int");
+        if (!intKeyword.m_success) {
+            break;
+        }
+
+        const auto identifier = parseIdent(intKeyword.m_nextOffset);
+        if (!identifier.m_success) {
+            break;
+        }
+
+        const auto openParen = matchSymbol(identifier.m_nextOffset, '(');
+        if (openParen.m_success) {
+            const auto funcDef = parseFuncDef(currentOffset);
+            if (!funcDef.m_success) {
+                const auto failure = ParseResult<Handle<CompUnit>> {
+                    .m_success = false,
+                    .m_nextOffset = funcDef.m_nextOffset,
+                    .m_value = {},
+                };
+                m_compUnitMemo.emplace(offset, failure);
+                return failure;
+            }
+
+            topLevelItems.push_back(m_ast.emplace<TopLevelItemNode>(
+                currentOffset, TopLevelItem { funcDef.m_value }));
+            nextOffset = funcDef.m_nextOffset;
+            continue;
+        }
+
+        const auto decl = parseDecl(currentOffset);
+        if (!decl.m_success) {
+            const auto failure = ParseResult<Handle<CompUnit>> {
+                .m_success = false,
+                .m_nextOffset = decl.m_nextOffset,
+                .m_value = {},
+            };
+            m_compUnitMemo.emplace(offset, failure);
+            return failure;
+        }
+
+        topLevelItems.push_back(m_ast.emplace<TopLevelItemNode>(
+            currentOffset, TopLevelItem { decl.m_value }));
+        nextOffset = decl.m_nextOffset;
+    }
+
+    if (topLevelItems.empty()) {
         const auto failure = ParseResult<Handle<CompUnit>> {
             .m_success = false,
             .m_nextOffset = normalizedOffset,
@@ -137,8 +228,9 @@ ParseResult<Handle<CompUnit>> Parser::parseCompUnit(int32_t offset)
 
     const auto result = ParseResult<Handle<CompUnit>> {
         .m_success = true,
-        .m_nextOffset = funcDef.m_nextOffset,
-        .m_value = m_ast.emplace<CompUnit>(normalizedOffset, funcDef.m_value),
+        .m_nextOffset = nextOffset,
+        .m_value = m_ast.emplace<CompUnit>(
+            normalizedOffset, std::move(topLevelItems)),
     };
     m_compUnitMemo.emplace(offset, result);
     return result;
@@ -187,11 +279,46 @@ ParseResult<Handle<FuncDef>> Parser::parseFuncDef(int32_t offset)
         return failure;
     }
 
-    const auto closeParen = matchSymbol(openParen.m_nextOffset, ')');
+    std::vector<Handle<FuncFParam>> funcFParams;
+    auto nextOffset = openParen.m_nextOffset;
+    const auto directCloseParen = matchSymbol(nextOffset, ')');
+    if (!directCloseParen.m_success) {
+        while (true) {
+            const auto bType = parseBType(nextOffset);
+            if (!bType.m_success) {
+                recordCommittedFailure(skipTrivia(nextOffset),
+                    DiagnosticKind::missingFuncRParen,
+                    "malformed function parameter list");
+                nextOffset = recoverToFuncHeaderEnd(nextOffset);
+                break;
+            }
+
+            const auto paramIdentifier = parseIdent(bType.m_nextOffset);
+            if (!paramIdentifier.m_success) {
+                recordCommittedFailure(skipTrivia(bType.m_nextOffset),
+                    DiagnosticKind::expectedIdentifier,
+                    "expected parameter identifier");
+                nextOffset = recoverToFuncHeaderEnd(bType.m_nextOffset);
+                break;
+            }
+
+            funcFParams.push_back(m_ast.emplace<FuncFParam>(nextOffset,
+                bType.m_value, paramIdentifier.m_value));
+            nextOffset = paramIdentifier.m_nextOffset;
+
+            const auto comma = matchSymbol(nextOffset, ',');
+            if (!comma.m_success) {
+                break;
+            }
+            nextOffset = comma.m_nextOffset;
+        }
+    }
+
+    const auto closeParen = matchSymbol(nextOffset, ')');
     if (!closeParen.m_success) {
         const auto recoveryOffset
-            = recoverToFuncHeaderEnd(openParen.m_nextOffset);
-        recordCommittedFailure(skipTrivia(openParen.m_nextOffset),
+            = recoverToFuncHeaderEnd(nextOffset);
+        recordCommittedFailure(skipTrivia(nextOffset),
             DiagnosticKind::missingFuncRParen,
             "missing ')' in function declarator");
 
@@ -216,7 +343,8 @@ ParseResult<Handle<FuncDef>> Parser::parseFuncDef(int32_t offset)
             .m_success = true,
             .m_nextOffset = block.m_nextOffset,
             .m_value = m_ast.emplace<FuncDef>(normalizedOffset,
-                funcType.m_value, identifier.m_value, block.m_value),
+                funcType.m_value, identifier.m_value, std::move(funcFParams),
+                block.m_value),
         };
         m_funcDefMemo.emplace(offset, recoveredResult);
         return recoveredResult;
@@ -237,7 +365,7 @@ ParseResult<Handle<FuncDef>> Parser::parseFuncDef(int32_t offset)
         .m_success = true,
         .m_nextOffset = block.m_nextOffset,
         .m_value = m_ast.emplace<FuncDef>(normalizedOffset, funcType.m_value,
-            identifier.m_value, block.m_value),
+            identifier.m_value, std::move(funcFParams), block.m_value),
     };
     m_funcDefMemo.emplace(offset, result);
     return result;
@@ -250,10 +378,21 @@ ParseResult<FuncTypeKeyword> Parser::parseFuncType(int32_t offset)
         return memoIt->second;
     }
 
-    const auto keyword = matchKeyword(offset, "int");
-    if (!keyword.m_success) {
+    const auto voidKeyword = matchKeyword(offset, "void");
+    if (voidKeyword.m_success) {
+        const auto result = ParseResult<FuncTypeKeyword> {
+            .m_success = true,
+            .m_nextOffset = voidKeyword.m_nextOffset,
+            .m_value = FuncTypeKeyword::voidKeyword,
+        };
+        m_funcTypeMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto intKeyword = matchKeyword(offset, "int");
+    if (!intKeyword.m_success) {
         recordFailure(skipTrivia(offset), DiagnosticKind::expectedKeyword,
-            "expected 'int'");
+            "expected 'void' or 'int'");
         const auto failure = ParseResult<FuncTypeKeyword> {
             .m_success = false,
             .m_nextOffset = skipTrivia(offset),
@@ -265,7 +404,7 @@ ParseResult<FuncTypeKeyword> Parser::parseFuncType(int32_t offset)
 
     const auto result = ParseResult<FuncTypeKeyword> {
         .m_success = true,
-        .m_nextOffset = keyword.m_nextOffset,
+        .m_nextOffset = intKeyword.m_nextOffset,
         .m_value = FuncTypeKeyword::intKeyword,
     };
     m_funcTypeMemo.emplace(offset, result);
@@ -1449,6 +1588,18 @@ ParseResult<Handle<ReturnStmt>> Parser::parseReturnStmt(int32_t offset)
         return failure;
     }
 
+    const auto immediateSemicolon = matchSymbol(keyword.m_nextOffset, ';');
+    if (immediateSemicolon.m_success) {
+        const auto result = ParseResult<Handle<ReturnStmt>> {
+            .m_success = true,
+            .m_nextOffset = immediateSemicolon.m_nextOffset,
+            .m_value = m_ast.emplace<ReturnStmt>(
+                keyword.m_startOffset, Handle<Exp> {}),
+        };
+        m_returnStmtMemo.emplace(offset, result);
+        return result;
+    }
+
     const auto exp = parseExp(keyword.m_nextOffset);
     if (!exp.m_success) {
         bool keepInnerDiagnostic = false;
@@ -1472,13 +1623,20 @@ ParseResult<Handle<ReturnStmt>> Parser::parseReturnStmt(int32_t offset)
                 DiagnosticKind::malformedReturnValue, "malformed return value");
         }
 
-        const auto failure = ParseResult<Handle<ReturnStmt>> {
-            .m_success = false,
-            .m_nextOffset = recoverToStmtBoundary(keyword.m_nextOffset),
-            .m_value = {},
+        auto recoveredOffset = recoverToStmtBoundary(keyword.m_nextOffset);
+        const auto recoveredSemicolon = matchSymbol(recoveredOffset, ';');
+        if (recoveredSemicolon.m_success) {
+            recoveredOffset = recoveredSemicolon.m_nextOffset;
+        }
+
+        const auto recoveredResult = ParseResult<Handle<ReturnStmt>> {
+            .m_success = true,
+            .m_nextOffset = recoveredOffset,
+            .m_value = m_ast.emplace<ReturnStmt>(
+                keyword.m_startOffset, Handle<Exp> {}),
         };
-        m_returnStmtMemo.emplace(offset, failure);
-        return failure;
+        m_returnStmtMemo.emplace(offset, recoveredResult);
+        return recoveredResult;
     }
 
     const auto semicolon = matchSymbol(exp.m_nextOffset, ';');
@@ -1963,6 +2121,78 @@ ParseResult<Handle<Exp>> Parser::parseUnaryExp(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
+    if (!isAtEnd(normalizedOffset)
+        && isIdentifierStart(m_source[normalizedOffset])) {
+        const auto identifier = parseIdent(normalizedOffset);
+        if (identifier.m_success) {
+            const auto openParen = matchSymbol(identifier.m_nextOffset, '(');
+            if (openParen.m_success) {
+                std::vector<Handle<Exp>> params;
+                auto nextOffset = openParen.m_nextOffset;
+                const auto directCloseParen = matchSymbol(nextOffset, ')');
+                if (!directCloseParen.m_success) {
+                    while (true) {
+                        const auto arg = parseExp(nextOffset);
+                        if (!arg.m_success) {
+                            const auto failure = ParseResult<Handle<Exp>> {
+                                .m_success = false,
+                                .m_nextOffset = arg.m_nextOffset,
+                                .m_value = {},
+                            };
+                            m_unaryExpMemo.emplace(offset, failure);
+                            return failure;
+                        }
+
+                        params.push_back(arg.m_value);
+                        nextOffset = arg.m_nextOffset;
+                        const auto comma = matchSymbol(nextOffset, ',');
+                        if (!comma.m_success) {
+                            break;
+                        }
+                        nextOffset = comma.m_nextOffset;
+                    }
+                }
+
+                const auto closeParen = matchSymbol(nextOffset, ')');
+                if (!closeParen.m_success) {
+                    recordCommittedFailure(skipTrivia(nextOffset),
+                        DiagnosticKind::missingPrimaryRParen,
+                        "missing ')' after function call");
+                    auto recoveredOffset = recoverToExprRParen(nextOffset);
+                    const auto recoveredParen
+                        = matchSymbol(recoveredOffset, ')');
+                    if (recoveredParen.m_success) {
+                        recoveredOffset = recoveredParen.m_nextOffset;
+                    }
+
+                    const auto recoveredResult = ParseResult<Handle<Exp>> {
+                        .m_success = true,
+                        .m_nextOffset = recoveredOffset,
+                        .m_value = m_ast.emplace<Exp>(normalizedOffset,
+                            Exp::Kind { Exp::Call {
+                                .m_func_nn = identifier.m_value,
+                                .m_params = std::move(params),
+                            } }),
+                    };
+                    m_unaryExpMemo.emplace(offset, recoveredResult);
+                    return recoveredResult;
+                }
+
+                const auto result = ParseResult<Handle<Exp>> {
+                    .m_success = true,
+                    .m_nextOffset = closeParen.m_nextOffset,
+                    .m_value = m_ast.emplace<Exp>(normalizedOffset,
+                        Exp::Kind { Exp::Call {
+                            .m_func_nn = identifier.m_value,
+                            .m_params = std::move(params),
+                        } }),
+                };
+                m_unaryExpMemo.emplace(offset, result);
+                return result;
+            }
+        }
+    }
+
     const auto primaryExp = parsePrimaryExp(normalizedOffset);
     if (primaryExp.m_success) {
         const auto result = ParseResult<Handle<Exp>> {

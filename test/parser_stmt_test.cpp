@@ -7,7 +7,8 @@ namespace {
 void testExpressionAndEmptyStatementsParse()
 {
     const auto root_nn = parseRoot("int main(){1 + 2; ; return 0;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 3,
         "block should contain expression statement, empty statement, and "
@@ -28,7 +29,8 @@ void testNestedBlockStatementsParse()
 {
     const auto root_nn
         = parseRoot("int main(){{int inner = 1; return inner;} return 0;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 2,
         "outer block should contain nested block statement and trailing "

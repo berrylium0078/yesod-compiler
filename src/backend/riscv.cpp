@@ -10,6 +10,29 @@
 namespace yesod::backend {
 namespace {
 
+    bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
+
+    bool isAllDigits(const std::string& text)
+    {
+        if (text.empty()) {
+            return false;
+        }
+        for (const char ch : text) {
+            if (!isDigit(ch)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string normalizeIdentifierStem(std::string stem)
+    {
+        if (!stem.empty() && isDigit(stem.front()) && !isAllDigits(stem)) {
+            stem.insert(stem.begin(), '_');
+        }
+        return stem;
+    }
+
     using yesod::koopa::AllocValue;
     using yesod::koopa::BasicBlock;
     using yesod::koopa::BinaryValue;
@@ -84,7 +107,7 @@ namespace {
             if (label.empty()) {
                 label = basicBlock.isEntry() ? "entry" : "bb";
             }
-            return label;
+            return normalizeIdentifierStem(std::move(label));
         }
 
         void assignBlockLabels(const Function& function)

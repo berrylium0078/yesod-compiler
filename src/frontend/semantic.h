@@ -17,9 +17,14 @@ enum class SemanticDiagnosticKind {
     useBeforeDefinition,
     doubleDefinition,
     nonConstantConstInitializer,
+    nonConstantGlobalInitializer,
     assignToConst,
     breakOutsideWhile,
     continueOutsideWhile,
+    invalidCallTarget,
+    callArityMismatch,
+    typeMismatch,
+    returnTypeMismatch,
 };
 
 struct SemanticDiagnostic {
@@ -31,14 +36,27 @@ struct SemanticDiagnostic {
 enum class ExpType {
     integer,
     boolean,
+    voidType,
+};
+
+enum class SemanticSymbolKind {
+    object,
+    function,
+};
+
+struct SemanticFunctionSignature {
+    ExpType m_returnType = ExpType::integer;
+    std::vector<ExpType> m_paramTypes;
 };
 
 struct SemanticSymbol {
     int32_t m_id;
     std::string m_name;
+    SemanticSymbolKind m_kind = SemanticSymbolKind::object;
     bool m_isConst;
     bool m_hasConstantValue;
     int32_t m_constantValue;
+    SemanticFunctionSignature m_functionSignature;
 };
 
 struct SemanticExpInfo {
@@ -145,6 +163,8 @@ class SemanticAnalyzer {
     };
 
     void analyzeCompUnit(Handle<CompUnit> compUnit_nn);
+    void declareBuiltinFunctions();
+    void declareFuncDef(Handle<FuncDef> funcDef_nn);
     void analyzeFuncDef(Handle<FuncDef> funcDef_nn);
     void analyzeBlock(Handle<Block> block_nn);
     void analyzeBlockItemNode(Handle<BlockItemNode> blockItemNode_nn);
@@ -166,8 +186,12 @@ class SemanticAnalyzer {
     [[nodiscard]] int32_t resolveSymbol(Handle<Identifier> identifier_nn);
     [[nodiscard]] SemanticSymbol makePlaceholderSymbol(
         Handle<Identifier> identifier_nn);
-    [[nodiscard]] SemanticSymbol makeSymbol(Handle<Identifier> identifier_nn,
-        bool isConst, bool hasConstantValue, int32_t constantValue);
+    [[nodiscard]] SemanticSymbol makeObjectSymbol(
+        Handle<Identifier> identifier_nn, bool isConst,
+        bool hasConstantValue, int32_t constantValue);
+    [[nodiscard]] SemanticSymbol makeFunctionSymbol(
+        Handle<Identifier> identifier_nn, ExpType returnType,
+        const std::vector<ExpType>& paramTypes);
     template <typename T>
     [[nodiscard]] const T& node(Handle<T> handle_nn, const char* message) const;
     [[nodiscard]] AnalyzedExp normalizeToArithmetic(AnalyzedExp analyzedExp);
@@ -179,9 +203,11 @@ class SemanticAnalyzer {
     void recordExpFacts(Handle<Exp> exp_nn, const AnalyzedExp& analyzedExp);
     void pushScope();
     void popScope();
+    [[nodiscard]] bool isGlobalScope() const;
     [[nodiscard]] bool defineSymbol(
         const std::string& name, Handle<Identifier> identifier_nn);
     [[nodiscard]] std::optional<Handle<WhileStmt>> currentLoop() const;
+    [[nodiscard]] ExpType lowerFuncType(FuncTypeKeyword funcType) const;
     void recordDiagnostic(
         SemanticDiagnosticKind kind, int32_t offset, std::string message);
 
@@ -193,6 +219,7 @@ class SemanticAnalyzer {
     std::vector<Scope> m_scopeStack;
     std::vector<Handle<WhileStmt>> m_loopStack;
     std::vector<SemanticDiagnostic> m_diagnostics;
+    std::optional<ExpType> m_currentFuncReturnType;
     int32_t m_nextSymbolId = 0;
 };
 
@@ -208,6 +235,10 @@ const T& SemanticAnalyzer::node(Handle<T> handle_nn, const char* message) const
 inline SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToArithmetic(
     AnalyzedExp analyzedExp)
 {
+    if (analyzedExp.m_valueKind == ExpType::voidType) {
+        return analyzedExp;
+    }
+
     if (analyzedExp.m_valueKind == ExpType::integer) {
         return analyzedExp;
     }
@@ -222,6 +253,10 @@ inline SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToArithmetic(
 inline SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToBoolean(
     AnalyzedExp analyzedExp)
 {
+    if (analyzedExp.m_valueKind == ExpType::voidType) {
+        return analyzedExp;
+    }
+
     if (analyzedExp.m_valueKind == ExpType::boolean) {
         return analyzedExp;
     }

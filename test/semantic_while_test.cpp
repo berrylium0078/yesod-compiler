@@ -109,8 +109,9 @@ void testLoopControlStatementsBindToInnermostWhile()
         "int main(){while (1) {while (2) {continue;} break;} return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto outerWhile_nn = requireWhileStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn
         = requireWhileStmt(requireStmtNode(outerBody_nn->m_blockItems[0]));
@@ -136,8 +137,9 @@ void testNestedInnerLoopBreakAndContinueBothBindInnermostWhile()
         "int main(){while (1) {while (2) {break; continue;}} return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto outerWhile_nn = requireWhileStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto outerBody_nn = requireBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn
         = requireWhileStmt(requireStmtNode(outerBody_nn->m_blockItems[0]));
@@ -162,8 +164,9 @@ void testLoopControlInsideWhileIfBindsContainingWhile()
         "int main(){while (1) if (2) break; else continue; return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto whileStmt_nn = requireWhileStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        funcDef_nn->m_block_nn->m_blockItems[0]));
     const auto ifStmt_nn = requireIfStmt(whileStmt_nn->m_bodyStmt_nn);
     const auto breakStmt_nn = requireBreakStmt(ifStmt_nn->m_thenStmt_nn);
     const auto continueStmt_nn = requireContinueStmt(ifStmt_nn->m_elseStmt_nn);

@@ -8,7 +8,8 @@ void testIfElseParses()
 {
     const auto root_nn
         = parseRoot("int main(){if (1) return 1; else return 0;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 1,
         "top-level block should contain one if statement");
@@ -29,8 +30,8 @@ void testDanglingElseBindsInnermostIf()
 {
     const auto root_nn
         = parseRoot("int main(){if (1) if (2) return 3; else return 4;}");
-    const auto outerIf_nn
-        = extractIfStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto outerIf_nn = extractIfStmt(funcDef_nn->m_block_nn->m_blockItems[0]);
 
     require(outerIf_nn->m_elseStmt_nn == nullptr,
         "dangling else should not attach to the outer if");

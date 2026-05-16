@@ -175,6 +175,28 @@ inline const SemanticDiagnostic& firstDiagnostic(const AnalyzedOutput& output)
     return output.m_diagnostics.front();
 }
 
+inline ast::Handle<ast::FuncDef> firstFuncDef(
+    const ast::Handle<ast::CompUnit>& compUnit_nn)
+{
+    require(compUnit_nn != nullptr, "expected compilation unit node");
+    for (const auto topLevelItem_nn : compUnit_nn->m_topLevelItems) {
+        ast::Handle<ast::FuncDef> funcDef_nn;
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  ast::Handle<ast::FuncDef>>) {
+                    funcDef_nn = topLevelAlt;
+                }
+            },
+            topLevelItem_nn->m_topLevelItem);
+        if (funcDef_nn) {
+            return funcDef_nn;
+        }
+    }
+    fail("expected at least one function definition in compilation unit");
+}
+
 template <typename T>
 inline ast::Handle<ast::Identifier> requireSymbolIdentifier(ast::Handle<T> node)
 {

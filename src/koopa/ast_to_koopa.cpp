@@ -11,9 +11,34 @@ namespace yesod::koopa {
 
 namespace {
 
+    bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
+
+    bool isAllDigits(const std::string& text)
+    {
+        if (text.empty()) {
+            return false;
+        }
+        for (const char ch : text) {
+            if (!isDigit(ch)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string normalizeIdentifierStem(std::string stem)
+    {
+        if (!stem.empty() && isDigit(stem.front()) && !isAllDigits(stem)) {
+            stem.insert(stem.begin(), '_');
+        }
+        return stem;
+    }
+
     Type* lowerFuncType(frontend::FuncTypeKeyword funcType)
     {
         switch (funcType) {
+        case frontend::FuncTypeKeyword::voidKeyword:
+            return UnitType::get();
         case frontend::FuncTypeKeyword::intKeyword:
             return Int32Type::get();
         }
@@ -21,14 +46,32 @@ namespace {
         throw std::runtime_error("unsupported function type");
     }
 
+    Type* lowerExpType(frontend::ExpType expType)
+    {
+        switch (expType) {
+        case frontend::ExpType::integer:
+        case frontend::ExpType::boolean:
+            return Int32Type::get();
+        case frontend::ExpType::voidType:
+            return UnitType::get();
+        }
+
+        throw std::runtime_error("unsupported semantic expression type");
+    }
+
     std::string makeFunctionName(const std::string& identifier)
+    {
+        return "@" + identifier;
+    }
+
+    std::string makeGlobalName(const std::string& identifier)
     {
         return "@" + identifier;
     }
 
     std::string makeTempName(int32_t& nextTempId)
     {
-        return "%" + std::to_string(nextTempId++);
+        return "%t" + std::to_string(nextTempId++);
     }
 
 } // namespace
@@ -39,21 +82,150 @@ Program* Generator::generate(const frontend::AST& ast,
 {
     auto* program = Program::create();
     const auto& parsedCompUnit = ast.get(compUnit);
-    program->pushFunc(
-        generateFuncDef(ast, parsedCompUnit.m_funcDef_nn, semanticInfo));
+    std::unordered_map<int32_t, Value*> globalStorageBySymbolId;
+    std::unordered_map<int32_t, Function*> functionBySymbolId;
+    std::unordered_map<int32_t, size_t> symbolUseCount;
+    std::unordered_set<int32_t> definedFunctionSymbolIds;
+
+    for (const auto& [identifier_nn, symbol] : semanticInfo.m_symbolByIdentifier) {
+        (void)identifier_nn;
+        ++symbolUseCount[symbol.m_id];
+    }
+
+    for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
+        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType, frontend::Handle<frontend::FuncDef>>) {
+                    const auto& funcDef = ast.get(topLevelAlt);
+                    const auto* functionSymbol
+                        = semanticInfo.findSymbol(funcDef.m_identifier_nn);
+                    if (functionSymbol == nullptr) {
+                        throw std::runtime_error(
+                            "function declaration missing semantic symbol during lowering");
+                    }
+                    definedFunctionSymbolIds.insert(functionSymbol->m_id);
+                }
+            },
+            topLevelItem.m_topLevelItem);
+    }
+
+    for (const auto& [identifier_nn, symbol] : semanticInfo.m_symbolByIdentifier) {
+        (void)identifier_nn;
+        if (symbol.m_kind != frontend::SemanticSymbolKind::function) {
+            continue;
+        }
+        if (definedFunctionSymbolIds.find(symbol.m_id)
+            != definedFunctionSymbolIds.end()) {
+            continue;
+        }
+        if (symbolUseCount[symbol.m_id] <= 1) {
+            continue;
+        }
+
+        auto [it, inserted] = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
+        if (!inserted) {
+            continue;
+        }
+
+        auto* function = createExternalFunctionDecl(symbol);
+        it->second = function;
+        program->pushFunc(function);
+    }
+
+    for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
+        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  frontend::Handle<frontend::DeclNode>>) {
+                    generateGlobalDecl(topLevelAlt, *program, ast,
+                        semanticInfo, globalStorageBySymbolId);
+                } else {
+                    auto* function
+                        = createFunctionDecl(ast, topLevelAlt, semanticInfo);
+                    const auto& symbol = requireSymbolForIdentifier(
+                        ast.get(topLevelAlt).m_identifier_nn, semanticInfo,
+                        "function definition is missing a symbol binding");
+                    functionBySymbolId[symbol.m_id] = function;
+                    program->pushFunc(function);
+                }
+            },
+            topLevelItem.m_topLevelItem);
+    }
+
+    for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
+        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  frontend::Handle<frontend::FuncDef>>) {
+                    const auto& symbol = requireSymbolForIdentifier(
+                        ast.get(topLevelAlt).m_identifier_nn, semanticInfo,
+                        "function definition is missing a symbol binding");
+                    const auto functionIt = functionBySymbolId.find(symbol.m_id);
+                    if (functionIt == functionBySymbolId.end()) {
+                        throw std::runtime_error(
+                            "function definition is missing a lowered function declaration");
+                    }
+                    (void)generateFuncDef(ast, topLevelAlt, semanticInfo,
+                        globalStorageBySymbolId, functionBySymbolId,
+                        functionIt->second);
+                }
+            },
+            topLevelItem.m_topLevelItem);
+    }
+
     return program;
+}
+
+Function* Generator::createFunctionDecl(const frontend::AST& ast,
+    frontend::Handle<frontend::FuncDef> funcDef,
+    const frontend::SemanticInfo&) const
+{
+    const auto& parsedFuncDef = ast.get(funcDef);
+    const auto& identifier = ast.get(parsedFuncDef.m_identifier_nn);
+    std::vector<Type*> paramTypes(parsedFuncDef.m_funcFParams.size(),
+        Int32Type::get());
+    auto* function = Function::create(
+        FunctionType::get(lowerFuncType(parsedFuncDef.m_funcType), paramTypes),
+        makeFunctionName(identifier.m_name));
+    for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
+        function->pushParam(FuncArgRefValue::get(i, Int32Type::get()));
+    }
+    return function;
+}
+
+Function* Generator::createExternalFunctionDecl(
+    const frontend::SemanticSymbol& symbol) const
+{
+    std::vector<Type*> paramTypes;
+    paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
+    for (const auto paramType : symbol.m_functionSignature.m_paramTypes) {
+        paramTypes.push_back(lowerExpType(paramType));
+    }
+    auto* function = Function::create(FunctionType::get(
+                                         lowerExpType(symbol.m_functionSignature.m_returnType),
+                                         paramTypes),
+        makeFunctionName(symbol.m_name));
+    for (size_t i = 0; i != paramTypes.size(); ++i) {
+        function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
+    }
+    return function;
 }
 
 Function* Generator::generateFuncDef(const frontend::AST& ast,
     frontend::Handle<frontend::FuncDef> funcDef,
-    const frontend::SemanticInfo& semanticInfo) const
+    const frontend::SemanticInfo& semanticInfo,
+    const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
+    const std::unordered_map<int32_t, Function*>& functionBySymbolId,
+    Function* function_nn) const
 {
     const auto& parsedFuncDef = ast.get(funcDef);
-    const auto& identifier = ast.get(parsedFuncDef.m_identifier_nn);
-    auto* function = Function::create(
-        FunctionType::get(
-            lowerFuncType(parsedFuncDef.m_funcType), std::vector<Type*> {}),
-        makeFunctionName(identifier.m_name));
+    auto* function = function_nn;
     auto* entryBlock = BasicBlock::createEntry("%entry");
     auto* endBlock = BasicBlock::createNonEntry("%end");
     function->pushBB(entryBlock);
@@ -63,16 +235,72 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
         .m_function_nn = function,
         .m_currentBasicBlock_nn = entryBlock,
         .m_endBlock_nn = endBlock,
+        .m_storageBySymbolId = globalStorageBySymbolId,
+        .m_functionBySymbolId = functionBySymbolId,
     };
+    for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
+        const auto& funcFParam = ast.get(parsedFuncDef.m_funcFParams[i]);
+        const auto& symbol = requireSymbolForIdentifier(funcFParam.m_identifier_nn,
+            semanticInfo, "function parameter is missing a symbol binding");
+        auto* alloc = AllocValue::get(Int32Type::get(),
+            makeUniqueLocalName(symbol, state.m_usedSymbolNames));
+        entryBlock->pushInst(alloc);
+        entryBlock->pushInst(StoreValue::get(function->getParam(i), alloc));
+        state.m_storageBySymbolId[symbol.m_id] = alloc;
+    }
     generateBlock(parsedFuncDef.m_block_nn, state);
     finalizeBasicBlock(*state.m_currentBasicBlock_nn, *endBlock);
-    endBlock->pushInst(ReturnValue::get(IntegerValue::get(0)));
+    if (parsedFuncDef.m_funcType == frontend::FuncTypeKeyword::voidKeyword) {
+        endBlock->pushInst(ReturnValue::get(nullptr));
+    } else {
+        endBlock->pushInst(ReturnValue::get(IntegerValue::get(0)));
+    }
     function->pushBB(endBlock);
     for (auto* basicBlock : function->bbs()) {
         basicBlock->validate();
     }
     function->validate();
     return function;
+}
+
+void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode,
+    Program& program, const frontend::AST& ast,
+    const frontend::SemanticInfo& semanticInfo,
+    std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
+{
+    const auto& parsedDeclNode = ast.get(declNode);
+    std::visit(
+        [&](const auto& declAlt) {
+            using AltType = std::decay_t<decltype(declAlt)>;
+            if constexpr (std::is_same_v<AltType,
+                              frontend::Handle<frontend::ConstDecl>>) {
+                return;
+            } else {
+                const auto& varDecl = ast.get(declAlt);
+                for (const auto varDef_nn : varDecl.m_varDefs) {
+                    const auto& varDef = ast.get(varDef_nn);
+                    const auto& symbol = requireSymbolForIdentifier(
+                        varDef.m_identifier_nn, semanticInfo,
+                        "global variable is missing its symbol binding");
+                    Value* initValue = ZeroInitValue::get(Int32Type::get());
+                    if (varDef.m_initVal_nn) {
+                        const auto& initVal = ast.get(varDef.m_initVal_nn);
+                        const auto constantValue
+                            = semanticInfo.findConstantValue(initVal.m_exp_nn);
+                        if (!constantValue.has_value()) {
+                            throw std::runtime_error(
+                                "global variable initializer must be constant");
+                        }
+                        initValue = IntegerValue::get(*constantValue);
+                    }
+                    auto* globalAlloc = GlobalAllocValue::get(
+                        initValue, makeGlobalName(symbol.m_name));
+                    program.pushVal(globalAlloc);
+                    globalStorageBySymbolId[symbol.m_id] = globalAlloc;
+                }
+            }
+        },
+        parsedDeclNode.m_decl);
 }
 
 void Generator::generateBlock(frontend::Handle<frontend::Block> block,
@@ -343,8 +571,9 @@ ReturnValue* Generator::generateReturnStmt(
 {
     const auto& parsedReturnStmt
         = node(returnStmt, state, "return statement is null");
-    auto* returnValue
-        = ReturnValue::get(generateExp(parsedReturnStmt.m_exp_nn, state));
+    auto* returnValue = ReturnValue::get(parsedReturnStmt.m_exp_nn
+            ? generateExp(parsedReturnStmt.m_exp_nn, state)
+            : nullptr);
     state.m_currentBasicBlock_nn->pushInst(returnValue);
     return returnValue;
 }
@@ -370,6 +599,31 @@ Value* Generator::generateExp(
             } else if constexpr (std::is_same_v<AltType,
                                      frontend::Exp::Unary>) {
                 return generateUnaryExpValue(expAlt, state);
+            } else if constexpr (std::is_same_v<AltType,
+                                     frontend::Exp::Call>) {
+                const auto& symbol = requireSymbolForIdentifier(
+                    expAlt.m_func_nn, *state.m_semanticInfo_nn,
+                    "call target is missing a symbol binding");
+                const auto functionIt = state.m_functionBySymbolId.find(symbol.m_id);
+                if (functionIt == state.m_functionBySymbolId.end()) {
+                    throw std::runtime_error(
+                        "call target is missing a lowered function binding");
+                }
+                std::vector<Value*> args;
+                args.reserve(expAlt.m_params.size());
+                for (const auto arg_nn : expAlt.m_params) {
+                    args.push_back(generateExp(arg_nn, state));
+                }
+                const auto* functionType = dynamic_cast<FunctionType*>(
+                    functionIt->second->getFuncType());
+                const std::string callName
+                    = functionType->getResultType()->isUnitType()
+                    ? std::string {}
+                    : makeTempName(state.m_nextTempId);
+                auto* callValue = CallValue::get(
+                    functionIt->second, std::move(args), callName);
+                state.m_currentBasicBlock_nn->pushInst(callValue);
+                return callValue;
             } else if constexpr (std::is_same_v<AltType, frontend::LVal>) {
                 const auto& symbol = requireSymbolForIdentifier(
                     expAlt.m_identifier_nn, *state.m_semanticInfo_nn,
@@ -600,7 +854,8 @@ std::string Generator::makeUniqueLocalName(
     const frontend::SemanticSymbol& symbol,
     std::unordered_set<std::string>& usedSymbolNames) const
 {
-    const std::string baseName = "%" + symbol.m_name;
+    const std::string baseName
+        = "%" + normalizeIdentifierStem(symbol.m_name);
     if (usedSymbolNames.insert(baseName).second) {
         return baseName;
     }

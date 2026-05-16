@@ -8,6 +8,8 @@
 #include <string>
 #include <type_traits>
 
+#include <cctype>
+
 #include "frontend/ast.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
@@ -23,8 +25,8 @@ using yesod::frontend::Parser;
 using yesod::frontend::SemanticAnalyzer;
 using namespace yesod::koopa;
 
-static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_funcDef_nn),
-    Handle<yesod::frontend::FuncDef>>);
+static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_topLevelItems),
+    std::vector<Handle<yesod::frontend::TopLevelItemNode>>>);
 
 [[noreturn]] inline void fail(const std::string& message)
 {
@@ -37,6 +39,26 @@ inline void require(bool condition, const std::string& message)
     if (!condition) {
         fail(message);
     }
+}
+
+inline bool matchesExpectedTempName(
+    const std::string& actualName, const std::string& expectedName)
+{
+    if (actualName == expectedName) {
+        return true;
+    }
+
+    if (expectedName.size() < 2 || expectedName.front() != '%') {
+        return false;
+    }
+
+    for (size_t i = 1; i < expectedName.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(expectedName[i]))) {
+            return false;
+        }
+    }
+
+    return actualName == "%t" + expectedName.substr(1);
 }
 
 struct ParsedOutput {
@@ -97,6 +119,28 @@ inline ParsedOutput parseRoot(const std::string& source)
     return output;
 }
 
+inline Handle<yesod::frontend::FuncDef> firstFuncDef(
+    const Handle<CompUnit>& compUnit_nn)
+{
+    require(compUnit_nn != nullptr, "expected compilation unit node");
+    for (const auto topLevelItem_nn : compUnit_nn->m_topLevelItems) {
+        Handle<yesod::frontend::FuncDef> funcDef_nn;
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  Handle<yesod::frontend::FuncDef>>) {
+                    funcDef_nn = topLevelAlt;
+                }
+            },
+            topLevelItem_nn->m_topLevelItem);
+        if (funcDef_nn) {
+            return funcDef_nn;
+        }
+    }
+    fail("expected at least one function definition in compilation unit");
+}
+
 inline std::unique_ptr<Program> generateProgram(const std::string& source)
 {
     auto rootOutput = parseRoot(source);
@@ -116,6 +160,29 @@ inline const Function* requireOnlyFunction(const Program& program)
 {
     require(program.getNumFuncs() == 1, "expected exactly one function");
     return program.getFunc(0);
+}
+
+inline const Function* requireFunctionByName(
+    const Program& program, const std::string& expectedName)
+{
+    for (const auto* function : program.funcs()) {
+        if (function->getName() == expectedName) {
+            return function;
+        }
+    }
+    fail("expected function named '" + expectedName + "'");
+}
+
+inline const GlobalAllocValue* requireGlobalAlloc(
+    const Value* value, const std::string& expectedName)
+{
+    require(value != nullptr, "expected global alloc value");
+    require(value->isGlobalAllocValue(), "expected global alloc value kind");
+    const auto* globalAlloc = dynamic_cast<const GlobalAllocValue*>(value);
+    require(globalAlloc != nullptr, "expected global alloc value cast");
+    require(globalAlloc->getName() == expectedName,
+        "global alloc should preserve the expected name");
+    return globalAlloc;
 }
 
 inline const BasicBlock* requireEntryBlock(const Function& function)
@@ -170,7 +237,7 @@ inline const BinaryValue* requireBinary(const Value* value,
     require(binaryValue != nullptr, "expected binary instruction cast");
     require(binaryValue->getOp() == expectedOp,
         "binary instruction should use the expected opcode");
-    require(binaryValue->getName() == expectedName,
+    require(matchesExpectedTempName(binaryValue->getName(), expectedName),
         "binary instruction should use the expected temporary name");
     return binaryValue;
 }
@@ -182,7 +249,8 @@ inline const AllocValue* requireAlloc(
     require(value->isAllocValue(), "expected alloc instruction");
     const auto* allocValue = dynamic_cast<const AllocValue*>(value);
     require(allocValue != nullptr, "expected alloc instruction cast");
-    require(allocValue->getName() == expectedName,
+    require(matchesExpectedTempName(allocValue->getName(), expectedName)
+            || allocValue->getName() == expectedName,
         "alloc instruction should preserve the expected storage name");
     return allocValue;
 }
@@ -196,7 +264,7 @@ inline const LoadValue* requireLoad(const Value* value,
     require(loadValue != nullptr, "expected load instruction cast");
     require(loadValue->getSource() == expectedSource,
         "load instruction should read from the expected storage");
-    require(loadValue->getName() == expectedName,
+    require(matchesExpectedTempName(loadValue->getName(), expectedName),
         "load instruction should use the expected temporary name");
     return loadValue;
 }
@@ -220,6 +288,18 @@ inline const ReturnValue* requireReturn(const Value* value)
     const auto* returnValue = dynamic_cast<const ReturnValue*>(value);
     require(returnValue != nullptr, "expected return instruction cast");
     return returnValue;
+}
+
+inline const CallValue* requireCall(
+    const Value* value, const Function* expectedCallee)
+{
+    require(value != nullptr, "expected call value");
+    require(value->isCallValue(), "expected call instruction");
+    const auto* callValue = dynamic_cast<const CallValue*>(value);
+    require(callValue != nullptr, "expected call instruction cast");
+    require(callValue->getCallee() == expectedCallee,
+        "call instruction should target the expected function");
+    return callValue;
 }
 
 inline const JumpValue* requireJump(

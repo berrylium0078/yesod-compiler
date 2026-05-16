@@ -610,9 +610,9 @@ koopa_raw_function_t Function::dumpRaw(const Function* Func)
     koopa_raw_function_t& Entry = Memo[Func];
     if (Entry == nullptr) {
         koopa_raw_function_data_t* RawFunc = Func->dumpMeta();
+        Entry = RawFunc;
         Value::dumpSlice(RawFunc->params, Func->params());
         BasicBlock::dumpSlice(RawFunc->bbs, Func->bbs());
-        Entry = RawFunc;
     }
     return Entry;
 }

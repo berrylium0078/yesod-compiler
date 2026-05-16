@@ -32,14 +32,27 @@ class Generator {
         int32_t m_nextTempId = 1;
         int32_t m_nextBlockId = 1;
         std::unordered_map<int32_t, Value*> m_storageBySymbolId;
+        std::unordered_map<int32_t, Function*> m_functionBySymbolId;
         std::unordered_map<frontend::Handle<frontend::WhileStmt>, LoopBlocks>
             m_loopBlocksByWhileStmt;
         std::unordered_set<std::string> m_usedSymbolNames;
     };
 
-    [[nodiscard]] Function* generateFuncDef(const frontend::AST& ast,
+    [[nodiscard]] Function* createFunctionDecl(const frontend::AST& ast,
         frontend::Handle<frontend::FuncDef> funcDef,
         const frontend::SemanticInfo& semanticInfo) const;
+    [[nodiscard]] Function* createExternalFunctionDecl(
+        const frontend::SemanticSymbol& symbol) const;
+    [[nodiscard]] Function* generateFuncDef(const frontend::AST& ast,
+        frontend::Handle<frontend::FuncDef> funcDef,
+        const frontend::SemanticInfo& semanticInfo,
+        const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
+        const std::unordered_map<int32_t, Function*>& functionBySymbolId,
+        Function* function_nn) const;
+    void generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode,
+        Program& program, const frontend::AST& ast,
+        const frontend::SemanticInfo& semanticInfo,
+        std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const;
     void generateBlock(frontend::Handle<frontend::Block> block,
         FunctionGenerationState& state) const;
     void generateBlockItem(frontend::Handle<frontend::BlockItemNode> blockItem,

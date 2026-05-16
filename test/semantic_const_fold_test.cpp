@@ -93,8 +93,9 @@ void testConstExpressionsRecordFoldedValues()
                         "answer + 1 * 2; return answer + 1 * 2;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto& blockItems
-        = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
+        = funcDef_nn->m_block_nn->m_blockItems;
     const auto constDecl_nn = requireConstDecl(requireDeclNode(blockItems[0]));
     const auto varDecl_nn = requireVarDecl(requireDeclNode(blockItems[1]));
     const auto returnStmt_nn

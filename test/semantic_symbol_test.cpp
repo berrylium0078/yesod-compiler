@@ -132,8 +132,9 @@ void testDefinitionAndUsesShareOneSymbolBinding()
         "int main(){int value = 1; value = 2; value; return value;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto& blockItems
-        = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
+        = funcDef_nn->m_block_nn->m_blockItems;
     const auto varDecl_nn = requireVarDecl(requireDeclNode(blockItems[0]));
     const auto assignStmt_nn
         = requireAssignStmt(requireStmtNode(blockItems[1]));
@@ -162,8 +163,9 @@ void testNestedScopePrefersInnermostDefinition()
                         "return value;} return value;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto& outerItems
-        = output.m_root->m_funcDef_nn->m_block_nn->m_blockItems;
+        = funcDef_nn->m_block_nn->m_blockItems;
     const auto outerDecl_nn = requireVarDecl(requireDeclNode(outerItems[0]));
     const auto nestedBlock_nn
         = requireBlockStmt(requireStmtNode(outerItems[1]));

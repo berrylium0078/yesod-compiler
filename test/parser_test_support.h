@@ -49,7 +49,7 @@ static_assert(
 static_assert(
     std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
     == 2);
-static_assert(std::variant_size_v<Exp::Kind> == 4);
+static_assert(std::variant_size_v<Exp::Kind> == 5);
 
 [[noreturn]] inline void fail(const std::string& message)
 {
@@ -137,6 +137,26 @@ inline const Diagnostic& firstDiagnostic(const ParsedOutput& output)
 {
     require(!output.m_diagnostics.empty(), "expected at least one diagnostic");
     return output.m_diagnostics.front();
+}
+
+inline Handle<FuncDef> firstFuncDef(const Handle<CompUnit>& compUnit_nn)
+{
+    require(compUnit_nn != nullptr, "expected compilation unit node");
+    for (const auto topLevelItem_nn : compUnit_nn->m_topLevelItems) {
+        Handle<FuncDef> funcDef_nn;
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType, Handle<FuncDef>>) {
+                    funcDef_nn = topLevelAlt;
+                }
+            },
+            topLevelItem_nn->m_topLevelItem);
+        if (funcDef_nn) {
+            return funcDef_nn;
+        }
+    }
+    fail("expected at least one function definition in compilation unit");
 }
 
 inline const Exp& requireExp(const Handle<Exp>& exp_nn)
@@ -468,6 +488,8 @@ inline int32_t evaluateExp(const Exp& exp)
                     return operandValue == 0 ? 1 : 0;
                 }
                 fail("unexpected unary operator");
+            } else if constexpr (std::is_same_v<AltType, Exp::Call>) {
+                fail("cannot evaluate call expression in parser test helper");
             } else if constexpr (std::is_same_v<AltType, LVal>) {
                 fail("cannot evaluate lvalue expression");
             } else {

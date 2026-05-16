@@ -8,7 +8,8 @@ void testWhileLoopParsesWithLoopControlStatements()
 {
     const auto root_nn
         = parseRoot("int main(){while (1) {continue; break;} return 0;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 2,
         "top-level block should contain one while statement and one return");
@@ -32,8 +33,8 @@ void testNestedWhileLoopParsesInnerLoopControlStatements()
 {
     const auto root_nn = parseRoot(
         "int main(){while (1) {while (2) {break; continue;}} return 0;}");
-    const auto outerWhile_nn
-        = extractWhileStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto outerWhile_nn = extractWhileStmt(funcDef_nn->m_block_nn->m_blockItems[0]);
     const auto outerBody_nn = extractBlockStmt(outerWhile_nn->m_bodyStmt_nn);
     const auto innerWhile_nn = extractWhileStmt(outerBody_nn->m_blockItems[0]);
     const auto innerBody_nn = extractBlockStmt(innerWhile_nn->m_bodyStmt_nn);
@@ -52,8 +53,8 @@ void testLoopControlInsideWhileIfParses()
 {
     const auto root_nn = parseRoot(
         "int main(){while (1) if (2) break; else continue; return 0;}");
-    const auto whileStmt_nn
-        = extractWhileStmt(root_nn->m_funcDef_nn->m_block_nn->m_blockItems[0]);
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto whileStmt_nn = extractWhileStmt(funcDef_nn->m_block_nn->m_blockItems[0]);
     const auto ifStmt_nn = extractIfStmt(whileStmt_nn->m_bodyStmt_nn);
 
     require(evaluateExp(*ifStmt_nn->m_condExp_nn) == 2,
@@ -95,8 +96,8 @@ void testBreakAndContinueRecoveryMakeForwardProgress()
         "missing break semicolon should use the dedicated diagnostic");
     require(missingBreakSemicolon.m_root != nullptr,
         "missing break semicolon should still recover to a root");
-    require(missingBreakSemicolon.m_root->m_funcDef_nn->m_block_nn->m_blockItems
-                .size()
+    require(firstFuncDef(missingBreakSemicolon.m_root)
+                ->m_block_nn->m_blockItems.size()
             == 2,
         "missing break semicolon recovery should continue to the following "
         "statement");

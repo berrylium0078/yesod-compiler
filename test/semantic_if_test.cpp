@@ -64,8 +64,9 @@ void testIfConditionMarksPlainValueAsBooleanContext()
         = analyzeSource("int main(){int a; if (a) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[1]));
+        funcDef_nn->m_block_nn->m_blockItems[1]));
     require(requireExpValueKind(output, ifStmt_nn->m_condExp_nn)
             == ExpType::boolean,
         "if conditions should be recorded as boolean expressions");
@@ -81,8 +82,9 @@ void testMixedArithmeticAndLogicalSubexpressionsKeepDistinctKinds()
                                       "(b || c)) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[3]));
+        funcDef_nn->m_block_nn->m_blockItems[3]));
     const auto outerBinaryExp_nn = requireBinaryExp(ifStmt_nn->m_condExp_nn);
     const auto& outerBinaryExp = requireBinaryPayload(outerBinaryExp_nn);
     const auto nestedBinaryExp_nn = requireBinaryExp(outerBinaryExp.m_rhs_nn);
@@ -109,8 +111,9 @@ void testLogicalConditionRecordsFoldedBooleanConstant()
         = analyzeSource("int main(){if (1 || 0) return 1; return 0;}");
     require(output.success(), "expected semantic success");
 
+    const auto funcDef_nn = firstFuncDef(output.m_root);
     const auto ifStmt_nn = requireIfStmt(requireStmtNode(
-        output.m_root->m_funcDef_nn->m_block_nn->m_blockItems[0]));
+        funcDef_nn->m_block_nn->m_blockItems[0]));
     require(requireConstantValue(output, ifStmt_nn->m_condExp_nn) == 1,
         "constant logical conditions should record their folded truth value");
 }

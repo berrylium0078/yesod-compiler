@@ -9,7 +9,8 @@ void testAssignmentAndLValueParsing()
     const std::string source
         = "int main(){int value; value = 1 + 2; return value;}";
     const auto root_nn = parseRoot(source);
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 3,
         "block should contain a declaration, assignment, and return");

@@ -8,7 +8,8 @@ void testConstAndVarDeclarationsParse()
 {
     const auto root_nn = parseRoot(
         "int main(){const int answer = 42; int value, other = 7; return 0;}");
-    const auto& blockItems = root_nn->m_funcDef_nn->m_block_nn->m_blockItems;
+    const auto funcDef_nn = firstFuncDef(root_nn.m_root);
+    const auto& blockItems = funcDef_nn->m_block_nn->m_blockItems;
 
     require(blockItems.size() == 3,
         "block should contain const decl, var decl, and return statement");
