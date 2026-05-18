@@ -4,6 +4,36 @@ using namespace yesod::test_support::parser;
 
 namespace {
 
+const Exp& requireScalarConstInitExp(const Handle<ConstInitVal>& initVal_nn)
+{
+    const Exp* exp_nn = nullptr;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                exp_nn = &(*initAlt);
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar const initializer expression");
+    return *exp_nn;
+}
+
+const Exp& requireScalarInitExp(const Handle<InitVal>& initVal_nn)
+{
+    const Exp* exp_nn = nullptr;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                exp_nn = &(*initAlt);
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar initializer expression");
+    return *exp_nn;
+}
+
 Handle<DeclNode> requireTopLevelDecl(
     const Handle<TopLevelItemNode>& topLevelItemNode_nn)
 {
@@ -57,7 +87,8 @@ void testGlobalsFunctionsAndCallsParse()
         = extractConstDecl(requireTopLevelDecl(root_nn->m_topLevelItems[0]));
     require(constDecl_nn->m_constDefs[0]->m_identifier_nn->m_name == "seed",
         "global const declaration should preserve its identifier text");
-    require(evaluateExp(*constDecl_nn->m_constDefs[0]->m_constInitVal_nn->m_exp_nn)
+    require(evaluateExp(requireScalarConstInitExp(
+                constDecl_nn->m_constDefs[0]->m_constInitVal_nn))
             == 4,
         "global const initializer should reuse expression parsing");
 
@@ -65,7 +96,9 @@ void testGlobalsFunctionsAndCallsParse()
         = extractVarDecl(requireTopLevelDecl(root_nn->m_topLevelItems[1]));
     require(varDecl_nn->m_varDefs[0]->m_identifier_nn->m_name == "counter",
         "global var declaration should preserve its identifier text");
-    require(evaluateExp(*varDecl_nn->m_varDefs[0]->m_initVal_nn->m_exp_nn) == 2,
+    require(evaluateExp(
+                requireScalarInitExp(varDecl_nn->m_varDefs[0]->m_initVal_nn))
+            == 2,
         "global var initializer should preserve its expression tree");
 
     const auto addFunc_nn = requireTopLevelFunc(root_nn->m_topLevelItems[2]);

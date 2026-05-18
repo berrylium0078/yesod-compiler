@@ -103,6 +103,20 @@ class Generator {
         Value* lhs, Value* rhs, BasicBlock& basicBlock,
         int32_t& nextTempId) const;
     [[nodiscard]] Value* generateNumber(const frontend::Number& number) const;
+    [[nodiscard]] Type* lowerSemanticType(
+        const frontend::SemanticType& type,
+        bool decayUnsizedArrayToPointer = true) const;
+    [[nodiscard]] Value* generateGlobalArrayInitializer(
+        const frontend::SemanticType& type,
+        const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
+        size_t& nextLeafIndex,
+        const frontend::SemanticInfo& semanticInfo) const;
+    void generateLocalArrayInitializer(Value* address,
+        const frontend::SemanticType& type,
+        const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
+        size_t& nextLeafIndex, FunctionGenerationState& state) const;
+    [[nodiscard]] Value* generateLValueAddress(const frontend::LVal& lVal,
+        FunctionGenerationState& state) const;
     template <typename T>
     [[nodiscard]] const T& node(frontend::Handle<T> handle,
         const FunctionGenerationState& state, const char* message) const;

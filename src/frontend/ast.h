@@ -117,17 +117,22 @@ struct Number {
 struct LVal {
     LVal() = default;
 
-    explicit LVal(Handle<Identifier> identifier_nn)
+    explicit LVal(Handle<Identifier> identifier_nn,
+        std::vector<Handle<Exp>> indices = {})
         : m_identifier_nn(identifier_nn)
+        , m_indices(std::move(indices))
     {
     }
 
-    explicit LVal(SourcePos, Handle<Identifier> identifier_nn)
+    explicit LVal(SourcePos, Handle<Identifier> identifier_nn,
+        std::vector<Handle<Exp>> indices = {})
         : m_identifier_nn(identifier_nn)
+        , m_indices(std::move(indices))
     {
     }
 
     Handle<Identifier> m_identifier_nn;
+    std::vector<Handle<Exp>> m_indices;
 };
 
 struct Exp {
@@ -171,64 +176,105 @@ struct Exp {
 };
 
 struct ConstInitVal {
+    struct List {
+        std::vector<Handle<ConstInitVal>> m_values;
+    };
+
+    using Kind = std::variant<Handle<Exp>, List>;
+
     ConstInitVal() = default;
 
     ConstInitVal(int32_t startOffset, Handle<Exp> exp_nn)
         : m_sourcePos(startOffset)
-        , m_exp_nn(exp_nn)
+        , m_kind(exp_nn)
     {
     }
 
     ConstInitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
         : m_sourcePos(sourcePos)
-        , m_exp_nn(exp_nn)
+        , m_kind(exp_nn)
+    {
+    }
+
+    ConstInitVal(int32_t startOffset, List list)
+        : m_sourcePos(startOffset)
+        , m_kind(std::move(list))
+    {
+    }
+
+    ConstInitVal(SourcePos sourcePos, List list)
+        : m_sourcePos(sourcePos)
+        , m_kind(std::move(list))
     {
     }
 
     SourcePos m_sourcePos;
-    Handle<Exp> m_exp_nn;
+    Kind m_kind;
 };
 
 struct InitVal {
+    struct List {
+        std::vector<Handle<InitVal>> m_values;
+    };
+
+    using Kind = std::variant<Handle<Exp>, List>;
+
     InitVal() = default;
 
     InitVal(int32_t startOffset, Handle<Exp> exp_nn)
         : m_sourcePos(startOffset)
-        , m_exp_nn(exp_nn)
+        , m_kind(exp_nn)
     {
     }
 
     InitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
         : m_sourcePos(sourcePos)
-        , m_exp_nn(exp_nn)
+        , m_kind(exp_nn)
+    {
+    }
+
+    InitVal(int32_t startOffset, List list)
+        : m_sourcePos(startOffset)
+        , m_kind(std::move(list))
+    {
+    }
+
+    InitVal(SourcePos sourcePos, List list)
+        : m_sourcePos(sourcePos)
+        , m_kind(std::move(list))
     {
     }
 
     SourcePos m_sourcePos;
-    Handle<Exp> m_exp_nn;
+    Kind m_kind;
 };
 
 struct ConstDef {
     ConstDef() = default;
 
     ConstDef(int32_t startOffset, Handle<Identifier> identifier_nn,
+        std::vector<Handle<Exp>> dimensions,
         Handle<ConstInitVal> constInitVal_nn)
         : m_sourcePos(startOffset)
         , m_identifier_nn(identifier_nn)
+        , m_dimensions(std::move(dimensions))
         , m_constInitVal_nn(constInitVal_nn)
     {
     }
 
     ConstDef(SourcePos sourcePos, Handle<Identifier> identifier_nn,
+        std::vector<Handle<Exp>> dimensions,
         Handle<ConstInitVal> constInitVal_nn)
         : m_sourcePos(sourcePos)
         , m_identifier_nn(identifier_nn)
+        , m_dimensions(std::move(dimensions))
         , m_constInitVal_nn(constInitVal_nn)
     {
     }
 
     SourcePos m_sourcePos;
     Handle<Identifier> m_identifier_nn;
+    std::vector<Handle<Exp>> m_dimensions;
     Handle<ConstInitVal> m_constInitVal_nn;
 };
 
@@ -236,23 +282,26 @@ struct VarDef {
     VarDef() = default;
 
     VarDef(int32_t startOffset, Handle<Identifier> identifier_nn,
-        Handle<InitVal> initVal_nn)
+        std::vector<Handle<Exp>> dimensions, Handle<InitVal> initVal_nn)
         : m_sourcePos(startOffset)
         , m_identifier_nn(identifier_nn)
+        , m_dimensions(std::move(dimensions))
         , m_initVal_nn(initVal_nn)
     {
     }
 
     VarDef(SourcePos sourcePos, Handle<Identifier> identifier_nn,
-        Handle<InitVal> initVal_nn)
+        std::vector<Handle<Exp>> dimensions, Handle<InitVal> initVal_nn)
         : m_sourcePos(sourcePos)
         , m_identifier_nn(identifier_nn)
+        , m_dimensions(std::move(dimensions))
         , m_initVal_nn(initVal_nn)
     {
     }
 
     SourcePos m_sourcePos;
     Handle<Identifier> m_identifier_nn;
+    std::vector<Handle<Exp>> m_dimensions;
     Handle<InitVal> m_initVal_nn;
 };
 
@@ -535,24 +584,32 @@ struct FuncFParam {
     FuncFParam() = default;
 
     FuncFParam(int32_t startOffset, BTypeKeyword bType,
-        Handle<Identifier> identifier_nn)
+        Handle<Identifier> identifier_nn, bool isArray,
+        std::vector<Handle<Exp>> trailingDimensions)
         : m_sourcePos(startOffset)
         , m_bType(bType)
         , m_identifier_nn(identifier_nn)
+        , m_isArray(isArray)
+        , m_trailingDimensions(std::move(trailingDimensions))
     {
     }
 
     FuncFParam(SourcePos sourcePos, BTypeKeyword bType,
-        Handle<Identifier> identifier_nn)
+        Handle<Identifier> identifier_nn, bool isArray,
+        std::vector<Handle<Exp>> trailingDimensions)
         : m_sourcePos(sourcePos)
         , m_bType(bType)
         , m_identifier_nn(identifier_nn)
+        , m_isArray(isArray)
+        , m_trailingDimensions(std::move(trailingDimensions))
     {
     }
 
     SourcePos m_sourcePos;
     BTypeKeyword m_bType = BTypeKeyword::intKeyword;
     Handle<Identifier> m_identifier_nn;
+    bool m_isArray = false;
+    std::vector<Handle<Exp>> m_trailingDimensions;
 };
 
 struct FuncDef {

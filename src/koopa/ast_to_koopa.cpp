@@ -11,6 +11,48 @@ namespace yesod::koopa {
 
 namespace {
 
+    template <typename InitNode>
+    void collectInitLeafExprs(const frontend::AST& ast,
+        frontend::Handle<InitNode> init_nn,
+        std::vector<frontend::Handle<frontend::Exp>>& leafExprs)
+    {
+        const auto& init = ast.get(init_nn);
+        std::visit(
+            [&](const auto& initAlt) {
+                using AltType = std::decay_t<decltype(initAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  frontend::Handle<frontend::Exp>>) {
+                    leafExprs.push_back(initAlt);
+                } else {
+                    for (const auto child_nn : initAlt.m_values) {
+                        collectInitLeafExprs(ast, child_nn, leafExprs);
+                    }
+                }
+            },
+            init.m_kind);
+    }
+
+    bool isZeroInitializerValue(const Value* value)
+    {
+        if (value->isZeroInitValue()) {
+            return true;
+        }
+        if (value->isIntegerValue()) {
+            return dynamic_cast<const IntegerValue*>(value)->getVal() == 0;
+        }
+        if (!value->isAggregateValue()) {
+            return false;
+        }
+
+        const auto* aggregate = dynamic_cast<const AggregateValue*>(value);
+        for (size_t i = 0; i < aggregate->getNumElements(); ++i) {
+            if (!isZeroInitializerValue(aggregate->getElement(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
 
     bool isAllDigits(const std::string& text)
@@ -34,26 +76,27 @@ namespace {
         return stem;
     }
 
-    Type* lowerFuncType(frontend::FuncTypeKeyword funcType)
+    Type* lowerSemanticType(
+        const frontend::SemanticType& semanticType,
+        bool decayUnsizedArrayToPointer = true)
     {
-        switch (funcType) {
-        case frontend::FuncTypeKeyword::voidKeyword:
-            return UnitType::get();
-        case frontend::FuncTypeKeyword::intKeyword:
+        switch (semanticType.m_kind) {
+        case frontend::SemanticTypeKind::integer:
+        case frontend::SemanticTypeKind::boolean:
             return Int32Type::get();
-        }
-
-        throw std::runtime_error("unsupported function type");
-    }
-
-    Type* lowerExpType(frontend::ExpType expType)
-    {
-        switch (expType) {
-        case frontend::ExpType::integer:
-        case frontend::ExpType::boolean:
-            return Int32Type::get();
-        case frontend::ExpType::voidType:
+        case frontend::SemanticTypeKind::voidType:
             return UnitType::get();
+        case frontend::SemanticTypeKind::array:
+            if (semanticType.m_elementType == nullptr) {
+                throw std::runtime_error("array type is missing element type");
+            }
+            if (semanticType.m_arrayLength == -1 && decayUnsizedArrayToPointer) {
+                return PointerType::get(
+                    lowerSemanticType(*semanticType.m_elementType, false));
+            }
+            return ArrayType::get(
+                lowerSemanticType(*semanticType.m_elementType, false),
+                static_cast<size_t>(semanticType.m_arrayLength));
         }
 
         throw std::runtime_error("unsupported semantic expression type");
@@ -184,17 +227,24 @@ Program* Generator::generate(const frontend::AST& ast,
 
 Function* Generator::createFunctionDecl(const frontend::AST& ast,
     frontend::Handle<frontend::FuncDef> funcDef,
-    const frontend::SemanticInfo&) const
+    const frontend::SemanticInfo& semanticInfo) const
 {
     const auto& parsedFuncDef = ast.get(funcDef);
     const auto& identifier = ast.get(parsedFuncDef.m_identifier_nn);
-    std::vector<Type*> paramTypes(parsedFuncDef.m_funcFParams.size(),
-        Int32Type::get());
-    auto* function = Function::create(
-        FunctionType::get(lowerFuncType(parsedFuncDef.m_funcType), paramTypes),
+    const auto& symbol = requireSymbolForIdentifier(
+        parsedFuncDef.m_identifier_nn, semanticInfo,
+        "function definition is missing a symbol binding");
+    std::vector<Type*> paramTypes;
+    paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
+    for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
+        paramTypes.push_back(lowerSemanticType(paramType));
+    }
+    auto* function = Function::create(FunctionType::get(
+                                         lowerSemanticType(symbol.m_functionSignature.m_returnType),
+                                         paramTypes),
         makeFunctionName(identifier.m_name));
     for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
-        function->pushParam(FuncArgRefValue::get(i, Int32Type::get()));
+        function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
     }
     return function;
 }
@@ -204,11 +254,11 @@ Function* Generator::createExternalFunctionDecl(
 {
     std::vector<Type*> paramTypes;
     paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
-    for (const auto paramType : symbol.m_functionSignature.m_paramTypes) {
-        paramTypes.push_back(lowerExpType(paramType));
+    for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
+        paramTypes.push_back(lowerSemanticType(paramType));
     }
     auto* function = Function::create(FunctionType::get(
-                                         lowerExpType(symbol.m_functionSignature.m_returnType),
+                                         lowerSemanticType(symbol.m_functionSignature.m_returnType),
                                          paramTypes),
         makeFunctionName(symbol.m_name));
     for (size_t i = 0; i != paramTypes.size(); ++i) {
@@ -242,7 +292,7 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
         const auto& funcFParam = ast.get(parsedFuncDef.m_funcFParams[i]);
         const auto& symbol = requireSymbolForIdentifier(funcFParam.m_identifier_nn,
             semanticInfo, "function parameter is missing a symbol binding");
-        auto* alloc = AllocValue::get(Int32Type::get(),
+        auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
             makeUniqueLocalName(symbol, state.m_usedSymbolNames));
         entryBlock->pushInst(alloc);
         entryBlock->pushInst(StoreValue::get(function->getParam(i), alloc));
@@ -274,7 +324,26 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
             using AltType = std::decay_t<decltype(declAlt)>;
             if constexpr (std::is_same_v<AltType,
                               frontend::Handle<frontend::ConstDecl>>) {
-                return;
+                const auto& constDecl = ast.get(declAlt);
+                for (const auto constDef_nn : constDecl.m_constDefs) {
+                    const auto& constDef = ast.get(constDef_nn);
+                    const auto& symbol = requireSymbolForIdentifier(
+                        constDef.m_identifier_nn, semanticInfo,
+                        "global const is missing its symbol binding");
+                    if (!symbol.m_type.isArray()) {
+                        continue;
+                    }
+                    std::vector<frontend::Handle<frontend::Exp>> leafExprs;
+                    collectInitLeafExprs(
+                        ast, constDef.m_constInitVal_nn, leafExprs);
+                    size_t nextLeafIndex = 0;
+                    Value* initValue = generateGlobalArrayInitializer(
+                        symbol.m_type, leafExprs, nextLeafIndex, semanticInfo);
+                    auto* globalAlloc = GlobalAllocValue::get(
+                        initValue, makeGlobalName(symbol.m_name));
+                    program.pushVal(globalAlloc);
+                    globalStorageBySymbolId[symbol.m_id] = globalAlloc;
+                }
             } else {
                 const auto& varDecl = ast.get(declAlt);
                 for (const auto varDef_nn : varDecl.m_varDefs) {
@@ -282,16 +351,31 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                     const auto& symbol = requireSymbolForIdentifier(
                         varDef.m_identifier_nn, semanticInfo,
                         "global variable is missing its symbol binding");
-                    Value* initValue = ZeroInitValue::get(Int32Type::get());
-                    if (varDef.m_initVal_nn) {
+                    Value* initValue
+                        = ZeroInitValue::get(lowerSemanticType(symbol.m_type, false));
+                    if (symbol.m_type.isArray() && varDef.m_initVal_nn) {
+                        std::vector<frontend::Handle<frontend::Exp>> leafExprs;
+                        collectInitLeafExprs(ast, varDef.m_initVal_nn, leafExprs);
+                        size_t nextLeafIndex = 0;
+                        initValue = generateGlobalArrayInitializer(
+                            symbol.m_type, leafExprs, nextLeafIndex, semanticInfo);
+                    } else if (varDef.m_initVal_nn) {
                         const auto& initVal = ast.get(varDef.m_initVal_nn);
-                        const auto constantValue
-                            = semanticInfo.findConstantValue(initVal.m_exp_nn);
-                        if (!constantValue.has_value()) {
-                            throw std::runtime_error(
-                                "global variable initializer must be constant");
-                        }
-                        initValue = IntegerValue::get(*constantValue);
+                        std::visit(
+                            [&](const auto& initAlt) {
+                                using InitAltType = std::decay_t<decltype(initAlt)>;
+                                if constexpr (std::is_same_v<InitAltType,
+                                                  frontend::Handle<frontend::Exp>>) {
+                                    const auto constantValue
+                                        = semanticInfo.findConstantValue(initAlt);
+                                    if (!constantValue.has_value()) {
+                                        throw std::runtime_error(
+                                            "global variable initializer must be constant");
+                                    }
+                                    initValue = IntegerValue::get(*constantValue);
+                                }
+                            },
+                            initVal.m_kind);
                     }
                     auto* globalAlloc = GlobalAllocValue::get(
                         initValue, makeGlobalName(symbol.m_name));
@@ -355,16 +439,33 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         parsedConstDef.m_identifier_nn,
                         *state.m_semanticInfo_nn,
                         "const declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(Int32Type::get(),
+                    auto* alloc = AllocValue::get(lowerSemanticType(symbol.m_type, false),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
                     state.m_storageBySymbolId[symbol.m_id] = alloc;
                     const auto& constInitVal
                         = node(parsedConstDef.m_constInitVal_nn, state,
                             "const declarator is missing an initializer");
-                    auto* initValue = generateExp(constInitVal.m_exp_nn, state);
-                    state.m_currentBasicBlock_nn->pushInst(
-                        StoreValue::get(initValue, alloc));
+                    if (symbol.m_type.isArray()) {
+                        std::vector<frontend::Handle<frontend::Exp>> leafExprs;
+                        collectInitLeafExprs(*state.m_ast_nn,
+                            parsedConstDef.m_constInitVal_nn, leafExprs);
+                        size_t nextLeafIndex = 0;
+                        generateLocalArrayInitializer(alloc, symbol.m_type,
+                            leafExprs, nextLeafIndex, state);
+                    } else {
+                        std::visit(
+                            [&](const auto& initAlt) {
+                                using InitAltType = std::decay_t<decltype(initAlt)>;
+                                if constexpr (std::is_same_v<InitAltType,
+                                                  frontend::Handle<frontend::Exp>>) {
+                                    auto* initValue = generateExp(initAlt, state);
+                                    state.m_currentBasicBlock_nn->pushInst(
+                                        StoreValue::get(initValue, alloc));
+                                }
+                            },
+                            constInitVal.m_kind);
+                    }
                 }
             } else {
                 const auto& varDecl
@@ -376,16 +477,33 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         resolvedVarDef.m_identifier_nn,
                         *state.m_semanticInfo_nn,
                         "var declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(Int32Type::get(),
+                    auto* alloc = AllocValue::get(lowerSemanticType(symbol.m_type, false),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
                     state.m_storageBySymbolId[symbol.m_id] = alloc;
                     if (resolvedVarDef.m_initVal_nn) {
-                        const auto& initVal = node(resolvedVarDef.m_initVal_nn,
-                            state, "var declarator init payload is null");
-                        auto* initValue = generateExp(initVal.m_exp_nn, state);
-                        state.m_currentBasicBlock_nn->pushInst(
-                            StoreValue::get(initValue, alloc));
+                        if (symbol.m_type.isArray()) {
+                            std::vector<frontend::Handle<frontend::Exp>> leafExprs;
+                            collectInitLeafExprs(*state.m_ast_nn,
+                                resolvedVarDef.m_initVal_nn, leafExprs);
+                            size_t nextLeafIndex = 0;
+                            generateLocalArrayInitializer(alloc, symbol.m_type,
+                                leafExprs, nextLeafIndex, state);
+                        } else {
+                            const auto& initVal = node(resolvedVarDef.m_initVal_nn,
+                                state, "var declarator init payload is null");
+                            std::visit(
+                                [&](const auto& initAlt) {
+                                    using InitAltType = std::decay_t<decltype(initAlt)>;
+                                    if constexpr (std::is_same_v<InitAltType,
+                                                      frontend::Handle<frontend::Exp>>) {
+                                        auto* initValue = generateExp(initAlt, state);
+                                        state.m_currentBasicBlock_nn->pushInst(
+                                            StoreValue::get(initValue, alloc));
+                                    }
+                                },
+                                initVal.m_kind);
+                        }
                     }
                 }
             }
@@ -539,20 +657,20 @@ void Generator::generateAssignStmt(
         = node(assignStmt, state, "assignment is null");
     const auto& lValExp = node(parsedAssignStmt.m_lVal_nn, state,
         "assignment lvalue expression is null");
-    const auto* lVal = std::get_if<frontend::LVal>(&lValExp.m_kind);
-    if (lVal == nullptr) {
-        throw std::runtime_error("assignment lhs is not an lvalue expression");
-    }
-    const auto& symbol = requireSymbolForIdentifier(lVal->m_identifier_nn,
-        *state.m_semanticInfo_nn, "assignment lvalue is missing a symbol");
-    const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
-    if (storageIt == state.m_storageBySymbolId.end()) {
-        throw std::runtime_error("assignment references undefined storage");
-    }
-
-    auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
-    state.m_currentBasicBlock_nn->pushInst(
-        StoreValue::get(value, storageIt->second));
+    std::visit(
+        [&](const auto& expAlt) {
+            using AltType = std::decay_t<decltype(expAlt)>;
+            if constexpr (std::is_same_v<AltType, frontend::LVal>) {
+                auto* address = generateLValueAddress(expAlt, state);
+                auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
+                state.m_currentBasicBlock_nn->pushInst(
+                    StoreValue::get(value, address));
+            } else {
+                throw std::runtime_error(
+                    "assignment lhs is not an lvalue expression");
+            }
+        },
+        lValExp.m_kind);
 }
 
 void Generator::generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
@@ -625,17 +743,22 @@ Value* Generator::generateExp(
                 state.m_currentBasicBlock_nn->pushInst(callValue);
                 return callValue;
             } else if constexpr (std::is_same_v<AltType, frontend::LVal>) {
-                const auto& symbol = requireSymbolForIdentifier(
-                    expAlt.m_identifier_nn, *state.m_semanticInfo_nn,
-                    "lvalue is missing a symbol binding");
-                const auto storageIt
-                    = state.m_storageBySymbolId.find(symbol.m_id);
-                if (storageIt == state.m_storageBySymbolId.end()) {
-                    throw std::runtime_error(
-                        "lvalue references undefined storage");
+                auto* address = generateLValueAddress(expAlt, state);
+                const auto expType = state.m_semanticInfo_nn->findExpType(exp);
+                if (expType.has_value() && expType->isArray()) {
+                    const auto pointeeType = dynamic_cast<PointerType*>(
+                        address->getVType())->getPointeeType();
+                    if (pointeeType->isArrayType()) {
+                        auto* decayed = GetElemPtrValue::get(address,
+                            IntegerValue::get(0),
+                            makeTempName(state.m_nextTempId));
+                        state.m_currentBasicBlock_nn->pushInst(decayed);
+                        return decayed;
+                    }
+                    return address;
                 }
                 auto* loadValue = LoadValue::get(
-                    storageIt->second, makeTempName(state.m_nextTempId));
+                    address, makeTempName(state.m_nextTempId));
                 state.m_currentBasicBlock_nn->pushInst(loadValue);
                 return loadValue;
             } else {
@@ -822,6 +945,132 @@ BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
 Value* Generator::generateNumber(const frontend::Number& number) const
 {
     return IntegerValue::get(number.m_value);
+}
+
+Type* Generator::lowerSemanticType(const frontend::SemanticType& type,
+    bool decayUnsizedArrayToPointer) const
+{
+    return ::yesod::koopa::lowerSemanticType(type, decayUnsizedArrayToPointer);
+}
+
+Value* Generator::generateGlobalArrayInitializer(
+    const frontend::SemanticType& type,
+    const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
+    size_t& nextLeafIndex, const frontend::SemanticInfo& semanticInfo) const
+{
+    if (!type.isArray()) {
+        if (nextLeafIndex >= leafExprs.size()) {
+            return IntegerValue::get(0);
+        }
+
+        const auto constantValue
+            = semanticInfo.findConstantValue(leafExprs[nextLeafIndex++]);
+        if (!constantValue.has_value()) {
+            throw std::runtime_error(
+                "global array initializer element must be constant");
+        }
+        return IntegerValue::get(*constantValue);
+    }
+
+    if (type.m_elementType == nullptr) {
+        throw std::runtime_error("array type is missing element type");
+    }
+
+    std::vector<Value*> elements;
+    elements.reserve(static_cast<size_t>(type.m_arrayLength));
+    for (int32_t i = 0; i < type.m_arrayLength; ++i) {
+        elements.push_back(generateGlobalArrayInitializer(
+            *type.m_elementType, leafExprs, nextLeafIndex, semanticInfo));
+    }
+
+    auto* arrayType = lowerSemanticType(type, false);
+    if (elements.empty()) {
+        return ZeroInitValue::get(arrayType);
+    }
+    if (std::all_of(elements.begin(), elements.end(),
+            [](const Value* element) {
+                return isZeroInitializerValue(element);
+            })) {
+        return ZeroInitValue::get(arrayType);
+    }
+    return AggregateValue::get(std::move(elements), arrayType);
+}
+
+void Generator::generateLocalArrayInitializer(Value* address,
+    const frontend::SemanticType& type,
+    const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
+    size_t& nextLeafIndex, FunctionGenerationState& state) const
+{
+    if (!type.isArray()) {
+        Value* initValue = IntegerValue::get(0);
+        if (nextLeafIndex < leafExprs.size()) {
+            initValue = generateExp(leafExprs[nextLeafIndex++], state);
+        }
+        state.m_currentBasicBlock_nn->pushInst(
+            StoreValue::get(initValue, address));
+        return;
+    }
+
+    if (type.m_elementType == nullptr) {
+        throw std::runtime_error("array type is missing element type");
+    }
+
+    for (int32_t i = 0; i < type.m_arrayLength; ++i) {
+        auto* elementAddress = GetElemPtrValue::get(
+            address, IntegerValue::get(i), makeTempName(state.m_nextTempId));
+        state.m_currentBasicBlock_nn->pushInst(elementAddress);
+        generateLocalArrayInitializer(
+            elementAddress, *type.m_elementType, leafExprs, nextLeafIndex, state);
+    }
+}
+
+Value* Generator::generateLValueAddress(
+    const frontend::LVal& lVal, FunctionGenerationState& state) const
+{
+    const auto& symbol = requireSymbolForIdentifier(lVal.m_identifier_nn,
+        *state.m_semanticInfo_nn, "lvalue is missing a symbol binding");
+    const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
+    if (storageIt == state.m_storageBySymbolId.end()) {
+        throw std::runtime_error("lvalue references undefined storage");
+    }
+
+    auto* address = storageIt->second;
+    auto currentType = symbol.m_type;
+    bool indexesDecayedArrayParameter = false;
+    if (currentType.isArray() && currentType.m_arrayLength == -1) {
+        auto* loadedPointer
+            = LoadValue::get(address, makeTempName(state.m_nextTempId));
+        state.m_currentBasicBlock_nn->pushInst(loadedPointer);
+        address = loadedPointer;
+        indexesDecayedArrayParameter = true;
+    }
+
+    for (const auto index_nn : lVal.m_indices) {
+        auto* indexValue = generateExp(index_nn, state);
+        Value* nextAddress = nullptr;
+        if (indexesDecayedArrayParameter) {
+            nextAddress = GetPtrValue::get(
+                address, indexValue, makeTempName(state.m_nextTempId));
+        } else {
+            const auto pointeeType
+                = dynamic_cast<PointerType*>(address->getVType())->getPointeeType();
+            if (pointeeType->isArrayType()) {
+                nextAddress = GetElemPtrValue::get(
+                    address, indexValue, makeTempName(state.m_nextTempId));
+            } else {
+                nextAddress = GetPtrValue::get(
+                    address, indexValue, makeTempName(state.m_nextTempId));
+            }
+        }
+        state.m_currentBasicBlock_nn->pushInst(nextAddress);
+        address = nextAddress;
+        if (currentType.isArray() && currentType.m_elementType != nullptr) {
+            currentType = *currentType.m_elementType;
+        }
+        indexesDecayedArrayParameter = false;
+    }
+
+    return address;
 }
 
 BasicBlock* Generator::createBasicBlock(

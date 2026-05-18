@@ -10,6 +10,42 @@ namespace yesod::frontend {
 
 namespace {
 
+    bool isScalarTypeImpl(const SemanticType& type)
+    {
+        return type.m_kind == SemanticTypeKind::integer
+            || type.m_kind == SemanticTypeKind::boolean;
+    }
+
+    bool isArrayTypeImpl(const SemanticType& type)
+    {
+        return type.m_kind == SemanticTypeKind::array;
+    }
+
+    bool typesMatchExactly(const SemanticType& lhs, const SemanticType& rhs)
+    {
+        return lhs == rhs;
+    }
+
+    bool typesMatchForCallImpl(
+        const SemanticType& paramType, const SemanticType& argType)
+    {
+        if (!paramType.isArray()) {
+            return typesMatchExactly(paramType, argType);
+        }
+        if (!argType.isArray()) {
+            return false;
+        }
+        if (paramType.m_arrayLength == -1) {
+            if (paramType.m_elementType == nullptr
+                || argType.m_elementType == nullptr) {
+                return false;
+            }
+            return typesMatchExactly(*paramType.m_elementType,
+                *argType.m_elementType);
+        }
+        return typesMatchExactly(paramType, argType);
+    }
+
     std::optional<int32_t> applyUnaryOp(UnaryOpKeyword op, int32_t operand)
     {
         switch (op) {
@@ -163,17 +199,22 @@ void SemanticAnalyzer::declareBuiltinFunctions()
 {
     struct BuiltinSpec {
         const char* m_name;
-        ExpType m_returnType;
-        std::vector<ExpType> m_paramTypes;
+        SemanticType m_returnType;
+        std::vector<SemanticType> m_paramTypes;
     };
 
     const std::vector<BuiltinSpec> builtins {
-        { "getint", ExpType::integer, {} },
-        { "getch", ExpType::integer, {} },
-        { "putint", ExpType::voidType, { ExpType::integer } },
-        { "putch", ExpType::voidType, { ExpType::integer } },
-        { "starttime", ExpType::voidType, {} },
-        { "stoptime", ExpType::voidType, {} },
+        { "getint", SemanticType::makeInteger(), {} },
+        { "getch", SemanticType::makeInteger(), {} },
+        { "getarray", SemanticType::makeInteger(),
+            { SemanticType::makeUnsizedArray(SemanticType::makeInteger()) } },
+        { "putint", SemanticType::makeVoid(), { SemanticType::makeInteger() } },
+        { "putch", SemanticType::makeVoid(), { SemanticType::makeInteger() } },
+        { "putarray", SemanticType::makeVoid(),
+            { SemanticType::makeInteger(),
+                SemanticType::makeUnsizedArray(SemanticType::makeInteger()) } },
+        { "starttime", SemanticType::makeVoid(), {} },
+        { "stoptime", SemanticType::makeVoid(), {} },
     };
 
     for (const auto& builtin : builtins) {
@@ -194,7 +235,18 @@ void SemanticAnalyzer::declareFuncDef(Handle<FuncDef> funcDef_nn)
         = node(funcDef_nn, "compilation unit is missing a function");
     const auto& identifier = node(
         funcDef.m_identifier_nn, "function definition is missing an identifier");
-    std::vector<ExpType> paramTypes(funcDef.m_funcFParams.size(), ExpType::integer);
+    std::vector<SemanticType> paramTypes;
+    paramTypes.reserve(funcDef.m_funcFParams.size());
+    for (const auto funcFParam_nn : funcDef.m_funcFParams) {
+        const auto& funcFParam
+            = node(funcFParam_nn, "function parameter is missing");
+        auto paramType = analyzeObjectType(
+            funcFParam.m_trailingDimensions, funcFParam.m_sourcePos.m_offset);
+        if (funcFParam.m_isArray) {
+            paramType = SemanticType::makeUnsizedArray(paramType);
+        }
+        paramTypes.push_back(paramType);
+    }
     const auto symbol = makeFunctionSymbol(
         funcDef.m_identifier_nn, lowerFuncType(funcDef.m_funcType), paramTypes);
     if (!defineSymbol(identifier.m_name, funcDef.m_identifier_nn)) {
@@ -222,13 +274,15 @@ void SemanticAnalyzer::analyzeFuncDef(Handle<FuncDef> funcDef_nn)
     const auto previousReturnType = m_currentFuncReturnType;
     m_currentFuncReturnType = functionSymbol->m_functionSignature.m_returnType;
     pushScope();
-    for (const auto funcFParam_nn : funcDef.m_funcFParams) {
+    for (size_t i = 0; i < funcDef.m_funcFParams.size(); ++i) {
+        const auto funcFParam_nn = funcDef.m_funcFParams[i];
         const auto& funcFParam
             = node(funcFParam_nn, "function parameter is missing");
         const auto& identifier = node(funcFParam.m_identifier_nn,
             "function parameter is missing an identifier");
-        const auto symbol
-            = makeObjectSymbol(funcFParam.m_identifier_nn, false, false, 0);
+        const auto symbol = makeObjectSymbol(funcFParam.m_identifier_nn, false,
+            false, 0,
+            functionSymbol->m_functionSignature.m_paramTypes[i]);
         if (!defineSymbol(identifier.m_name, funcFParam.m_identifier_nn)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_sourcePos.m_offset,
@@ -297,21 +351,73 @@ void SemanticAnalyzer::analyzeConstDecl(Handle<ConstDecl> constDecl_nn)
             "const declarator is missing an identifier");
         const auto& constInitVal = node(parsedConstDef.m_constInitVal_nn,
             "const declarator is missing an initializer");
-        const auto analyzedInit = analyzeExp(constInitVal.m_exp_nn);
-        if (analyzedInit.m_valueKind == ExpType::voidType) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                parsedConstDef.m_sourcePos.m_offset,
-                "const initializer must produce an integer value");
-        }
-        if (!analyzedInit.m_isConstant) {
-            recordDiagnostic(
-                SemanticDiagnosticKind::nonConstantConstInitializer,
-                parsedConstDef.m_sourcePos.m_offset,
-                "const initializer must be a constant expression");
+        const auto objectType = analyzeObjectType(
+            parsedConstDef.m_dimensions, parsedConstDef.m_sourcePos.m_offset);
+
+        auto analyzedInit = AnalyzedExp {
+            .m_type = objectType,
+            .m_valueKind = objectType.valueKind(),
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+        const auto analyzeConstInitLeafs =
+            [&](auto&& self, Handle<ConstInitVal> init_nn) -> void {
+            const auto& init
+                = node(init_nn, "const initializer element is missing");
+            std::visit(
+                [&](const auto& initAlt) {
+                    using AltType = std::decay_t<decltype(initAlt)>;
+                    if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                        const auto childExp = analyzeExp(initAlt);
+                        if (!isScalarType(childExp.m_type)
+                            || !childExp.m_isConstant) {
+                            recordDiagnostic(
+                                SemanticDiagnosticKind::nonConstantConstInitializer,
+                                init.m_sourcePos.m_offset,
+                                "const array initializer must use constant integer expressions");
+                        }
+                    } else {
+                        for (const auto child_nn : initAlt.m_values) {
+                            self(self, child_nn);
+                        }
+                    }
+                },
+                init.m_kind);
+        };
+        std::visit(
+            [&](const auto& initAlt) {
+                using AltType = std::decay_t<decltype(initAlt)>;
+                if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                    analyzedInit = analyzeExp(initAlt);
+                } else {
+                    for (const auto child_nn : initAlt.m_values) {
+                        analyzeConstInitLeafs(analyzeConstInitLeafs, child_nn);
+                    }
+                }
+            },
+            constInitVal.m_kind);
+
+        if (!parsedConstDef.m_dimensions.empty()) {
+            analyzedInit.m_isConstant = false;
+            analyzedInit.m_constantValue = 0;
+        } else {
+            if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    parsedConstDef.m_sourcePos.m_offset,
+                    "const initializer must produce an integer value");
+            }
+            if (!analyzedInit.m_isConstant) {
+                recordDiagnostic(
+                    SemanticDiagnosticKind::nonConstantConstInitializer,
+                    parsedConstDef.m_sourcePos.m_offset,
+                    "const initializer must be a constant expression");
+            }
         }
 
         const auto symbol = makeObjectSymbol(parsedConstDef.m_identifier_nn,
-            true, analyzedInit.m_isConstant, analyzedInit.m_constantValue);
+            true,
+            parsedConstDef.m_dimensions.empty() && analyzedInit.m_isConstant,
+            analyzedInit.m_constantValue, objectType);
         if (!defineSymbol(identifier.m_name, parsedConstDef.m_identifier_nn)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_sourcePos.m_offset,
@@ -330,25 +436,68 @@ void SemanticAnalyzer::analyzeVarDecl(Handle<VarDecl> varDecl_nn)
             = node(varDef_nn, "var declaration contains a null declarator");
         const auto& identifier = node(parsedVarDef.m_identifier_nn,
             "var declarator is missing an identifier");
+        const auto objectType = analyzeObjectType(
+            parsedVarDef.m_dimensions, parsedVarDef.m_sourcePos.m_offset);
         if (parsedVarDef.m_initVal_nn) {
             const auto& initVal = node(parsedVarDef.m_initVal_nn,
                 "var declarator init payload is missing");
-            const auto analyzedInit = analyzeExp(initVal.m_exp_nn);
-            if (analyzedInit.m_valueKind == ExpType::voidType) {
-                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                    parsedVarDef.m_sourcePos.m_offset,
-                    "variable initializer must produce an integer value");
-            }
-            if (isGlobalScope() && !analyzedInit.m_isConstant) {
-                recordDiagnostic(
-                    SemanticDiagnosticKind::nonConstantGlobalInitializer,
-                    parsedVarDef.m_sourcePos.m_offset,
-                    "global initializer must be a constant expression");
-            }
+            const auto analyzeInitLeafs =
+                [&](auto&& self, Handle<InitVal> init_nn) -> void {
+                const auto& init = node(init_nn, "initializer element is missing");
+                std::visit(
+                    [&](const auto& initAlt) {
+                        using AltType = std::decay_t<decltype(initAlt)>;
+                        if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                            const auto childExp = analyzeExp(initAlt);
+                            if (childExp.m_type.isVoid()
+                                || childExp.m_type.isArray()) {
+                                recordDiagnostic(
+                                    SemanticDiagnosticKind::typeMismatch,
+                                    init.m_sourcePos.m_offset,
+                                    "initializer elements must produce integer values");
+                            }
+                            if (isGlobalScope() && !childExp.m_isConstant) {
+                                recordDiagnostic(
+                                    SemanticDiagnosticKind::nonConstantGlobalInitializer,
+                                    init.m_sourcePos.m_offset,
+                                    "global initializer must be a constant expression");
+                            }
+                        } else {
+                            for (const auto child_nn : initAlt.m_values) {
+                                self(self, child_nn);
+                            }
+                        }
+                    },
+                    init.m_kind);
+            };
+            std::visit(
+                [&](const auto& initAlt) {
+                    using AltType = std::decay_t<decltype(initAlt)>;
+                    if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                        const auto analyzedInit = analyzeExp(initAlt);
+                        if (analyzedInit.m_type.isVoid()
+                            || analyzedInit.m_type.isArray()) {
+                            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                                parsedVarDef.m_sourcePos.m_offset,
+                                "variable initializer must produce an integer value");
+                        }
+                        if (isGlobalScope() && !analyzedInit.m_isConstant) {
+                            recordDiagnostic(
+                                SemanticDiagnosticKind::nonConstantGlobalInitializer,
+                                parsedVarDef.m_sourcePos.m_offset,
+                                "global initializer must be a constant expression");
+                        }
+                    } else {
+                        for (const auto child_nn : initAlt.m_values) {
+                            analyzeInitLeafs(analyzeInitLeafs, child_nn);
+                        }
+                    }
+                },
+                initVal.m_kind);
         }
 
-        const auto symbol = makeObjectSymbol(
-            parsedVarDef.m_identifier_nn, false, false, 0);
+        const auto symbol = makeObjectSymbol(parsedVarDef.m_identifier_nn,
+            false, false, 0, objectType);
         if (!defineSymbol(identifier.m_name, parsedVarDef.m_identifier_nn)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_sourcePos.m_offset,
@@ -440,23 +589,53 @@ void SemanticAnalyzer::analyzeAssignStmt(Handle<AssignStmt> assignStmt_nn)
         = node(assignStmt_nn, "assignment statement payload is missing");
     const auto& lValExp
         = node(assignStmt.m_lVal_nn, "assignment is missing an lvalue");
-    const auto* lVal = std::get_if<LVal>(&lValExp.m_kind);
-    if (lVal == nullptr) {
-        throw std::runtime_error("assignment lhs is not an lvalue expression");
-    }
-
-    const auto& identifier = node(
-        lVal->m_identifier_nn, "assignment lvalue is missing an identifier");
-    (void)resolveSymbol(lVal->m_identifier_nn);
-    const auto* symbol = m_info.findSymbol(lVal->m_identifier_nn);
-    if (symbol != nullptr && symbol->m_isConst) {
-        recordDiagnostic(SemanticDiagnosticKind::assignToConst,
-            identifier.m_sourcePos.m_offset,
-            "cannot assign to const '" + symbol->m_name + "'");
-    }
+    std::visit(
+        [&](const auto& expAlt) {
+            using AltType = std::decay_t<decltype(expAlt)>;
+            if constexpr (std::is_same_v<AltType, LVal>) {
+                const auto& identifier = node(expAlt.m_identifier_nn,
+                    "assignment lvalue is missing an identifier");
+                (void)resolveSymbol(expAlt.m_identifier_nn);
+                const auto* symbol = m_info.findSymbol(expAlt.m_identifier_nn);
+                if (symbol != nullptr && symbol->m_isConst) {
+                    recordDiagnostic(SemanticDiagnosticKind::assignToConst,
+                        identifier.m_sourcePos.m_offset,
+                        "cannot assign to const '" + symbol->m_name + "'");
+                }
+                auto currentType
+                    = symbol != nullptr ? symbol->m_type : SemanticType::makeInteger();
+                for (const auto index_nn : expAlt.m_indices) {
+                    const auto analyzedIndex = analyzeExp(index_nn);
+                    if (!isScalarType(analyzedIndex.m_type)) {
+                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                            node(index_nn, "array subscript is missing")
+                                .m_sourcePos.m_offset,
+                            "array subscript must produce an integer value");
+                    }
+                    if (!currentType.isArray()
+                        || currentType.m_elementType == nullptr) {
+                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                            identifier.m_sourcePos.m_offset,
+                            "subscripted assignment target is not an array");
+                        break;
+                    }
+                    currentType = *currentType.m_elementType;
+                }
+                if (currentType.isArray()) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        identifier.m_sourcePos.m_offset,
+                        "assignment target must designate an integer object");
+                }
+            } else {
+                throw std::runtime_error(
+                    "assignment lhs is not an lvalue expression");
+            }
+        },
+        lValExp.m_kind);
 
     const auto analyzedExp = analyzeExp(assignStmt.m_exp_nn);
-    if (analyzedExp.m_valueKind == ExpType::voidType) {
+    if (analyzedExp.m_valueKind == ExpType::voidType
+        || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
             assignStmt.m_sourcePos.m_offset,
             "assignment rhs must produce an integer value");
@@ -484,7 +663,7 @@ void SemanticAnalyzer::analyzeReturnStmt(Handle<ReturnStmt> returnStmt_nn)
     }
 
     if (!returnStmt.m_exp_nn) {
-        if (*m_currentFuncReturnType != ExpType::voidType) {
+        if (m_currentFuncReturnType->m_kind != SemanticTypeKind::voidType) {
             recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
                 returnStmt.m_sourcePos.m_offset,
                 "non-void function must return an integer value");
@@ -493,14 +672,15 @@ void SemanticAnalyzer::analyzeReturnStmt(Handle<ReturnStmt> returnStmt_nn)
     }
 
     const auto analyzedExp = analyzeExp(returnStmt.m_exp_nn);
-    if (*m_currentFuncReturnType == ExpType::voidType) {
+    if (m_currentFuncReturnType->m_kind == SemanticTypeKind::voidType) {
         recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
             returnStmt.m_sourcePos.m_offset,
             "void function must use 'return;' without a value");
         return;
     }
 
-    if (analyzedExp.m_valueKind == ExpType::voidType) {
+    if (analyzedExp.m_valueKind == ExpType::voidType
+        || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
             returnStmt.m_sourcePos.m_offset,
             "return expression must produce an integer value");
@@ -517,15 +697,24 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                 auto lhs = analyzeExp(expAlt.m_lhs_nn);
                 auto rhs = analyzeExp(expAlt.m_rhs_nn);
                 AnalyzedExp binaryExp {
+                    .m_type = SemanticType::makeInteger(),
                     .m_valueKind = ExpType::integer,
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
 
+                if (!isScalarType(lhs.m_type) || !isScalarType(rhs.m_type)) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        exp.m_sourcePos.m_offset,
+                        "binary operator requires integer operands");
+                    return binaryExp;
+                }
+
                 switch (expAlt.m_op) {
                 case BinaryOpKeyword::orOr:
                     lhs = normalizeToBoolean(std::move(lhs));
                     rhs = normalizeToBoolean(std::move(rhs));
+                    binaryExp.m_type = SemanticType::makeBoolean();
                     binaryExp.m_valueKind = ExpType::boolean;
                     if (lhs.m_isConstant && rhs.m_isConstant) {
                         binaryExp.m_isConstant = true;
@@ -536,6 +725,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                 case BinaryOpKeyword::andAnd:
                     lhs = normalizeToBoolean(std::move(lhs));
                     rhs = normalizeToBoolean(std::move(rhs));
+                    binaryExp.m_type = SemanticType::makeBoolean();
                     binaryExp.m_valueKind = ExpType::boolean;
                     if (lhs.m_isConstant && rhs.m_isConstant) {
                         binaryExp.m_isConstant = true;
@@ -547,6 +737,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                 case BinaryOpKeyword::notEqual:
                     lhs = normalizeToArithmetic(std::move(lhs));
                     rhs = normalizeToArithmetic(std::move(rhs));
+                    binaryExp.m_type = SemanticType::makeBoolean();
                     binaryExp.m_valueKind = ExpType::boolean;
                     if (lhs.m_isConstant && rhs.m_isConstant) {
                         binaryExp.m_isConstant = true;
@@ -560,6 +751,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                 case BinaryOpKeyword::greaterEqual:
                     lhs = normalizeToArithmetic(std::move(lhs));
                     rhs = normalizeToArithmetic(std::move(rhs));
+                    binaryExp.m_type = SemanticType::makeBoolean();
                     binaryExp.m_valueKind = ExpType::boolean;
                     if (lhs.m_isConstant && rhs.m_isConstant) {
                         binaryExp.m_isConstant = true;
@@ -587,11 +779,14 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                 return binaryExp;
             } else if constexpr (std::is_same_v<AltType, Exp::Unary>) {
                 auto operand = analyzeExp(expAlt.m_lhs_nn);
-                if (operand.m_valueKind == ExpType::voidType) {
+                if (!isScalarType(operand.m_type)) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
                         exp.m_sourcePos.m_offset,
                         "unary operator requires an integer value operand");
                     return AnalyzedExp {
+                        .m_type = expAlt.m_op == UnaryOpKeyword::bang
+                            ? SemanticType::makeBoolean()
+                            : SemanticType::makeInteger(),
                         .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
                             ? ExpType::boolean
                             : ExpType::integer,
@@ -609,6 +804,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                         = applyUnaryOp(expAlt.m_op, operand.m_constantValue);
                     if (folded.has_value()) {
                         return AnalyzedExp {
+                            .m_type = expAlt.m_op == UnaryOpKeyword::bang
+                                ? SemanticType::makeBoolean()
+                                : SemanticType::makeInteger(),
                             .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
                                 ? ExpType::boolean
                                 : ExpType::integer,
@@ -618,6 +816,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                     }
                 }
                 return AnalyzedExp {
+                    .m_type = expAlt.m_op == UnaryOpKeyword::bang
+                        ? SemanticType::makeBoolean()
+                        : SemanticType::makeInteger(),
                     .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
                         ? ExpType::boolean
                         : ExpType::integer,
@@ -647,6 +848,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                         }
                     }
                     return AnalyzedExp {
+                        .m_type = SemanticType::makeInteger(),
                         .m_valueKind = ExpType::integer,
                         .m_isConstant = false,
                         .m_constantValue = 0,
@@ -673,18 +875,30 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                         "call to '" + calleeSymbol->m_name
                             + "' uses the wrong number of arguments");
                 }
-                for (const auto arg_nn : expAlt.m_params) {
-                    const auto analyzedArg = analyzeExp(arg_nn);
+                for (size_t i = 0; i < expAlt.m_params.size(); ++i) {
+                    const auto analyzedArg = analyzeExp(expAlt.m_params[i]);
                     if (analyzedArg.m_valueKind == ExpType::voidType) {
                         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
                             exp.m_sourcePos.m_offset,
                             "call arguments must produce integer values");
                     }
+                    if (calleeSymbol->m_kind == SemanticSymbolKind::function
+                        && i < calleeSymbol->m_functionSignature.m_paramTypes.size()
+                        && !typesMatchForCall(
+                            calleeSymbol->m_functionSignature.m_paramTypes[i],
+                            analyzedArg.m_type)) {
+                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                            exp.m_sourcePos.m_offset,
+                            "call argument type does not match parameter type");
+                    }
                 }
                 return AnalyzedExp {
+                    .m_type = calleeSymbol->m_kind == SemanticSymbolKind::function
+                        ? calleeSymbol->m_functionSignature.m_returnType
+                        : SemanticType::makeInteger(),
                     .m_valueKind = calleeSymbol->m_kind
                                 == SemanticSymbolKind::function
-                        ? calleeSymbol->m_functionSignature.m_returnType
+                        ? calleeSymbol->m_functionSignature.m_returnType.valueKind()
                         : ExpType::integer,
                     .m_isConstant = false,
                     .m_constantValue = 0,
@@ -699,27 +913,51 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
                         "function '" + symbol->m_name
                             + "' must be called before use");
                     return AnalyzedExp {
+                        .m_type = SemanticType::makeInteger(),
                         .m_valueKind = ExpType::integer,
                         .m_isConstant = false,
                         .m_constantValue = 0,
                     };
                 }
-                if (symbol != nullptr && symbol->m_isConst
-                    && symbol->m_hasConstantValue) {
+                auto currentType
+                    = symbol != nullptr ? symbol->m_type : SemanticType::makeInteger();
+                for (const auto index_nn : expAlt.m_indices) {
+                    const auto analyzedIndex = analyzeExp(index_nn);
+                    if (!isScalarType(analyzedIndex.m_type)) {
+                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                            node(index_nn, "array subscript is missing")
+                                .m_sourcePos.m_offset,
+                            "array subscript must produce an integer value");
+                    }
+                    if (!currentType.isArray()
+                        || currentType.m_elementType == nullptr) {
+                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                            exp.m_sourcePos.m_offset,
+                            "subscripted expression is not an array");
+                        currentType = SemanticType::makeInteger();
+                        break;
+                    }
+                    currentType = *currentType.m_elementType;
+                }
+                if (symbol != nullptr && expAlt.m_indices.empty()
+                    && symbol->m_isConst && symbol->m_hasConstantValue) {
                     return AnalyzedExp {
-                        .m_valueKind = ExpType::integer,
+                        .m_type = currentType,
+                        .m_valueKind = currentType.valueKind(),
                         .m_isConstant = true,
                         .m_constantValue = symbol->m_constantValue,
                     };
                 }
 
                 return AnalyzedExp {
-                    .m_valueKind = ExpType::integer,
+                    .m_type = currentType,
+                    .m_valueKind = currentType.valueKind(),
                     .m_isConstant = false,
                     .m_constantValue = 0,
                 };
             } else if constexpr (std::is_same_v<AltType, Number>) {
                 return AnalyzedExp {
+                    .m_type = SemanticType::makeInteger(),
                     .m_valueKind = ExpType::integer,
                     .m_isConstant = true,
                     .m_constantValue = expAlt.m_value,
@@ -729,7 +967,8 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
             }
         },
         exp.m_kind);
-    if (analyzedExp.m_valueKind != ExpType::voidType) {
+    if (analyzedExp.m_valueKind != ExpType::voidType
+        && analyzedExp.m_valueKind != ExpType::array) {
         analyzedExp = normalizeToArithmetic(std::move(analyzedExp));
     }
     recordExpFacts(exp_nn, analyzedExp);
@@ -740,10 +979,12 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(
     Handle<Exp> exp_nn)
 {
     auto analyzedExp = analyzeExp(exp_nn);
-    if (analyzedExp.m_valueKind == ExpType::voidType) {
+    if (analyzedExp.m_valueKind == ExpType::voidType
+        || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
             node(exp_nn, "condition expression is missing").m_sourcePos.m_offset,
             "condition expression must produce an integer value");
+        analyzedExp.m_type = SemanticType::makeBoolean();
         analyzedExp.m_valueKind = ExpType::boolean;
         analyzedExp.m_isConstant = false;
         analyzedExp.m_constantValue = 0;
@@ -791,12 +1032,51 @@ int32_t SemanticAnalyzer::resolveSymbol(Handle<Identifier> identifier_nn)
 SemanticSymbol SemanticAnalyzer::makePlaceholderSymbol(
     Handle<Identifier> identifier_nn)
 {
-    return makeObjectSymbol(identifier_nn, false, false, 0);
+    return makeObjectSymbol(
+        identifier_nn, false, false, 0, SemanticType::makeInteger());
+}
+
+SemanticType SemanticAnalyzer::analyzeObjectType(
+    const std::vector<Handle<Exp>>& dimensions, int32_t offset,
+    bool allowUnsizedFirstDimension)
+{
+    auto objectType = SemanticType::makeInteger();
+    for (auto dimIt = dimensions.rbegin(); dimIt != dimensions.rend(); ++dimIt) {
+        const auto analyzedDim = analyzeExp(*dimIt);
+        if (!isScalarType(analyzedDim.m_type) || !analyzedDim.m_isConstant) {
+            recordDiagnostic(SemanticDiagnosticKind::typeMismatch, offset,
+                "array dimension must be a constant integer expression");
+            objectType = SemanticType::makeArray(objectType, 0);
+            continue;
+        }
+        objectType = SemanticType::makeArray(
+            objectType, analyzedDim.m_constantValue);
+    }
+    if (allowUnsizedFirstDimension) {
+        objectType = SemanticType::makeUnsizedArray(objectType);
+    }
+    return objectType;
+}
+
+bool SemanticAnalyzer::typesMatchForCall(
+    const SemanticType& paramType, const SemanticType& argType) const
+{
+    return typesMatchForCallImpl(paramType, argType);
+}
+
+bool SemanticAnalyzer::isScalarType(const SemanticType& type) const
+{
+    return isScalarTypeImpl(type);
+}
+
+bool SemanticAnalyzer::isArrayType(const SemanticType& type) const
+{
+    return isArrayTypeImpl(type);
 }
 
 SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
     Handle<Identifier> identifier_nn, bool isConst, bool hasConstantValue,
-    int32_t constantValue)
+    int32_t constantValue, const SemanticType& type)
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
     const int32_t symbolId = ++m_nextSymbolId;
@@ -807,13 +1087,14 @@ SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
         .m_isConst = isConst,
         .m_hasConstantValue = hasConstantValue,
         .m_constantValue = constantValue,
+        .m_type = type,
         .m_functionSignature = {},
     };
 }
 
 SemanticSymbol SemanticAnalyzer::makeFunctionSymbol(
-    Handle<Identifier> identifier_nn, ExpType returnType,
-    const std::vector<ExpType>& paramTypes)
+    Handle<Identifier> identifier_nn, const SemanticType& returnType,
+    const std::vector<SemanticType>& paramTypes)
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
     const int32_t symbolId = ++m_nextSymbolId;
@@ -824,6 +1105,7 @@ SemanticSymbol SemanticAnalyzer::makeFunctionSymbol(
         .m_isConst = false,
         .m_hasConstantValue = false,
         .m_constantValue = 0,
+        .m_type = returnType,
         .m_functionSignature = SemanticFunctionSignature {
             .m_returnType = returnType,
             .m_paramTypes = paramTypes,
@@ -861,25 +1143,27 @@ std::optional<Handle<WhileStmt>> SemanticAnalyzer::currentLoop() const
     return m_loopStack.back();
 }
 
-ExpType SemanticAnalyzer::lowerFuncType(FuncTypeKeyword funcType) const
+SemanticType SemanticAnalyzer::lowerFuncType(FuncTypeKeyword funcType) const
 {
     switch (funcType) {
     case FuncTypeKeyword::voidKeyword:
-        return ExpType::voidType;
+        return SemanticType::makeVoid();
     case FuncTypeKeyword::intKeyword:
-        return ExpType::integer;
+        return SemanticType::makeInteger();
     }
 
     throw std::runtime_error("unsupported function type keyword");
 }
 
 void SemanticAnalyzer::recordDiagnostic(
-    SemanticDiagnosticKind kind, int32_t offset, std::string message)
+    SemanticDiagnosticKind kind, int32_t offset, std::string message,
+    SemanticDiagnosticSeverity severity)
 {
     m_diagnostics.push_back(SemanticDiagnostic {
         .m_kind = kind,
         .m_offset = offset,
         .m_message = std::move(message),
+        .m_severity = severity,
     });
 }
 

@@ -62,9 +62,12 @@ ParseOutput Parser::parse()
     m_varDeclMemo.clear();
     m_bTypeMemo.clear();
     m_constDefMemo.clear();
+    m_arrayConstDimsMemo.clear();
     m_constInitValMemo.clear();
+    m_constInitValListMemo.clear();
     m_varDefMemo.clear();
     m_initValMemo.clear();
+    m_initValListMemo.clear();
     m_stmtMemo.clear();
     m_ifStmtMemo.clear();
     m_whileStmtMemo.clear();
@@ -83,6 +86,7 @@ ParseOutput Parser::parse()
     m_primaryExpMemo.clear();
     m_unaryExpMemo.clear();
     m_lValMemo.clear();
+    m_lValIndicesMemo.clear();
     m_unaryOpMemo.clear();
     m_mulOpMemo.clear();
     m_addOpMemo.clear();
@@ -90,6 +94,7 @@ ParseOutput Parser::parse()
     m_eqOpMemo.clear();
     m_numberMemo.clear();
     m_identMemo.clear();
+    m_paramArraySuffixMemo.clear();
 
     const auto compUnit = parseCompUnit(0);
     if (!compUnit.m_success) {
@@ -302,9 +307,22 @@ ParseResult<Handle<FuncDef>> Parser::parseFuncDef(int32_t offset)
                 break;
             }
 
+            auto paramNextOffset = paramIdentifier.m_nextOffset;
+            auto isArray = false;
+            std::vector<Handle<Exp>> trailingDimensions;
+            const auto paramArraySuffix
+                = parseParamArraySuffix(paramIdentifier.m_nextOffset);
+            if (paramArraySuffix.m_success) {
+                isArray = paramArraySuffix.m_value.m_isArray;
+                trailingDimensions
+                    = std::move(paramArraySuffix.m_value.m_trailingDimensions);
+                paramNextOffset = paramArraySuffix.m_nextOffset;
+            }
+
             funcFParams.push_back(m_ast.emplace<FuncFParam>(nextOffset,
-                bType.m_value, paramIdentifier.m_value));
-            nextOffset = paramIdentifier.m_nextOffset;
+                bType.m_value, paramIdentifier.m_value, isArray,
+                std::move(trailingDimensions)));
+            nextOffset = paramNextOffset;
 
             const auto comma = matchSymbol(nextOffset, ',');
             if (!comma.m_success) {
@@ -783,11 +801,12 @@ ParseResult<Handle<ConstDef>> Parser::parseConstDef(int32_t offset)
         return failure;
     }
 
-    const auto assign = matchSymbol(identifier.m_nextOffset, '=');
+    const auto dimensions = parseArrayConstDims(identifier.m_nextOffset);
+    const auto assign = matchSymbol(dimensions.m_nextOffset, '=');
     if (!assign.m_success) {
         const auto failure = ParseResult<Handle<ConstDef>> {
             .m_success = false,
-            .m_nextOffset = skipTrivia(identifier.m_nextOffset),
+            .m_nextOffset = skipTrivia(dimensions.m_nextOffset),
             .m_value = {},
         };
         m_constDefMemo.emplace(offset, failure);
@@ -810,9 +829,62 @@ ParseResult<Handle<ConstDef>> Parser::parseConstDef(int32_t offset)
         .m_nextOffset = constInitVal.m_nextOffset,
         .m_value = m_ast.emplace<ConstDef>(
             m_ast.get(identifier.m_value).m_sourcePos.m_offset,
-            identifier.m_value, constInitVal.m_value),
+            identifier.m_value, dimensions.m_value, constInitVal.m_value),
     };
     m_constDefMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::vector<Handle<Exp>>> Parser::parseArrayConstDims(
+    int32_t offset)
+{
+    if (const auto memoIt = m_arrayConstDimsMemo.find(offset);
+        memoIt != m_arrayConstDimsMemo.end()) {
+        return memoIt->second;
+    }
+
+    auto nextOffset = skipTrivia(offset);
+    std::vector<Handle<Exp>> dimensions;
+    while (true) {
+        const auto openBracket = matchSymbol(nextOffset, '[');
+        if (!openBracket.m_success) {
+            break;
+        }
+
+        const auto boundExp = parseExp(openBracket.m_nextOffset);
+        if (!boundExp.m_success) {
+            auto recoveryOffset = recoverToRBracket(openBracket.m_nextOffset);
+            recordCommittedFailure(skipTrivia(openBracket.m_nextOffset),
+                DiagnosticKind::malformedArrayBound,
+                "malformed array bound");
+            const auto recoveredBracket = matchSymbol(recoveryOffset, ']');
+            nextOffset = recoveredBracket.m_success ? recoveredBracket.m_nextOffset
+                                                    : recoveryOffset;
+            continue;
+        }
+
+        dimensions.push_back(boundExp.m_value);
+        const auto closeBracket = matchSymbol(boundExp.m_nextOffset, ']');
+        if (!closeBracket.m_success) {
+            auto recoveryOffset = recoverToRBracket(boundExp.m_nextOffset);
+            recordCommittedFailure(skipTrivia(boundExp.m_nextOffset),
+                DiagnosticKind::missingArrayRBracket,
+                "missing ']' after array bound");
+            const auto recoveredBracket = matchSymbol(recoveryOffset, ']');
+            nextOffset = recoveredBracket.m_success ? recoveredBracket.m_nextOffset
+                                                    : recoveryOffset;
+            continue;
+        }
+
+        nextOffset = closeBracket.m_nextOffset;
+    }
+
+    const auto result = ParseResult<std::vector<Handle<Exp>>> {
+        .m_success = true,
+        .m_nextOffset = nextOffset,
+        .m_value = std::move(dimensions),
+    };
+    m_arrayConstDimsMemo.emplace(offset, result);
     return result;
 }
 
@@ -821,6 +893,56 @@ ParseResult<Handle<ConstInitVal>> Parser::parseConstInitVal(int32_t offset)
     if (const auto memoIt = m_constInitValMemo.find(offset);
         memoIt != m_constInitValMemo.end()) {
         return memoIt->second;
+    }
+
+    const auto openBrace = matchSymbol(offset, '{');
+    if (openBrace.m_success) {
+        const auto closeBrace = matchSymbol(openBrace.m_nextOffset, '}');
+        if (closeBrace.m_success) {
+            const auto result = ParseResult<Handle<ConstInitVal>> {
+                .m_success = true,
+                .m_nextOffset = closeBrace.m_nextOffset,
+                .m_value = m_ast.emplace<ConstInitVal>(openBrace.m_startOffset,
+                    ConstInitVal::List {}),
+            };
+            m_constInitValMemo.emplace(offset, result);
+            return result;
+        }
+
+        auto initializerValues = ConstInitVal::List {};
+        auto nextOffset = openBrace.m_nextOffset;
+        const auto initValList = parseConstInitValList(openBrace.m_nextOffset);
+        if (initValList.m_success) {
+            initializerValues.m_values = initValList.m_value;
+            nextOffset = initValList.m_nextOffset;
+        } else {
+            recordCommittedFailure(skipTrivia(openBrace.m_nextOffset),
+                DiagnosticKind::malformedConstInitializer,
+                "malformed constant initializer");
+            nextOffset = recoverToInitBoundary(openBrace.m_nextOffset);
+        }
+
+        const auto recoveredCloseBrace = matchSymbol(nextOffset, '}');
+        if (!recoveredCloseBrace.m_success) {
+            auto recoveryOffset = recoverToInitBoundary(nextOffset);
+            recordCommittedFailure(skipTrivia(nextOffset),
+                DiagnosticKind::missingConstInitRBrace,
+                "missing '}' after constant initializer");
+            const auto syncedCloseBrace = matchSymbol(recoveryOffset, '}');
+            nextOffset = syncedCloseBrace.m_success ? syncedCloseBrace.m_nextOffset
+                                                    : recoveryOffset;
+        } else {
+            nextOffset = recoveredCloseBrace.m_nextOffset;
+        }
+
+        const auto result = ParseResult<Handle<ConstInitVal>> {
+            .m_success = true,
+            .m_nextOffset = nextOffset,
+            .m_value = m_ast.emplace<ConstInitVal>(openBrace.m_startOffset,
+                std::move(initializerValues)),
+        };
+        m_constInitValMemo.emplace(offset, result);
+        return result;
     }
 
     const auto exp = parseExp(offset);
@@ -844,6 +966,60 @@ ParseResult<Handle<ConstInitVal>> Parser::parseConstInitVal(int32_t offset)
     return result;
 }
 
+ParseResult<std::vector<Handle<ConstInitVal>>> Parser::parseConstInitValList(
+    int32_t offset)
+{
+    if (const auto memoIt = m_constInitValListMemo.find(offset);
+        memoIt != m_constInitValListMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto firstInitVal = parseConstInitVal(offset);
+    if (!firstInitVal.m_success) {
+        const auto failure = ParseResult<std::vector<Handle<ConstInitVal>>> {
+            .m_success = false,
+            .m_nextOffset = firstInitVal.m_nextOffset,
+            .m_value = {},
+        };
+        m_constInitValListMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto nextOffset = firstInitVal.m_nextOffset;
+    std::vector<Handle<ConstInitVal>> values { firstInitVal.m_value };
+    while (true) {
+        const auto comma = matchSymbol(nextOffset, ',');
+        if (!comma.m_success) {
+            break;
+        }
+
+        const auto nextInitVal = parseConstInitVal(comma.m_nextOffset);
+        if (!nextInitVal.m_success) {
+            recordCommittedFailure(skipTrivia(comma.m_nextOffset),
+                DiagnosticKind::malformedConstInitializer,
+                "malformed constant initializer");
+            auto recoveryOffset = recoverToInitBoundary(comma.m_nextOffset);
+            if (matchSymbol(recoveryOffset, ',').m_success) {
+                nextOffset = matchSymbol(recoveryOffset, ',').m_nextOffset;
+                continue;
+            }
+            nextOffset = recoveryOffset;
+            break;
+        }
+
+        values.push_back(nextInitVal.m_value);
+        nextOffset = nextInitVal.m_nextOffset;
+    }
+
+    const auto result = ParseResult<std::vector<Handle<ConstInitVal>>> {
+        .m_success = true,
+        .m_nextOffset = nextOffset,
+        .m_value = std::move(values),
+    };
+    m_constInitValListMemo.emplace(offset, result);
+    return result;
+}
+
 ParseResult<Handle<VarDef>> Parser::parseVarDef(int32_t offset)
 {
     if (const auto memoIt = m_varDefMemo.find(offset);
@@ -862,14 +1038,15 @@ ParseResult<Handle<VarDef>> Parser::parseVarDef(int32_t offset)
         return failure;
     }
 
-    const auto assign = matchSymbol(identifier.m_nextOffset, '=');
+    const auto dimensions = parseArrayConstDims(identifier.m_nextOffset);
+    const auto assign = matchSymbol(dimensions.m_nextOffset, '=');
     if (!assign.m_success) {
         const auto result = ParseResult<Handle<VarDef>> {
             .m_success = true,
-            .m_nextOffset = identifier.m_nextOffset,
+            .m_nextOffset = dimensions.m_nextOffset,
             .m_value = m_ast.emplace<VarDef>(
                 m_ast.get(identifier.m_value).m_sourcePos.m_offset,
-                identifier.m_value, Handle<InitVal> {}),
+                identifier.m_value, dimensions.m_value, Handle<InitVal> {}),
         };
         m_varDefMemo.emplace(offset, result);
         return result;
@@ -891,7 +1068,7 @@ ParseResult<Handle<VarDef>> Parser::parseVarDef(int32_t offset)
         .m_nextOffset = initVal.m_nextOffset,
         .m_value = m_ast.emplace<VarDef>(
             m_ast.get(identifier.m_value).m_sourcePos.m_offset,
-            identifier.m_value, initVal.m_value),
+            identifier.m_value, dimensions.m_value, initVal.m_value),
     };
     m_varDefMemo.emplace(offset, result);
     return result;
@@ -902,6 +1079,56 @@ ParseResult<Handle<InitVal>> Parser::parseInitVal(int32_t offset)
     if (const auto memoIt = m_initValMemo.find(offset);
         memoIt != m_initValMemo.end()) {
         return memoIt->second;
+    }
+
+    const auto openBrace = matchSymbol(offset, '{');
+    if (openBrace.m_success) {
+        const auto closeBrace = matchSymbol(openBrace.m_nextOffset, '}');
+        if (closeBrace.m_success) {
+            const auto result = ParseResult<Handle<InitVal>> {
+                .m_success = true,
+                .m_nextOffset = closeBrace.m_nextOffset,
+                .m_value = m_ast.emplace<InitVal>(openBrace.m_startOffset,
+                    InitVal::List {}),
+            };
+            m_initValMemo.emplace(offset, result);
+            return result;
+        }
+
+        auto initializerValues = InitVal::List {};
+        auto nextOffset = openBrace.m_nextOffset;
+        const auto initValList = parseInitValList(openBrace.m_nextOffset);
+        if (initValList.m_success) {
+            initializerValues.m_values = initValList.m_value;
+            nextOffset = initValList.m_nextOffset;
+        } else {
+            recordCommittedFailure(skipTrivia(openBrace.m_nextOffset),
+                DiagnosticKind::malformedInitializer,
+                "malformed initializer");
+            nextOffset = recoverToInitBoundary(openBrace.m_nextOffset);
+        }
+
+        const auto recoveredCloseBrace = matchSymbol(nextOffset, '}');
+        if (!recoveredCloseBrace.m_success) {
+            auto recoveryOffset = recoverToInitBoundary(nextOffset);
+            recordCommittedFailure(skipTrivia(nextOffset),
+                DiagnosticKind::missingInitRBrace,
+                "missing '}' after initializer");
+            const auto syncedCloseBrace = matchSymbol(recoveryOffset, '}');
+            nextOffset = syncedCloseBrace.m_success ? syncedCloseBrace.m_nextOffset
+                                                    : recoveryOffset;
+        } else {
+            nextOffset = recoveredCloseBrace.m_nextOffset;
+        }
+
+        const auto result = ParseResult<Handle<InitVal>> {
+            .m_success = true,
+            .m_nextOffset = nextOffset,
+            .m_value = m_ast.emplace<InitVal>(openBrace.m_startOffset,
+                std::move(initializerValues)),
+        };
+        m_initValMemo.emplace(offset, result);
+        return result;
     }
 
     const auto exp = parseExp(offset);
@@ -922,6 +1149,60 @@ ParseResult<Handle<InitVal>> Parser::parseInitVal(int32_t offset)
             m_ast.get(exp.m_value).m_sourcePos.m_offset, exp.m_value),
     };
     m_initValMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::vector<Handle<InitVal>>> Parser::parseInitValList(
+    int32_t offset)
+{
+    if (const auto memoIt = m_initValListMemo.find(offset);
+        memoIt != m_initValListMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto firstInitVal = parseInitVal(offset);
+    if (!firstInitVal.m_success) {
+        const auto failure = ParseResult<std::vector<Handle<InitVal>>> {
+            .m_success = false,
+            .m_nextOffset = firstInitVal.m_nextOffset,
+            .m_value = {},
+        };
+        m_initValListMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto nextOffset = firstInitVal.m_nextOffset;
+    std::vector<Handle<InitVal>> values { firstInitVal.m_value };
+    while (true) {
+        const auto comma = matchSymbol(nextOffset, ',');
+        if (!comma.m_success) {
+            break;
+        }
+
+        const auto nextInitVal = parseInitVal(comma.m_nextOffset);
+        if (!nextInitVal.m_success) {
+            recordCommittedFailure(skipTrivia(comma.m_nextOffset),
+                DiagnosticKind::malformedInitializer,
+                "malformed initializer");
+            auto recoveryOffset = recoverToInitBoundary(comma.m_nextOffset);
+            if (matchSymbol(recoveryOffset, ',').m_success) {
+                nextOffset = matchSymbol(recoveryOffset, ',').m_nextOffset;
+                continue;
+            }
+            nextOffset = recoveryOffset;
+            break;
+        }
+
+        values.push_back(nextInitVal.m_value);
+        nextOffset = nextInitVal.m_nextOffset;
+    }
+
+    const auto result = ParseResult<std::vector<Handle<InitVal>>> {
+        .m_success = true,
+        .m_nextOffset = nextOffset,
+        .m_value = std::move(values),
+    };
+    m_initValListMemo.emplace(offset, result);
     return result;
 }
 
@@ -2266,14 +2547,114 @@ ParseResult<Handle<Exp>> Parser::parseLVal(int32_t offset)
         return failure;
     }
 
+    const auto indices = parseLValIndices(identifier.m_nextOffset);
+
     const auto result = ParseResult<Handle<Exp>> {
         .m_success = true,
-        .m_nextOffset = identifier.m_nextOffset,
+        .m_nextOffset = indices.m_nextOffset,
         .m_value
         = m_ast.emplace<Exp>(m_ast.get(identifier.m_value).m_sourcePos.m_offset,
-            Exp::Kind { LVal { identifier.m_value } }),
+            Exp::Kind { LVal { identifier.m_value, indices.m_value } }),
     };
     m_lValMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<std::vector<Handle<Exp>>> Parser::parseLValIndices(int32_t offset)
+{
+    if (const auto memoIt = m_lValIndicesMemo.find(offset);
+        memoIt != m_lValIndicesMemo.end()) {
+        return memoIt->second;
+    }
+
+    auto nextOffset = skipTrivia(offset);
+    std::vector<Handle<Exp>> indices;
+    while (true) {
+        const auto openBracket = matchSymbol(nextOffset, '[');
+        if (!openBracket.m_success) {
+            break;
+        }
+
+        const auto indexExp = parseExp(openBracket.m_nextOffset);
+        if (!indexExp.m_success) {
+            auto recoveryOffset = recoverToRBracket(openBracket.m_nextOffset);
+            recordCommittedFailure(skipTrivia(openBracket.m_nextOffset),
+                DiagnosticKind::malformedSubscript,
+                "malformed array subscript");
+            const auto recoveredBracket = matchSymbol(recoveryOffset, ']');
+            nextOffset = recoveredBracket.m_success ? recoveredBracket.m_nextOffset
+                                                    : recoveryOffset;
+            continue;
+        }
+
+        indices.push_back(indexExp.m_value);
+        const auto closeBracket = matchSymbol(indexExp.m_nextOffset, ']');
+        if (!closeBracket.m_success) {
+            auto recoveryOffset = recoverToRBracket(indexExp.m_nextOffset);
+            recordCommittedFailure(skipTrivia(indexExp.m_nextOffset),
+                DiagnosticKind::missingSubscriptRBracket,
+                "missing ']' after array subscript");
+            const auto recoveredBracket = matchSymbol(recoveryOffset, ']');
+            nextOffset = recoveredBracket.m_success ? recoveredBracket.m_nextOffset
+                                                    : recoveryOffset;
+            continue;
+        }
+
+        nextOffset = closeBracket.m_nextOffset;
+    }
+
+    const auto result = ParseResult<std::vector<Handle<Exp>>> {
+        .m_success = true,
+        .m_nextOffset = nextOffset,
+        .m_value = std::move(indices),
+    };
+    m_lValIndicesMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<Parser::ParamArraySuffixParse> Parser::parseParamArraySuffix(
+    int32_t offset)
+{
+    if (const auto memoIt = m_paramArraySuffixMemo.find(offset);
+        memoIt != m_paramArraySuffixMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto openBracket = matchSymbol(offset, '[');
+    if (!openBracket.m_success) {
+        const auto failure = ParseResult<ParamArraySuffixParse> {
+            .m_success = false,
+            .m_nextOffset = skipTrivia(offset),
+            .m_value = {},
+        };
+        m_paramArraySuffixMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto nextOffset = openBracket.m_nextOffset;
+    const auto closeBracket = matchSymbol(nextOffset, ']');
+    if (!closeBracket.m_success) {
+        auto recoveryOffset = recoverToRBracket(nextOffset);
+        recordCommittedFailure(skipTrivia(nextOffset),
+            DiagnosticKind::missingParamArrayRBracket,
+            "missing ']' in array parameter declarator");
+        const auto recoveredBracket = matchSymbol(recoveryOffset, ']');
+        nextOffset = recoveredBracket.m_success ? recoveredBracket.m_nextOffset
+                                                : recoveryOffset;
+    } else {
+        nextOffset = closeBracket.m_nextOffset;
+    }
+
+    const auto trailingDimensions = parseArrayConstDims(nextOffset);
+    const auto result = ParseResult<ParamArraySuffixParse> {
+        .m_success = true,
+        .m_nextOffset = trailingDimensions.m_nextOffset,
+        .m_value = ParamArraySuffixParse {
+            .m_isArray = true,
+            .m_trailingDimensions = trailingDimensions.m_value,
+        },
+    };
+    m_paramArraySuffixMemo.emplace(offset, result);
     return result;
 }
 
@@ -2722,6 +3103,38 @@ int32_t Parser::recoverToExprRParen(int32_t offset) const
         if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ')'
             || m_source[normalizedOffset] == ';'
             || m_source[normalizedOffset] == '}') {
+            return normalizedOffset;
+        }
+        nextOffset = normalizedOffset + 1;
+    }
+    return skipTrivia(nextOffset);
+}
+
+int32_t Parser::recoverToRBracket(int32_t offset) const
+{
+    auto nextOffset = skipTrivia(offset);
+    while (!isAtEnd(nextOffset)) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ']'
+            || m_source[normalizedOffset] == ','
+            || m_source[normalizedOffset] == ')'
+            || m_source[normalizedOffset] == '}'
+            || m_source[normalizedOffset] == ';') {
+            return normalizedOffset;
+        }
+        nextOffset = normalizedOffset + 1;
+    }
+    return skipTrivia(nextOffset);
+}
+
+int32_t Parser::recoverToInitBoundary(int32_t offset) const
+{
+    auto nextOffset = skipTrivia(offset);
+    while (!isAtEnd(nextOffset)) {
+        const auto normalizedOffset = skipTrivia(nextOffset);
+        if (isAtEnd(normalizedOffset) || m_source[normalizedOffset] == ','
+            || m_source[normalizedOffset] == '}'
+            || m_source[normalizedOffset] == ';') {
             return normalizedOffset;
         }
         nextOffset = normalizedOffset + 1;

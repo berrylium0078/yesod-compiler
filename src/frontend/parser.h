@@ -32,6 +32,15 @@ enum class DiagnosticKind {
     malformedAssignValue,
     malformedReturnValue,
     malformedPrimaryExp,
+    missingParamArrayRBracket,
+    malformedArrayBound,
+    missingArrayRBracket,
+    malformedConstInitializer,
+    missingConstInitRBrace,
+    malformedInitializer,
+    missingInitRBrace,
+    malformedSubscript,
+    missingSubscriptRBracket,
     missingBreakSemicolon,
     missingContinueSemicolon,
     missingPrimaryRParen,
@@ -84,6 +93,11 @@ class Parser {
     [[nodiscard]] ParseOutput parse();
 
   private:
+    struct ParamArraySuffixParse {
+        bool m_isArray = false;
+        std::vector<Handle<Exp>> m_trailingDimensions;
+    };
+
     struct KeywordMatch {
         bool m_success = false;
         int32_t m_startOffset = 0;
@@ -101,10 +115,16 @@ class Parser {
     [[nodiscard]] ParseResult<Handle<VarDecl>> parseVarDecl(int32_t offset);
     [[nodiscard]] ParseResult<BTypeKeyword> parseBType(int32_t offset);
     [[nodiscard]] ParseResult<Handle<ConstDef>> parseConstDef(int32_t offset);
+    [[nodiscard]] ParseResult<std::vector<Handle<Exp>>> parseArrayConstDims(
+        int32_t offset);
     [[nodiscard]] ParseResult<Handle<ConstInitVal>> parseConstInitVal(
         int32_t offset);
+    [[nodiscard]] ParseResult<std::vector<Handle<ConstInitVal>>>
+    parseConstInitValList(int32_t offset);
     [[nodiscard]] ParseResult<Handle<VarDef>> parseVarDef(int32_t offset);
     [[nodiscard]] ParseResult<Handle<InitVal>> parseInitVal(int32_t offset);
+    [[nodiscard]] ParseResult<std::vector<Handle<InitVal>>> parseInitValList(
+        int32_t offset);
     [[nodiscard]] ParseResult<Handle<StmtNode>> parseStmt(int32_t offset);
     [[nodiscard]] ParseResult<Handle<IfStmt>> parseIfStmt(int32_t offset);
     [[nodiscard]] ParseResult<Handle<WhileStmt>> parseWhileStmt(int32_t offset);
@@ -126,6 +146,8 @@ class Parser {
     [[nodiscard]] ParseResult<Handle<Exp>> parsePrimaryExp(int32_t offset);
     [[nodiscard]] ParseResult<Handle<Exp>> parseUnaryExp(int32_t offset);
     [[nodiscard]] ParseResult<Handle<Exp>> parseLVal(int32_t offset);
+    [[nodiscard]] ParseResult<std::vector<Handle<Exp>>> parseLValIndices(
+        int32_t offset);
     [[nodiscard]] ParseResult<UnaryOpKeyword> parseUnaryOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseMulOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseAddOp(int32_t offset);
@@ -133,6 +155,8 @@ class Parser {
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseEqOp(int32_t offset);
     [[nodiscard]] ParseResult<Handle<Exp>> parseNumber(int32_t offset);
     [[nodiscard]] ParseResult<Handle<Identifier>> parseIdent(int32_t offset);
+    [[nodiscard]] ParseResult<ParamArraySuffixParse> parseParamArraySuffix(
+        int32_t offset);
 
     [[nodiscard]] ParseResult<int32_t> parseIntConst(int32_t offset);
     [[nodiscard]] ParseResult<int32_t> parseHexadecimalConst(int32_t offset);
@@ -142,6 +166,8 @@ class Parser {
     [[nodiscard]] int32_t skipTrivia(int32_t offset) const;
     [[nodiscard]] int32_t recoverToFuncHeaderEnd(int32_t offset) const;
     [[nodiscard]] int32_t recoverToExprRParen(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToRBracket(int32_t offset) const;
+    [[nodiscard]] int32_t recoverToInitBoundary(int32_t offset) const;
     [[nodiscard]] int32_t recoverToIfStmtHead(int32_t offset) const;
     [[nodiscard]] int32_t recoverToWhileStmtHead(int32_t offset) const;
     [[nodiscard]] int32_t recoverToDeclBoundary(int32_t offset) const;
@@ -182,10 +208,17 @@ class Parser {
     std::unordered_map<int32_t, ParseResult<Handle<VarDecl>>> m_varDeclMemo;
     std::unordered_map<int32_t, ParseResult<BTypeKeyword>> m_bTypeMemo;
     std::unordered_map<int32_t, ParseResult<Handle<ConstDef>>> m_constDefMemo;
+    std::unordered_map<int32_t, ParseResult<std::vector<Handle<Exp>>>>
+        m_arrayConstDimsMemo;
     std::unordered_map<int32_t, ParseResult<Handle<ConstInitVal>>>
         m_constInitValMemo;
+    std::unordered_map<int32_t,
+        ParseResult<std::vector<Handle<ConstInitVal>>>>
+        m_constInitValListMemo;
     std::unordered_map<int32_t, ParseResult<Handle<VarDef>>> m_varDefMemo;
     std::unordered_map<int32_t, ParseResult<Handle<InitVal>>> m_initValMemo;
+    std::unordered_map<int32_t, ParseResult<std::vector<Handle<InitVal>>>>
+        m_initValListMemo;
     std::unordered_map<int32_t, ParseResult<Handle<StmtNode>>> m_stmtMemo;
     std::unordered_map<int32_t, ParseResult<Handle<IfStmt>>> m_ifStmtMemo;
     std::unordered_map<int32_t, ParseResult<Handle<WhileStmt>>> m_whileStmtMemo;
@@ -207,6 +240,8 @@ class Parser {
     std::unordered_map<int32_t, ParseResult<Handle<Exp>>> m_primaryExpMemo;
     std::unordered_map<int32_t, ParseResult<Handle<Exp>>> m_unaryExpMemo;
     std::unordered_map<int32_t, ParseResult<Handle<Exp>>> m_lValMemo;
+    std::unordered_map<int32_t, ParseResult<std::vector<Handle<Exp>>>>
+        m_lValIndicesMemo;
     std::unordered_map<int32_t, ParseResult<UnaryOpKeyword>> m_unaryOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_mulOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_addOpMemo;
@@ -214,6 +249,8 @@ class Parser {
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_eqOpMemo;
     std::unordered_map<int32_t, ParseResult<Handle<Exp>>> m_numberMemo;
     std::unordered_map<int32_t, ParseResult<Handle<Identifier>>> m_identMemo;
+    std::unordered_map<int32_t, ParseResult<ParamArraySuffixParse>>
+        m_paramArraySuffixMemo;
 };
 
 } // namespace yesod::frontend

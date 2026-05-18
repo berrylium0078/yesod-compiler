@@ -2,96 +2,71 @@
 
 ## 1. Source Grammar Notes
 
-This document is the PEG-oriented design for the next SysY extension. The source EBNF remains [doc/sysy.md](doc/sysy.md), and this revision is an incremental extension of the existing PEG baseline in order to support:
+This document is the PEG-oriented design for the next SysY extension. The source EBNF remains [doc/sysy.md](doc/sysy.md), and this revision is an incremental extension of the current PEG baseline in order to support arrays in declarations, lvalues, function parameters, and brace initializers.
 
-- compilation units with multiple top-level items
-- global `const` and `int` declarations
-- function definitions with `int` or `void` return type
-- function parameter lists
-- `return;` as well as `return Exp;`
-- function calls in expressions
-
-Assumptions carried forward from the existing token layer unless noted below:
-
-- declarations remain scalar only: `ConstDef ::= IDENT "=" ConstInitVal` and `VarDef ::= IDENT | IDENT "=" InitVal`
-- `ConstInitVal ::= ConstExp` and `InitVal ::= Exp`
-- `LVal ::= IDENT`
-- blocks still contain `Decl` or `Stmt`, and nested blocks introduce nested scopes
-- arrays and brace initializers remain out of scope
-- whitespace and comments are handled entirely by the token layer
-- `break` and `continue` remain syntactically unrestricted and are rejected semantically outside loops
-
-The source-language delta to incorporate is:
+Source-language delta for this revision:
 
 ```text
-CompUnit    ::= [CompUnit] (Decl | FuncDef);
+ConstDef      ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
+ConstInitVal  ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
+VarDef        ::= IDENT {"[" ConstExp "]"}
+                | IDENT {"[" ConstExp "]"} "=" InitVal;
+InitVal       ::= Exp | "{" [InitVal {"," InitVal}] "}";
 
-FuncDef     ::= FuncType IDENT "(" [FuncFParams] ")" Block;
-FuncType    ::= "void" | "int";
-FuncFParams ::= FuncFParam {"," FuncFParam};
-FuncFParam  ::= BType IDENT;
+LVal          ::= IDENT {"[" Exp "]"};
 
-Stmt        ::= ...
-              | "return" [Exp] ";";
-
-UnaryExp    ::= ...
-              | IDENT "(" [FuncRParams] ")"
-              | ...;
-FuncRParams ::= Exp {"," Exp};
+FuncFParam    ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
 ```
 
-The expression-precedence ladder is still the usual SysY one:
+Assumptions carried forward from the existing token layer and baseline design unless noted below:
 
-- `Exp ::= LOrExp`
-- `LOrExp ::= LAndExp | LOrExp "||" LAndExp`
-- `LAndExp ::= EqExp | LAndExp "&&" EqExp`
-- `EqExp ::= RelExp | EqExp ("==" | "!=") RelExp`
-- `RelExp ::= AddExp | RelExp ("<" | ">" | "<=" | ">=") AddExp`
-- `AddExp ::= MulExp | AddExp ("+" | "-") MulExp`
-- `MulExp ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp`
-- `UnaryExp ::= PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp`
-- `PrimaryExp ::= "(" Exp ")" | LVal | Number`
+- top-level sequencing remains `CompUnit ::= [CompUnit] (Decl | FuncDef)` and is still represented in PEG as a non-empty ordered list of top-level items
+- function definitions, optional `return Exp`, and call expressions stay as in the current baseline
+- the expression-precedence ladder is unchanged: `Exp ::= LOrExp`, down through `UnaryExp`, `PrimaryExp`, `LVal`, and `Number`
+- whitespace and comments are still handled entirely by the token layer
+- `break` and `continue` remain syntactically unrestricted and are still rejected semantically outside loops
+
+Token-layer delta:
+
+- identifiers, integer literals, keywords, parentheses, braces, separators, and operators are unchanged
+- `[` and `]` must now be exposed explicitly as tokens because the source grammar now uses array declarators and subscripts
 
 Implementation note:
 
-- The grammar still uses named precedence layers (`LOrExp`, `AddExp`, `MulExp`, `UnaryExp`, and so on) because they are the clearest way to explain precedence and PEG rewrites.
-- The runtime AST is intentionally flatter. Expressions are still represented by one arena-backed `Exp` node shape plus payload variants such as binary, unary, lvalue, and number.
-- To represent the new call syntax cleanly, the current `Exp` payload set should grow a call payload, for example `struct Exp::Call { Handle<Identifier> m_func_nn; std::vector<Handle<Exp>> m_params; };`.
+- The grammar continues to use named precedence layers (`LOrExp`, `AddExp`, `MulExp`, `UnaryExp`, and so on) because they are the clearest way to explain precedence and PEG rewrites.
+- The runtime AST is flatter than the grammar. [src/frontend/ast.h](src/frontend/ast.h) already models expressions as one `Exp` node with payload variants such as binary, unary, call, lvalue, and number, so the grammar-level nonterminals remain explanatory rather than one-to-one runtime node types.
+- This array extension implies AST growth outside the current expression payload split. The scalar-only shapes in [src/frontend/ast.h](src/frontend/ast.h) for `LVal`, `ConstInitVal`, `InitVal`, `ConstDef`, `VarDef`, and `FuncFParam` will need array-dimension vectors and recursive initializer forms even though the grammar still presents them with separate nonterminals.
 - `ConstExp` remains a grammar alias, not a distinct runtime AST node. Whether an expression is constant is still a semantic property discovered during analysis and constant folding.
-- This grammar extension also implies non-expression AST growth outside `Exp`: `FuncTypeKeyword` must add `void`, and `CompUnit` must stop assuming a single `FuncDef` so it can preserve the ordered list of top-level declarations and function definitions.
 
 ## 2. Baseline Delta
 
-Relative to the previous [doc/sysy-peg.md](doc/sysy-peg.md) baseline:
+Relative to the previous baseline in this file:
 
-- unchanged: local declaration syntax, scalar declarators, block structure, `if` / `while` / `break` / `continue`, the precedence ladder above `UnaryExp`, tokenization of identifiers and integer literals, and the general synchronization strategy based on delimiters and statement or declaration boundaries
-- changed: `CompUnit` no longer means exactly one function definition; it now accepts a non-empty sequence of top-level `Decl` or `FuncDef`
-- changed: `FuncDef` now accepts `void` as well as `int`, and allows an optional parameter list
-- changed: `Stmt` keeps the existing statement alternatives but changes `return` from mandatory-expression form to optional-expression form
-- changed: `UnaryExp` grows the call form `IDENT "(" [FuncRParams] ")"`, which must bind tighter than binary operators and must be recognized before the `LVal`-headed primary-expression branch
-- added: `FuncFParams`, `FuncFParam`, `FuncRParams`, `CallExp`, and a top-level helper to describe `Decl | FuncDef` sequencing cleanly in PEG
-- reordered: ordered choice now matters for `TopLevelItem`, `Stmt`, and especially `UnaryExp`
-- token layer changes: add `void`; all other lexical classes stay the same
-- recovery updates: the existing block, statement-boundary, declaration-boundary, and parenthesized-expression recovery remain valid, but top-level synchronization must now recognize `void` as a function head and call parsing adds one more high-value missing-`)` site
+- unchanged: `CompUnit`, `TopLevelItem`, `FuncDef`, `FuncType`, `FuncFParams`, block structure, statement forms, return statements, function calls, the full expression-precedence ladder, and the existing keyword and literal tokenization apart from brackets
+- changed: `ConstDef` now accepts zero or more constant-dimension suffixes before `=`
+- changed: `VarDef` now accepts zero or more constant-dimension suffixes, with the optional initializer preserved after the full declarator
+- changed: `ConstInitVal` and `InitVal` now accept recursive brace initializers in addition to scalar expression forms
+- changed: `LVal` now accepts zero or more subscript suffixes
+- changed: `FuncFParam` now accepts the SysY array-parameter suffix `[]` followed by zero or more constant trailing dimensions
+- added: `ArrayConstDims`, `LValIndices`, `ParamArraySuffix`, `ConstInitValList`, and `InitValList`
+- reordered: no new ordered-choice reordering is required beyond preserving `CallExp` before `PrimaryExp` and `AssignStmt` before `ExpStmt`
+- token layer changes: add `LBRACK` and `RBRACK`; no keyword changes are needed
+- recovery updates: existing block, declaration, statement, and parenthesized-expression recovery remain valid; new recovery is only needed around `[` `]` array suffixes and `{` `}` brace initializers
 
 ## 3. Left-Recursion Elimination
 
-The new extension adds one PEG-incompatible repetition at the compilation-unit level and preserves the existing precedence rewrites.
+The existing expression-ladder rewrites from the current baseline remain unchanged. This revision adds PEG-incompatible repetition and optional-list patterns, but it does not introduce any new left-recursive expression rule.
 
 | Original shape | Rewritten PEG shape | Why it preserves the parse |
 |---|---|---|
-| `CompUnit ::= [CompUnit] (Decl | FuncDef)` | `CompUnit <- TopLevelItem+` with `TopLevelItem <- ConstDecl / FuncDef / VarDecl` | the source rule denotes a non-empty left-recursive list of top-level items; `TopLevelItem+` preserves the same ordered sequence without left recursion |
-| `FuncFParams ::= FuncFParam {"," FuncFParam}` | `FuncFParams <- FuncFParam (COMMA FuncFParam)*` | preserves a non-empty comma-separated list of formal parameters |
-| `FuncRParams ::= Exp {"," Exp}` | `FuncRParams <- Exp (COMMA Exp)*` | preserves a non-empty comma-separated list of actual arguments |
-| `MulExp ::= UnaryExp | MulExp MulOp UnaryExp` | `MulExp <- UnaryExp (MulOp UnaryExp)*` | preserves left-associative multiplicative chains |
-| `AddExp ::= MulExp | AddExp AddOp MulExp` | `AddExp <- MulExp (AddOp MulExp)*` | preserves additive precedence and left-to-right folding |
-| `RelExp ::= AddExp | RelExp RelOp AddExp` | `RelExp <- AddExp (RelOp AddExp)*` | removes left recursion without changing precedence |
-| `EqExp ::= RelExp | EqExp EqOp RelExp` | `EqExp <- RelExp (EqOp RelExp)*` | preserves equality precedence over logical operators |
-| `LAndExp ::= EqExp | LAndExp "&&" EqExp` | `LAndExp <- EqExp (ANDAND EqExp)*` | preserves logical-and chaining |
-| `LOrExp ::= LAndExp | LOrExp "||" LAndExp` | `LOrExp <- LAndExp (OROR LAndExp)*` | preserves logical-or chaining |
-| `ConstExp ::= Exp` | `ConstExp <- Exp` | remains a grammar alias; const-ness is semantic, not syntactic |
+| `ConstDef ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal` | `ConstDef <- IDENT ArrayConstDims ASSIGN ConstInitVal` with `ArrayConstDims <- (LBRACK ConstExp RBRACK)*` | preserves an identifier followed by zero or more constant dimensions, then the required initializer |
+| `VarDef ::= IDENT {"[" ConstExp "]"} | IDENT {"[" ConstExp "]"} "=" InitVal` | `VarDef <- IDENT ArrayConstDims (ASSIGN InitVal)?` | factors the shared prefix and keeps the initializer optional after the whole declarator |
+| `ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}"` | `ConstInitVal <- ConstExp / LBRACE ConstInitValList? RBRACE` and `ConstInitValList <- ConstInitVal (COMMA ConstInitVal)*` | preserves either a scalar constant expression or a brace-enclosed comma-separated recursive list |
+| `InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}"` | `InitVal <- Exp / LBRACE InitValList? RBRACE` and `InitValList <- InitVal (COMMA InitVal)*` | same factoring as `ConstInitVal`, preserving scalar or recursive brace forms |
+| `LVal ::= IDENT {"[" Exp "]"}` | `LVal <- IDENT LValIndices` with `LValIndices <- (LBRACK Exp RBRACK)*` | preserves a base identifier followed by zero or more subscripts |
+| `FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}]` | `FuncFParam <- BType IDENT ParamArraySuffix?` with `ParamArraySuffix <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*` | preserves SysY array-parameter syntax: one unsized first dimension, then zero or more constant trailing dimensions |
 
-The call extension does not introduce left recursion, but it does introduce a PEG-sensitive overlap: `IDENT "(" ... ")"` and `LVal ::= IDENT` share the same prefix, so the call form must be checked before the plain identifier primary form.
+The earlier rewrites for `CompUnit`, `FuncFParams`, `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, `LOrExp`, and `ConstExp <- Exp` are unchanged from the current baseline and remain valid.
 
 ## 4. Plain PEG Grammar
 
@@ -102,7 +77,8 @@ TopLevelItem       <- ConstDecl / FuncDef / VarDecl
 FuncDef            <- FuncType IDENT LPAREN FuncFParams? RPAREN Block
 FuncType           <- KW_VOID / KW_INT
 FuncFParams        <- FuncFParam (COMMA FuncFParam)*
-FuncFParam         <- BType IDENT
+FuncFParam         <- BType IDENT ParamArraySuffix?
+ParamArraySuffix   <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*
 
 Block              <- LBRACE BlockItem* RBRACE
 BlockItem          <- Decl / Stmt
@@ -111,10 +87,13 @@ Decl               <- ConstDecl / VarDecl
 ConstDecl          <- KW_CONST BType ConstDef (COMMA ConstDef)* SEMI
 VarDecl            <- BType VarDef (COMMA VarDef)* SEMI
 BType              <- KW_INT
-ConstDef           <- IDENT ASSIGN ConstInitVal
-ConstInitVal       <- ConstExp
-VarDef             <- IDENT (ASSIGN InitVal)?
-InitVal            <- Exp
+ConstDef           <- IDENT ArrayConstDims ASSIGN ConstInitVal
+VarDef             <- IDENT ArrayConstDims (ASSIGN InitVal)?
+ArrayConstDims     <- (LBRACK ConstExp RBRACK)*
+ConstInitVal       <- ConstExp / LBRACE ConstInitValList? RBRACE
+ConstInitValList   <- ConstInitVal (COMMA ConstInitVal)*
+InitVal            <- Exp / LBRACE InitValList? RBRACE
+InitValList        <- InitVal (COMMA InitVal)*
 ConstExp           <- Exp
 
 Stmt               <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
@@ -137,7 +116,8 @@ UnaryExp           <- CallExp / PrimaryExp / UnaryOp UnaryExp
 CallExp            <- IDENT LPAREN FuncRParams? RPAREN
 FuncRParams        <- Exp (COMMA Exp)*
 PrimaryExp         <- LPAREN Exp RPAREN / LVal / Number
-LVal               <- IDENT
+LVal               <- IDENT LValIndices
+LValIndices        <- (LBRACK Exp RBRACK)*
 Number             <- INT_CONST
 UnaryOp            <- PLUS / MINUS / BANG
 MulOp              <- STAR / SLASH / PERCENT
@@ -171,6 +151,8 @@ LPAREN             <- "(" Spacing
 RPAREN             <- ")" Spacing
 LBRACE             <- "{" Spacing
 RBRACE             <- "}" Spacing
+LBRACK             <- "[" Spacing
+RBRACK             <- "]" Spacing
 SEMI               <- ";" Spacing
 COMMA              <- "," Spacing
 ASSIGN             <- "=" Spacing
@@ -206,17 +188,19 @@ EOF                <- !.
 Ordered-choice-sensitive rules in the plain grammar:
 
 - `TopLevelItem <- ConstDecl / FuncDef / VarDecl`
-  `ConstDecl` is prefix-distinct because of `const`. `FuncDef` must precede `VarDecl` so an `int`-headed function definition is recognized as a function before the declaration branch can commit in the recovery grammar.
+  `ConstDecl` is prefix-distinct because of `const`. `FuncDef` must still precede `VarDecl` so an `int`-headed function definition is not misread as a variable declaration prefix.
 - `Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt`
-  `AssignStmt` must stay before `ExpStmt` because both may start with `IDENT`. Keyword-led and brace-led forms can safely precede the fallback expression statement.
+  `AssignStmt` must remain before `ExpStmt` because both may begin with `IDENT`, and with arrays the overlap now includes subscripted heads such as `a[i] = 1;`.
 - `UnaryExp <- CallExp / PrimaryExp / UnaryOp UnaryExp`
-  `CallExp` must precede `PrimaryExp` because both can start with `IDENT`; otherwise an identifier-headed call would be consumed as `LVal` and the following `(` would be stranded.
+  `CallExp` must remain before `PrimaryExp` because both start with `IDENT`; otherwise `foo(1)` would be consumed as an `LVal` and the following `(` would be stranded.
 - `PrimaryExp <- LPAREN Exp RPAREN / LVal / Number`
-  The prefixes are currently disjoint, but this rule remains a documented hotspot because `LVal` is the plain identifier branch that overlaps with potential future postfix forms.
+  The `LVal` branch now includes postfix subscripts, but it is still safe here because the call form has already been checked at `UnaryExp`.
 - `RelOp <- LE / GE / LT / GT`
-  Longer operators must precede shorter prefix-sharing ones.
+  Longer operators must still precede shorter prefix-sharing ones.
 - `IntegerConst <- HexadecimalConst / OctalConst / DecimalConst`
-  Hexadecimal must precede octal so `0x...` is not consumed as octal `0`.
+  Hexadecimal must still precede octal so `0x...` is not consumed as octal `0`.
+
+The new initializer rules are not branch-order-sensitive because `ConstExp` and `Exp` do not start with `{`, while brace initializers do.
 
 ## 5. Recovery-Annotated PEG Grammar
 
@@ -235,7 +219,12 @@ FuncDef                    <- FuncType IDENT LPAREN ^
 FuncType                   <- KW_VOID / KW_INT
 FuncFParams                <- FuncFParam
                               (COMMA (FuncFParam / Throw<MalformedFuncParam> RecoverToParamBoundary))*
-FuncFParam                 <- BType IDENT
+FuncFParam                 <- BType IDENT ParamArraySuffix?
+ParamArraySuffix           <- LBRACK ^
+                              (RBRACK / Throw<MissingParamArrayRBracket> RecoverToRBracket)
+                              (LBRACK ^
+                                (ConstExp / Throw<MalformedArrayBound> RecoverToRBracket)
+                                (RBRACK / Throw<MissingArrayRBracket> RecoverToRBracket))*
 
 Block                      <- LBRACE ^
                               (BlockItem / Throw<MalformedBlockItem> RecoverToBlockItemBoundary)*
@@ -253,10 +242,30 @@ VarDecl                    <- BType ^
                               (COMMA (VarDef / Throw<MalformedDeclItem> RecoverToDeclBoundary))*
                               (SEMI / Throw<MissingDeclSemicolon> RecoverToDeclBoundary)
 BType                      <- KW_INT
-ConstDef                   <- IDENT ASSIGN ConstInitVal
+ConstDef                   <- IDENT ArrayConstDims ASSIGN ^
+                              (ConstInitVal / Throw<MalformedConstInitializer> RecoverToDeclBoundary)
+VarDef                     <- IDENT ArrayConstDims
+                              (ASSIGN ^
+                                (InitVal / Throw<MalformedInitializer> RecoverToDeclBoundary))?
+ArrayConstDims             <- (LBRACK ^
+                                (ConstExp / Throw<MalformedArrayBound> RecoverToRBracket)
+                                (RBRACK / Throw<MissingArrayRBracket> RecoverToRBracket))*
 ConstInitVal               <- ConstExp
-VarDef                     <- IDENT (ASSIGN InitVal)?
+                            / LBRACE ^
+                              (RBRACE
+                              / ConstInitValList
+                                (RBRACE / Throw<MissingConstInitRBrace> RecoverToInitBoundary)
+                              / Throw<MalformedConstInitializer> RecoverToInitBoundary)
+ConstInitValList           <- ConstInitVal
+                              (COMMA (ConstInitVal / Throw<MalformedConstInitializer> RecoverToInitBoundary))*
 InitVal                    <- Exp
+                            / LBRACE ^
+                              (RBRACE
+                              / InitValList
+                                (RBRACE / Throw<MissingInitRBrace> RecoverToInitBoundary)
+                              / Throw<MalformedInitializer> RecoverToInitBoundary)
+InitValList                <- InitVal
+                              (COMMA (InitVal / Throw<MalformedInitializer> RecoverToInitBoundary))*
 ConstExp                   <- Exp
 
 Stmt                       <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
@@ -305,7 +314,10 @@ PrimaryExp                 <- LPAREN ^
                               (RPAREN / Throw<MissingPrimaryRParen> RecoverToExprRParen)
                             / LVal
                             / Number
-LVal                       <- IDENT
+LVal                       <- IDENT LValIndices
+LValIndices                <- (LBRACK ^
+                                (Exp / Throw<MalformedSubscript> RecoverToRBracket)
+                                (RBRACK / Throw<MissingSubscriptRBracket> RecoverToRBracket))*
 Number                     <- INT_CONST
 UnaryOp                    <- PLUS / MINUS / BANG
 MulOp                      <- STAR / SLASH / PERCENT
@@ -339,6 +351,8 @@ LPAREN                     <- "(" Spacing
 RPAREN                     <- ")" Spacing
 LBRACE                     <- "{" Spacing
 RBRACE                     <- "}" Spacing
+LBRACK                     <- "[" Spacing
+RBRACK                     <- "]" Spacing
 SEMI                       <- ";" Spacing
 COMMA                      <- "," Spacing
 ASSIGN                     <- "=" Spacing
@@ -364,23 +378,25 @@ LineComment                <- "//" (!EndOfLine .)* EndOfLine?
 BlockComment               <- "/*" (!"*/" .)* "*/"
 EndOfLine                  <- "\r\n" / "\n" / "\r"
 
-RecoverToTopLevelBoundary    <- (!KW_CONST !KW_INT !KW_VOID !EOF .)*
-                                (&KW_CONST / &KW_INT / &KW_VOID / EOF)
-RecoverToFuncHeaderEnd       <- (!")" !"{" !EOF .)* (RPAREN / &LBRACE / EOF)
-RecoverToParamBoundary       <- (!"," !")" !EOF .)* (COMMA / RPAREN / EOF)
-RecoverToCallEnd             <- (!")" !";" !"}" !"," !EOF .)* (RPAREN / &SEMI / &RBRACE / &COMMA / EOF)
-RecoverToArgBoundary         <- (!"," !")" !";" !"}" !EOF .)* (COMMA / RPAREN / &SEMI / &RBRACE / EOF)
-RecoverToExprRParen          <- (!")" !";" !"}" !EOF .)* (RPAREN / &SEMI / &RBRACE / EOF)
-RecoverToIfStmtHead          <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                                (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
-RecoverToWhileStmtHead       <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                                (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
-RecoverToStmtBoundary        <- (!";" !"}" !KW_ELSE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !EOF .)*
-                                (SEMI / &RBRACE / &KW_ELSE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / EOF)
-RecoverToDeclBoundary        <- (!"," !";" !"}" !EOF .)* (COMMA / SEMI / &RBRACE / EOF)
-RecoverToBlockItemBoundary   <- (!KW_CONST !KW_INT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
-                                (&KW_CONST / &KW_INT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
-RecoverToBlockEnd            <- (!"}" !EOF .)* (RBRACE / EOF)
+RecoverToTopLevelBoundary  <- (!KW_CONST !KW_INT !KW_VOID !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_VOID / EOF)
+RecoverToFuncHeaderEnd     <- (!")" !"{" !EOF .)* (RPAREN / &LBRACE / EOF)
+RecoverToParamBoundary     <- (!"," !")" !EOF .)* (COMMA / RPAREN / EOF)
+RecoverToCallEnd           <- (!")" !";" !"}" !"," !EOF .)* (RPAREN / &SEMI / &RBRACE / &COMMA / EOF)
+RecoverToArgBoundary       <- (!"," !")" !";" !"}" !EOF .)* (COMMA / RPAREN / &SEMI / &RBRACE / EOF)
+RecoverToExprRParen        <- (!")" !";" !"}" !EOF .)* (RPAREN / &SEMI / &RBRACE / EOF)
+RecoverToRBracket          <- (!"]" !"," !")" !"}" !";" !EOF .)* (RBRACK / &COMMA / &RPAREN / &RBRACE / &SEMI / EOF)
+RecoverToInitBoundary      <- (!"," !"}" !";" !EOF .)* (&COMMA / &RBRACE / &SEMI / EOF)
+RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToStmtBoundary      <- (!";" !"}" !KW_ELSE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !EOF .)*
+                              (SEMI / &RBRACE / &KW_ELSE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / EOF)
+RecoverToDeclBoundary      <- (!"," !";" !"}" !EOF .)* (COMMA / SEMI / &RBRACE / EOF)
+RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
+RecoverToBlockEnd          <- (!"}" !EOF .)* (RBRACE / EOF)
 
 Digit                      <- [0-9]
 NonZeroDigit               <- [1-9]
@@ -389,12 +405,11 @@ HexadecimalDigit           <- [0-9A-Fa-f]
 EOF                        <- !.
 ```
 
-Recovery placement is still deliberately small and outer-construct focused:
+Recovery placement stays deliberately narrow:
 
-- `FuncDef`: commit after `(` because the declaration has already been identified as a function header; the only high-value diagnostic inside is malformed parameters or a missing `)`
-- `ReturnStmt`: keep `return;` cheap, but once a return expression starts, treat a missing trailing `;` as a return-shaped error rather than falling through to another statement form
-- `CallExp`: commit after `(` because `IDENT (` already determines a call, and a missing `)` is a high-value diagnostic that would otherwise cascade badly
-- existing block, declaration, `if`, `while`, assignment, and parenthesized-expression recovery remain valid with only the synchronization sets widened where the new grammar introduces `void` or call argument separators
+- `ArrayConstDims`, `LValIndices`, and `ParamArraySuffix` cut immediately after `[` because that prefix already determines an array suffix, and a missing `]` would otherwise cascade into declaration, parameter, or statement recovery
+- `ConstInitVal` and `InitVal` cut after `{` because the parser has already committed to a brace initializer, making missing `}` or malformed elements the only meaningful local failures
+- existing function-header, call, block, declaration, `if`, `while`, assignment, and parenthesized-expression recovery remain valid without broader restructuring
 
 ## 6. Recovery Inventory
 
@@ -402,10 +417,18 @@ Recovery placement is still deliberately small and outer-construct focused:
 |---|---|---|---|
 | `MalformedTopLevelItem` | `CompUnit` at a top-level item start | top-level text is neither a valid declaration nor function definition | `RecoverToTopLevelBoundary` |
 | `MissingFuncRParen` | `FuncDef` after the optional formal-parameter list | function header is missing `)` | `RecoverToFuncHeaderEnd` |
-| `MalformedFuncParam` | `FuncFParams` after `,` | a formal parameter is malformed or missing | `RecoverToParamBoundary` |
+| `MalformedFuncParam` | `FuncFParams` after `,` or in the header body | a formal parameter is malformed or missing | `RecoverToParamBoundary` |
+| `MissingParamArrayRBracket` | `ParamArraySuffix` after the first `[` | function parameter array marker `[]` is missing `]` | `RecoverToRBracket` |
+| `MalformedArrayBound` | `ArrayConstDims` or trailing parameter dimensions after `[` | array bound expression is malformed or missing | `RecoverToRBracket` |
+| `MissingArrayRBracket` | `ArrayConstDims` or trailing parameter dimensions after a bound | array declarator dimension is missing `]` | `RecoverToRBracket` |
 | `MalformedBlockItem` | `Block` at a block-item start | block item is neither a valid declaration nor statement | `RecoverToBlockItemBoundary` |
+| `MissingRBrace` | `Block` after block items | block is missing `}` | `RecoverToBlockEnd` |
 | `MalformedDeclItem` | `ConstDecl` or `VarDecl` at a declarator position | declarator is malformed or missing | `RecoverToDeclBoundary` |
 | `MissingDeclSemicolon` | `ConstDecl` or `VarDecl` after the declarator list | declaration is missing `;` | `RecoverToDeclBoundary` |
+| `MalformedConstInitializer` | `ConstDef` after `=` or inside `ConstInitValList` | constant initializer is malformed or missing | `RecoverToDeclBoundary` or `RecoverToInitBoundary` |
+| `MissingConstInitRBrace` | `ConstInitVal` after a brace initializer body | constant brace initializer is missing `}` | `RecoverToInitBoundary` |
+| `MalformedInitializer` | `VarDef` after `=` or inside `InitValList` | initializer is malformed or missing | `RecoverToDeclBoundary` or `RecoverToInitBoundary` |
+| `MissingInitRBrace` | `InitVal` after a brace initializer body | brace initializer is missing `}` | `RecoverToInitBoundary` |
 | `MalformedIfCond` | `IfStmt` after `if (` | `if` condition is malformed or missing | `RecoverToIfStmtHead` |
 | `MissingIfRParen` | `IfStmt` after the condition expression | `if` condition is missing `)` | `RecoverToIfStmtHead` |
 | `MalformedIfThenStmt` | `IfStmt` after `)` | then-branch statement is malformed or missing | `RecoverToStmtBoundary` |
@@ -424,7 +447,8 @@ Recovery placement is still deliberately small and outer-construct focused:
 | `MalformedCallArg` | `FuncRParams` after `,` | call argument is malformed or missing | `RecoverToArgBoundary` |
 | `MalformedPrimaryExp` | `PrimaryExp` after `(` | parenthesized expression has no valid inner expression | `RecoverToExprRParen` |
 | `MissingPrimaryRParen` | `PrimaryExp` after the inner expression | parenthesized expression is missing `)` | `RecoverToExprRParen` |
-| `MissingRBrace` | `Block` after block items | block is missing `}` | `RecoverToBlockEnd` |
+| `MalformedSubscript` | `LValIndices` after `[` | array subscript expression is malformed or missing | `RecoverToRBracket` |
+| `MissingSubscriptRBracket` | `LValIndices` after a subscript expression | array subscript is missing `]` | `RecoverToRBracket` |
 
 ## 7. Ordered-Choice Notes
 
@@ -434,7 +458,7 @@ Recovery placement is still deliberately small and outer-construct focused:
 TopLevelItem <- ConstDecl / FuncDef / VarDecl
 ```
 
-This rule becomes PEG-sensitive once global declarations and multiple functions are allowed. `ConstDecl` is safely first because `const` is unique. The subtle case is `FuncDef` versus `VarDecl`: both can start with `int IDENT`. Keeping `FuncDef` before `VarDecl` means `int f(...) { ... }` is recognized as a function definition before declaration recovery can commit to a variable declaration shape. If the order were reversed and declaration parsing cut too early, malformed or even valid function headers could be misreported as declaration errors.
+This rule remains PEG-sensitive for the same reason as the previous baseline. `ConstDecl` is safe first because `const` is unique. `FuncDef` must stay before `VarDecl` so `int f(...) { ... }` is recognized as a function definition before declaration parsing can misclassify it. Arrays do not change that prefix conflict.
 
 2. `Stmt`
 
@@ -442,7 +466,7 @@ This rule becomes PEG-sensitive once global declarations and multiple functions 
 Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
 ```
 
-`AssignStmt` must remain before `ExpStmt` because both may begin with `IDENT`. `ReturnStmt` can stay before `ExpStmt` because `return` is reserved and prefix-distinct. No new cut is needed beyond the existing ones on keyword-led statements and after `=` in assignments.
+This ordering is still correct, and arrays make the `AssignStmt` versus `ExpStmt` overlap slightly larger. Inputs like `a[i] = x;` and `a[i];` share the same prefix for longer, so `AssignStmt` must stay before `ExpStmt`. The cut after `=` is still the right commitment point because only then is the statement definitely an assignment.
 
 3. `UnaryExp`
 
@@ -450,7 +474,7 @@ Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / Ret
 UnaryExp <- CallExp / PrimaryExp / UnaryOp UnaryExp
 ```
 
-This is the most important new branch-order decision. `CallExp` must appear before `PrimaryExp` because both can begin with `IDENT`. If `PrimaryExp` came first, `foo(1, 2)` would be consumed as `LVal` with the `(` left behind, producing either a later syntax error or a misleading recovery path. `UnaryOp UnaryExp` remains safe as a separate branch because `+`, `-`, and `!` are prefix-distinct from identifier and parenthesis starts.
+This remains the most important identifier-headed branch order. Arrays enlarge `LVal`, but they do not change the core conflict: `foo(1)` and `foo[1]` both start with `IDENT`, and the call form must still be recognized before the plain primary-expression route. If `PrimaryExp` came first, `foo(1)` would still be consumed as an `LVal` prefix and the call would fail later.
 
 4. `PrimaryExp`
 
@@ -458,15 +482,16 @@ This is the most important new branch-order decision. `CallExp` must appear befo
 PrimaryExp <- LPAREN Exp RPAREN / LVal / Number
 ```
 
-The order is still correct. The `(`-headed branch is distinct and recovery commits after `(`. `LVal` remains the plain identifier leaf once the call form has already been checked at the `UnaryExp` level.
+This order is still correct. The `(` branch is distinct and already cut in the recovery grammar. `LVal` now covers `IDENT` plus zero or more bracketed subscripts, which is exactly why the call form must already have been handled one level above.
 
-5. `FuncType`
+5. `ConstInitVal` and `InitVal`
 
 ```peg
-FuncType <- KW_VOID / KW_INT
+ConstInitVal <- ConstExp / LBRACE ConstInitValList? RBRACE
+InitVal      <- Exp / LBRACE InitValList? RBRACE
 ```
 
-This rule is not branch-order-sensitive today because `void` and `int` are disjoint keywords. No cut is needed.
+These rules are not truly branch-order-sensitive because the brace initializer starts with `{`, while expression forms do not. No additional cut is needed in the plain grammar. In the recovery grammar, the cut after `{` is useful only because the parser has already committed to the brace-initializer shape.
 
 6. `RelOp`
 
@@ -474,7 +499,7 @@ This rule is not branch-order-sensitive today because `void` and `int` are disjo
 RelOp <- LE / GE / LT / GT
 ```
 
-Longer operators must precede their shorter prefixes.
+Longer operators must still precede shorter prefixes.
 
 7. `IntegerConst`
 
@@ -482,12 +507,12 @@ Longer operators must precede their shorter prefixes.
 IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
 ```
 
-Hexadecimal must precede octal so `0x...` is not consumed as octal `0`.
+Hexadecimal must still precede octal so `0x...` is not consumed as octal `0`.
 
 ## 8. Short Design Rationale
 
-This update keeps the previous PEG design intact wherever the language extension does not force change. The only structural expansion is at the compilation-unit boundary, where the source grammar introduces a left-recursive list of top-level declarations and function definitions. Everything else is a local delta: `void` in function type, optional formal and actual parameter lists, optional return expressions, and one new identifier-headed unary-expression form for calls.
+This update is the minimal coherent extension of the existing PEG baseline. The function, statement, and expression design stays intact, while array support is introduced only where the source grammar requires it: declaration suffixes, lvalue subscripts, function-parameter array markers, and recursive brace initializers. The grammar still uses straightforward PEG rewrites such as `Head Tail*`, shared-prefix factoring, and explicit list helpers instead of redesigning unrelated rules.
 
-The recovery strategy stays intentionally conservative. It continues to spend labels on outer, user-visible structure rather than on low-level helpers, and it reuses the existing synchronization anchors: `)`, `}`, `;`, `,`, block-item starts, and statement starts. The only genuinely new high-value recovery sites are call parsing, where `IDENT (` has already determined the construct and a missing `)` otherwise cascades through the rest of the containing expression or statement, and compilation-unit item recovery, which now syncs on `const`, `int`, `void`, or end of file.
+Recovery scope also stays narrow. The new labels focus on high-value structural failures introduced by arrays: missing `]`, malformed bounds or subscripts, malformed initializer elements, and missing `}` in brace initializers. Synchronization still relies on existing delimiters and boundaries such as `]`, `}`, `,`, `;`, and enclosing statement or declaration ends, which keeps the recovery strategy small and readable.
 
-The implementation note remains important. Grammar-level nonterminals still describe precedence and reviewer intent, but the runtime AST need not mirror them one-for-one. `ConstExp` stays a grammar alias whose meaning is established semantically, and the call extension fits naturally into the existing flattened expression AST by adding one `Exp::Call` payload rather than introducing a separate tower of runtime expression node types.
+At the implementation boundary, the grammar-level additions are larger than the parser surface alone because the current AST remains scalar-oriented in several declaration and initializer nodes. That distinction is intentional: grammar nonterminals explain precedence and syntax, while runtime representation can continue to flatten expressions and attach array-specific metadata only where the AST actually needs it. `ConstExp` remains only a grammar alias, with constantness still established during semantic analysis rather than syntactically.

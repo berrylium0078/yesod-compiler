@@ -4,6 +4,36 @@ using namespace yesod::test_support::parser;
 
 namespace {
 
+const Exp& requireScalarConstInitExp(const Handle<ConstInitVal>& initVal_nn)
+{
+    const Exp* exp_nn = nullptr;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                exp_nn = &(*initAlt);
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar const initializer expression");
+    return *exp_nn;
+}
+
+const Exp& requireScalarInitExp(const Handle<InitVal>& initVal_nn)
+{
+    const Exp* exp_nn = nullptr;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                exp_nn = &(*initAlt);
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar initializer expression");
+    return *exp_nn;
+}
+
 void testConstAndVarDeclarationsParse()
 {
     const auto root_nn = parseRoot(
@@ -21,8 +51,8 @@ void testConstAndVarDeclarationsParse()
         "const declaration should keep its declarator list");
     require(constDecl_nn->m_constDefs[0]->m_identifier_nn->m_name == "answer",
         "identifier payload should only store the source text");
-    require(
-        evaluateExp(*constDecl_nn->m_constDefs[0]->m_constInitVal_nn->m_exp_nn)
+    require(evaluateExp(requireScalarConstInitExp(
+                constDecl_nn->m_constDefs[0]->m_constInitVal_nn))
             == 42,
         "const initializer should reuse the expression grammar");
 
@@ -39,7 +69,9 @@ void testConstAndVarDeclarationsParse()
         "second var declarator should preserve its identifier text");
     require(varDecl_nn->m_varDefs[1]->m_initVal_nn != nullptr,
         "initialized var declarators should preserve an init node");
-    require(evaluateExp(*varDecl_nn->m_varDefs[1]->m_initVal_nn->m_exp_nn) == 7,
+    require(evaluateExp(
+                requireScalarInitExp(varDecl_nn->m_varDefs[1]->m_initVal_nn))
+            == 7,
         "var initializer should preserve the parsed expression tree");
 }
 

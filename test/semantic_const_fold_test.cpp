@@ -4,6 +4,38 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
+ast::Handle<ast::Exp> requireScalarConstInitExp(
+    const ast::Handle<ast::ConstInitVal>& initVal_nn)
+{
+    ast::Handle<ast::Exp> exp_nn;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::Exp>>) {
+                exp_nn = initAlt;
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar const initializer expression");
+    return exp_nn;
+}
+
+ast::Handle<ast::Exp> requireScalarInitExp(
+    const ast::Handle<ast::InitVal>& initVal_nn)
+{
+    ast::Handle<ast::Exp> exp_nn;
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, ast::Handle<ast::Exp>>) {
+                exp_nn = initAlt;
+            }
+        },
+        initVal_nn->m_kind);
+    require(exp_nn != nullptr, "expected scalar initializer expression");
+    return exp_nn;
+}
+
 ast::Handle<ast::DeclNode> requireDeclNode(
     const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
@@ -101,8 +133,8 @@ void testConstExpressionsRecordFoldedValues()
     const auto returnStmt_nn
         = requireReturnStmt(requireStmtNode(blockItems[2]));
 
-    const auto constExp
-        = constDecl_nn->m_constDefs[0]->m_constInitVal_nn->m_exp_nn;
+    const auto constExp = requireScalarConstInitExp(
+        constDecl_nn->m_constDefs[0]->m_constInitVal_nn);
     require(requireConstantValue(output, constExp) == 42,
         "const initializer should fold to a constant value");
 
@@ -113,7 +145,8 @@ void testConstExpressionsRecordFoldedValues()
     require(constSymbol.m_constantValue == 42,
         "const declaration should expose the folded constant value");
 
-    const auto varInitExp = varDecl_nn->m_varDefs[0]->m_initVal_nn->m_exp_nn;
+    const auto varInitExp
+        = requireScalarInitExp(varDecl_nn->m_varDefs[0]->m_initVal_nn);
     require(requireConstantValue(output, varInitExp) == 44,
         "var initializer should fold const-backed integer");
 

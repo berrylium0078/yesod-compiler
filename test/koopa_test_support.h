@@ -185,6 +185,18 @@ inline const GlobalAllocValue* requireGlobalAlloc(
     return globalAlloc;
 }
 
+inline const AggregateValue* requireAggregate(
+    const Value* value, size_t expectedNumElements)
+{
+    require(value != nullptr, "expected aggregate value");
+    require(value->isAggregateValue(), "expected aggregate initializer value");
+    const auto* aggregateValue = dynamic_cast<const AggregateValue*>(value);
+    require(aggregateValue != nullptr, "expected aggregate initializer cast");
+    require(aggregateValue->getNumElements() == expectedNumElements,
+        "aggregate initializer should preserve the expected number of elements");
+    return aggregateValue;
+}
+
 inline const BasicBlock* requireEntryBlock(const Function& function)
 {
     require(function.getNumBBs() >= 2,
@@ -332,6 +344,30 @@ inline const BranchValue* requireBranch(const Value* value,
     require(branchValue->getNumFalseArgs() == 0,
         "current subset should not emit block arguments on false branches");
     return branchValue;
+}
+
+inline const GetElemPtrValue* requireGetElemPtr(
+    const Value* value, const Value* expectedSource)
+{
+    require(value != nullptr, "expected getelemptr value");
+    require(value->isGetElemPtrValue(), "expected getelemptr instruction");
+    const auto* getElemPtrValue = dynamic_cast<const GetElemPtrValue*>(value);
+    require(getElemPtrValue != nullptr, "expected getelemptr instruction cast");
+    require(getElemPtrValue->getSource() == expectedSource,
+        "getelemptr should use the expected source storage");
+    return getElemPtrValue;
+}
+
+inline const GetPtrValue* requireGetPtr(
+    const Value* value, const Value* expectedSource)
+{
+    require(value != nullptr, "expected getptr value");
+    require(value->isGetPtrValue(), "expected getptr instruction");
+    const auto* getPtrValue = dynamic_cast<const GetPtrValue*>(value);
+    require(getPtrValue != nullptr, "expected getptr instruction cast");
+    require(getPtrValue->getSource() == expectedSource,
+        "getptr should use the expected source storage");
+    return getPtrValue;
 }
 
 } // namespace yesod::test_support::koopa
