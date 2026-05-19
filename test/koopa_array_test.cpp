@@ -170,7 +170,7 @@ void testLocalArrayAccessLowersThroughElementPointers()
 
     require(entryBlock->getNumInsts() >= 6,
         "local array lowering should allocate storage, compute element pointers, store, load, and return");
-    const auto* alloc = requireAlloc(entryBlock->getInst(0), "%arr");
+    const auto* alloc = requireAlloc(entryBlock->getInst(0), "%v_arr");
     const auto* firstElemPtr = requireGetElemPtr(entryBlock->getInst(1), alloc);
     requireInteger(firstElemPtr->getIndex(), 1);
     const auto* storeValue = requireStore(entryBlock->getInst(2), firstElemPtr);
@@ -188,7 +188,7 @@ void testConstArraysLowerToAllocatedStorageAndRespectShadowing()
 
     require(program->getNumVals() == 1,
         "global const arrays should lower to global storage");
-    const auto* globalGarr = requireGlobalAlloc(program->getVal(0), "@garr");
+    const auto* globalGarr = requireGlobalAlloc(program->getVal(0), "@c_garr");
     const auto* globalInit = requireAggregate(globalGarr->getInitVal(), 10);
     for (int32_t i = 0; i < 10; ++i) {
         requireInteger(globalInit->getElement(static_cast<size_t>(i)), i + 6);
@@ -199,7 +199,7 @@ void testConstArraysLowerToAllocatedStorageAndRespectShadowing()
     const auto* whileBodyBlock = requireBlockNameContains(*mainFunction, "while_body");
     const auto* whileEndBlock = requireBlockNameContains(*mainFunction, "while_end");
 
-    const auto* arrAlloc = requireAllocByName(*entryBlock, "%arr");
+    const auto* arrAlloc = requireAllocByName(*entryBlock, "%c_arr");
     require(findGetElemPtrBySource(*entryBlock, arrAlloc) != nullptr,
         "local const array should allocate storage and initialize elements through element pointers");
 
@@ -209,7 +209,7 @@ void testConstArraysLowerToAllocatedStorageAndRespectShadowing()
     require(findLoadBySource(*whileBodyBlock, globalElemPtr) != nullptr,
         "loop body should load the indexed global const array element");
 
-    const auto* localGarrAlloc = requireAllocByName(*whileEndBlock, "%garr");
+    const auto* localGarrAlloc = requireAllocByName(*whileEndBlock, "%c_garr");
     const auto* localElemPtr = findGetElemPtrBySource(*whileEndBlock, localGarrAlloc);
     require(localElemPtr != nullptr,
         "shadowing local const array should allocate local storage and compute element addresses");
@@ -232,7 +232,7 @@ void testFunctionArrayParametersLowerThroughPointerDepths()
 
     const auto* f1Entry = requireEntryBlock(*f1Function);
     const auto* f1Body = requireBlockNameContains(*f1Function, "while_body");
-    const auto* f1ParamAlloc = requireAllocByName(*f1Entry, "%a");
+    const auto* f1ParamAlloc = requireAllocByName(*f1Entry, "%v_a");
     const auto* loadedF1Param = findLoadBySource(*f1Body, f1ParamAlloc);
     require(loadedF1Param != nullptr,
         "f1 should reload the decayed array parameter from its local storage slot");
@@ -286,12 +286,12 @@ void testGlobalArrayInitializerExpressionsLowerToComputedAggregates()
     require(program->getNumVals() == 2,
         "expression-based global array initializers should lower both c and d to global storage");
 
-    const auto* cGlobal = requireGlobalAlloc(program->getVal(0), "@c");
+    const auto* cGlobal = requireGlobalAlloc(program->getVal(0), "@c_c");
     const auto* cInit = requireAggregate(cGlobal->getInitVal(), 2);
     requireInteger(cInit->getElement(0), 5);
     requireInteger(cInit->getElement(1), -1);
 
-    const auto* dGlobal = requireGlobalAlloc(program->getVal(1), "@d");
+    const auto* dGlobal = requireGlobalAlloc(program->getVal(1), "@v_d");
     const auto* dInit = requireAggregate(dGlobal->getInitVal(), 2);
     const auto* dRow0 = requireAggregate(dInit->getElement(0), 2);
     const auto* dRow1 = requireAggregate(dInit->getElement(1), 2);

@@ -1080,9 +1080,12 @@ SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
     const int32_t symbolId = ++m_nextSymbolId;
+    const std::string symbolName = type.isArray()
+        ? std::string(isConst ? "c_" : "v_") + identifier.m_name
+        : identifier.m_name;
     return SemanticSymbol {
         .m_id = symbolId,
-        .m_name = identifier.m_name,
+        .m_name = symbolName,
         .m_kind = SemanticSymbolKind::object,
         .m_isConst = isConst,
         .m_hasConstantValue = hasConstantValue,

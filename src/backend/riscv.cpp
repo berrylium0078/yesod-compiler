@@ -10,6 +10,12 @@
 namespace yesod::backend {
 namespace {
 
+    enum class GlobalSection {
+        rodata,
+        data,
+        bss,
+    };
+
     bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
 
     bool isAllDigits(const std::string& text)
@@ -40,13 +46,21 @@ namespace {
     using yesod::koopa::CallValue;
     using yesod::koopa::FuncArgRefValue;
     using yesod::koopa::Function;
+    using yesod::koopa::FunctionType;
     using yesod::koopa::GlobalAllocValue;
     using yesod::koopa::IntegerValue;
     using yesod::koopa::JumpValue;
     using yesod::koopa::LoadValue;
+    using yesod::koopa::ArrayType;
+    using yesod::koopa::PointerType;
     using yesod::koopa::Program;
     using yesod::koopa::ReturnValue;
     using yesod::koopa::StoreValue;
+    using yesod::koopa::GetPtrValue;
+    using yesod::koopa::GetElemPtrValue;
+    using yesod::koopa::AggregateValue;
+    using yesod::koopa::ZeroInitValue;
+    using yesod::koopa::Type;
     using yesod::koopa::Value;
 
     std::string symbolName(const std::string& koopaName)
@@ -57,26 +71,71 @@ namespace {
         return koopaName;
     }
 
-    void emitGlobal(std::ostream& output, const GlobalAllocValue& globalAlloc)
+    int typeSize(const Type& type)
     {
-        const std::string name = symbolName(globalAlloc.getName());
-        output << "  .globl " << name << "\n";
-        output << name << ":\n";
+        if (type.isInt32Type() || type.isPointerType()) {
+            return 4;
+        }
+        if (type.isUnitType()) {
+            return 0;
+        }
+        if (type.isArrayType()) {
+            const auto& arrayType = dynamic_cast<const ArrayType&>(type);
+            return static_cast<int>(arrayType.getNumElements())
+                * typeSize(*arrayType.getElementType());
+        }
+        if (type.isFunctionType()) {
+            return 0;
+        }
+        throw std::runtime_error("unsupported Koopa type in RISC-V backend");
+    }
 
-        const Value* initVal = globalAlloc.getInitVal();
-        if (initVal->isIntegerValue()) {
+    bool isConstArraySymbolName(const std::string& name)
+    {
+        return name.rfind("c_", 0) == 0;
+    }
+
+    GlobalSection classifyGlobal(const GlobalAllocValue& globalAlloc)
+    {
+        if (globalAlloc.getInitVal()->isZeroInitValue()) {
+            return GlobalSection::bss;
+        }
+        if (isConstArraySymbolName(symbolName(globalAlloc.getName()))) {
+            return GlobalSection::rodata;
+        }
+        return GlobalSection::data;
+    }
+
+    void emitGlobalInitializer(std::ostream& output, const Value& initVal)
+    {
+        if (initVal.isIntegerValue()) {
             output << "  .word "
-                   << dynamic_cast<const IntegerValue&>(*initVal).getVal()
+                   << dynamic_cast<const IntegerValue&>(initVal).getVal()
                    << "\n";
             return;
         }
-        if (initVal->isZeroInitValue()) {
-            output << "  .zero 4\n";
+        if (initVal.isZeroInitValue()) {
+            output << "  .zero " << typeSize(*initVal.getVType()) << "\n";
+            return;
+        }
+        if (initVal.isAggregateValue()) {
+            const auto& aggregate = dynamic_cast<const AggregateValue&>(initVal);
+            for (size_t i = 0; i < aggregate.getNumElements(); ++i) {
+                emitGlobalInitializer(output, *aggregate.getElement(i));
+            }
             return;
         }
 
         throw std::runtime_error(
             "RISC-V backend does not support this global initializer yet");
+    }
+
+    void emitGlobal(std::ostream& output, const GlobalAllocValue& globalAlloc)
+    {
+        const std::string name = symbolName(globalAlloc.getName());
+        output << "  .globl " << name << "\n";
+        output << name << ":\n";
+        emitGlobalInitializer(output, *globalAlloc.getInitVal());
     }
 
     class FunctionEmitter {
@@ -105,7 +164,7 @@ namespace {
             m_output << symbolName(function.getName()) << ":\n";
             emitStackAdjustment(-m_frameSize);
             if (m_savesReturnAddress) {
-                m_output << "  sw ra, " << m_savedRaOffset << "(sp)\n";
+                emitStoreToStackSlot("ra", m_savedRaOffset);
             }
 
             for (const BasicBlock* basicBlock : function.bbs()) {
@@ -190,7 +249,7 @@ namespace {
                 for (const Value* instruction : basicBlock->insts()) {
                     if (needsStackSlot(*instruction)) {
                         m_stackSlots.emplace(instruction, nextOffset);
-                        nextOffset += 4;
+                        nextOffset += valueStorageSize(*instruction);
                     }
                 }
             }
@@ -208,13 +267,28 @@ namespace {
         static bool needsStackSlot(const Value& value)
         {
             return value.isAllocValue() || value.isLoadValue()
-                || value.isBinaryValue()
+                || value.isBinaryValue() || value.isGetPtrValue()
+                || value.isGetElemPtrValue()
                 || (value.isCallValue() && !value.getVType()->isUnitType());
+        }
+
+        static int valueStorageSize(const Value& value)
+        {
+            if (value.isAllocValue()) {
+                return typeSize(*dynamic_cast<const PointerType*>(value.getVType())
+                                     ->getPointeeType());
+            }
+            return typeSize(*value.getVType());
         }
 
         static int align16(int value)
         {
             return value == 0 ? 0 : ((value + 15) / 16) * 16;
+        }
+
+        static bool fitsImm12(int value)
+        {
+            return value >= -2048 && value <= 2047;
         }
 
         int stackOffset(const Value& value) const
@@ -231,7 +305,48 @@ namespace {
             if (delta == 0) {
                 return;
             }
-            m_output << "  addi sp, sp, " << delta << "\n";
+            if (fitsImm12(delta)) {
+                m_output << "  addi sp, sp, " << delta << "\n";
+                return;
+            }
+            m_output << "  li t3, " << delta << "\n";
+            m_output << "  add sp, sp, t3\n";
+        }
+
+        void emitAddressOfStackSlot(int offset, const std::string& targetRegister)
+        {
+            if (fitsImm12(offset)) {
+                m_output << "  addi " << targetRegister << ", sp, " << offset
+                         << "\n";
+                return;
+            }
+            m_output << "  li " << targetRegister << ", " << offset << "\n";
+            m_output << "  add " << targetRegister << ", sp, " << targetRegister
+                     << "\n";
+        }
+
+        void emitLoadFromStackSlot(
+            int offset, const std::string& targetRegister)
+        {
+            if (fitsImm12(offset)) {
+                m_output << "  lw " << targetRegister << ", " << offset
+                         << "(sp)\n";
+                return;
+            }
+            emitAddressOfStackSlot(offset, "t3");
+            m_output << "  lw " << targetRegister << ", 0(t3)\n";
+        }
+
+        void emitStoreToStackSlot(
+            const std::string& sourceRegister, int offset)
+        {
+            if (fitsImm12(offset)) {
+                m_output << "  sw " << sourceRegister << ", " << offset
+                         << "(sp)\n";
+                return;
+            }
+            emitAddressOfStackSlot(offset, "t3");
+            m_output << "  sw " << sourceRegister << ", 0(t3)\n";
         }
 
         void emitBasicBlock(const BasicBlock& basicBlock)
@@ -258,6 +373,17 @@ namespace {
 
             if (instruction.isLoadValue()) {
                 emitLoad(dynamic_cast<const LoadValue&>(instruction));
+                return;
+            }
+
+            if (instruction.isGetPtrValue()) {
+                emitGetPtr(dynamic_cast<const GetPtrValue&>(instruction));
+                return;
+            }
+
+            if (instruction.isGetElemPtrValue()) {
+                emitGetElemPtr(
+                    dynamic_cast<const GetElemPtrValue&>(instruction));
                 return;
             }
 
@@ -290,13 +416,17 @@ namespace {
                 "unsupported Koopa instruction in RISC-V backend");
         }
 
-        void loadValueToRegister(
+        void loadPointerValueToRegister(
             const Value& value, const std::string& targetRegister)
         {
-            if (value.isIntegerValue()) {
-                m_output << "  li " << targetRegister << ", "
-                         << dynamic_cast<const IntegerValue&>(value).getVal()
-                         << "\n";
+            if (value.isGlobalAllocValue()) {
+                m_output << "  la " << targetRegister << ", "
+                         << symbolName(value.getName()) << "\n";
+                return;
+            }
+
+            if (value.isAllocValue()) {
+                emitAddressOfStackSlot(stackOffset(value), targetRegister);
                 return;
             }
 
@@ -313,46 +443,102 @@ namespace {
                 } else {
                     const int offset = m_frameSize
                         + static_cast<int>((funcArgRef.getIndex() - 8) * 4);
-                    m_output << "  lw " << targetRegister << ", " << offset
-                             << "(sp)\n";
+                    emitLoadFromStackSlot(offset, targetRegister);
                 }
                 return;
             }
 
-            m_output << "  lw " << targetRegister << ", " << stackOffset(value)
-                     << "(sp)\n";
+            emitLoadFromStackSlot(stackOffset(value), targetRegister);
+        }
+
+        void loadValueToRegister(
+            const Value& value, const std::string& targetRegister)
+        {
+            if (value.isIntegerValue()) {
+                m_output << "  li " << targetRegister << ", "
+                         << dynamic_cast<const IntegerValue&>(value).getVal()
+                         << "\n";
+                return;
+            }
+
+            if (value.getVType()->isPointerType()) {
+                loadPointerValueToRegister(value, targetRegister);
+                return;
+            }
+
+            if (value.isFuncArgRefValue()) {
+                const auto& funcArgRef
+                    = dynamic_cast<const FuncArgRefValue&>(value);
+                if (funcArgRef.getIndex() < 8) {
+                    const std::string sourceRegister
+                        = "a" + std::to_string(funcArgRef.getIndex());
+                    if (sourceRegister != targetRegister) {
+                        m_output << "  mv " << targetRegister << ", "
+                                 << sourceRegister << "\n";
+                    }
+                } else {
+                    const int offset = m_frameSize
+                        + static_cast<int>((funcArgRef.getIndex() - 8) * 4);
+                    emitLoadFromStackSlot(offset, targetRegister);
+                }
+                return;
+            }
+
+            emitLoadFromStackSlot(stackOffset(value), targetRegister);
         }
 
         void emitStore(const StoreValue& storeValue)
         {
             const Value* destination = storeValue.getDestination();
-            if (destination->isGlobalAllocValue()) {
-                loadValueToRegister(*storeValue.getVal(), "t2");
-                m_output << "  la t0, "
-                         << symbolName(destination->getName()) << "\n";
-                m_output << "  sw t2, 0(t0)\n";
+            loadValueToRegister(*storeValue.getVal(), "t2");
+            if (destination->isAllocValue()) {
+                emitStoreToStackSlot("t2", stackOffset(*destination));
                 return;
             }
-
-            loadValueToRegister(*storeValue.getVal(), "t0");
-            m_output << "  sw t0, " << stackOffset(*destination) << "(sp)\n";
+            loadPointerValueToRegister(*destination, "t0");
+            m_output << "  sw t2, 0(t0)\n";
         }
 
         void emitLoad(const LoadValue& loadValue)
         {
-            if (loadValue.getSource()->isGlobalAllocValue()) {
-                m_output << "  la t0, "
-                         << symbolName(loadValue.getSource()->getName())
-                         << "\n";
-                m_output << "  lw t1, 0(t0)\n";
-                m_output << "  sw t1, " << stackOffset(loadValue) << "(sp)\n";
+            if (loadValue.getSource()->isAllocValue()) {
+                emitLoadFromStackSlot(stackOffset(*loadValue.getSource()), "t1");
+                emitStoreToStackSlot("t1", stackOffset(loadValue));
                 return;
             }
+            loadPointerValueToRegister(*loadValue.getSource(), "t0");
+            m_output << "  lw t1, 0(t0)\n";
+            emitStoreToStackSlot("t1", stackOffset(loadValue));
+        }
 
-            const int sourceOffset = stackOffset(*loadValue.getSource());
-            const int targetOffset = stackOffset(loadValue);
-            m_output << "  lw t0, " << sourceOffset << "(sp)\n";
-            m_output << "  sw t0, " << targetOffset << "(sp)\n";
+        void emitIndexedPointer(const Value& source, const Value& index,
+            int stride, const Value& result)
+        {
+            loadPointerValueToRegister(source, "t0");
+            loadValueToRegister(index, "t1");
+            m_output << "  li t2, " << stride << "\n";
+            m_output << "  mul t1, t1, t2\n";
+            m_output << "  add t0, t0, t1\n";
+            emitStoreToStackSlot("t0", stackOffset(result));
+        }
+
+        void emitGetPtr(const GetPtrValue& getPtrValue)
+        {
+            const auto* pointerType
+                = dynamic_cast<const PointerType*>(getPtrValue.getSource()->getVType());
+            emitIndexedPointer(*getPtrValue.getSource(), *getPtrValue.getIndex(),
+                typeSize(*pointerType->getPointeeType()), getPtrValue);
+        }
+
+        void emitGetElemPtr(const GetElemPtrValue& getElemPtrValue)
+        {
+            const auto* pointerType = dynamic_cast<const PointerType*>(
+                getElemPtrValue.getSource()->getVType());
+            const auto* arrayType
+                = dynamic_cast<const ArrayType*>(pointerType->getPointeeType());
+            emitIndexedPointer(*getElemPtrValue.getSource(),
+                *getElemPtrValue.getIndex(),
+                typeSize(*arrayType->getElementType()), getElemPtrValue);
         }
 
         void emitBinary(const BinaryValue& binaryValue)
@@ -421,7 +607,7 @@ namespace {
                     "unsupported Koopa binary op in RISC-V backend");
             }
 
-            m_output << "  sw t2, " << stackOffset(binaryValue) << "(sp)\n";
+            emitStoreToStackSlot("t2", stackOffset(binaryValue));
         }
 
         void emitBranch(const BranchValue& branchValue)
@@ -453,7 +639,7 @@ namespace {
                 loadValueToRegister(*returnValue.getVal(), "a0");
             }
             if (m_savesReturnAddress) {
-                m_output << "  lw ra, " << m_savedRaOffset << "(sp)\n";
+                emitLoadFromStackSlot(m_savedRaOffset, "ra");
             }
             emitStackAdjustment(m_frameSize);
             m_output << "  ret\n";
@@ -470,13 +656,13 @@ namespace {
 
                 loadValueToRegister(*callValue.getArg(i), "t0");
                 const int offset = static_cast<int>((i - 8) * 4);
-                m_output << "  sw t0, " << offset << "(sp)\n";
+                emitStoreToStackSlot("t0", offset);
             }
 
             m_output << "  call "
                      << symbolName(callValue.getCallee()->getName()) << "\n";
             if (!callValue.getVType()->isUnitType()) {
-                m_output << "  sw a0, " << stackOffset(callValue) << "(sp)\n";
+                emitStoreToStackSlot("a0", stackOffset(callValue));
             }
         }
     };
@@ -491,10 +677,26 @@ void RiscvGenerator::generate(const Program& program, std::ostream& output)
     }
 
     if (program.getNumVals() != 0) {
-        output << "  .data\n";
-        for (const auto* value : program.vals()) {
-            emitGlobal(output, dynamic_cast<const GlobalAllocValue&>(*value));
-        }
+        auto emitGlobalSection = [&](GlobalSection section,
+                                     const char* header) {
+            bool emittedHeader = false;
+            for (const auto* value : program.vals()) {
+                const auto& globalAlloc
+                    = dynamic_cast<const GlobalAllocValue&>(*value);
+                if (classifyGlobal(globalAlloc) != section) {
+                    continue;
+                }
+                if (!emittedHeader) {
+                    output << header;
+                    emittedHeader = true;
+                }
+                emitGlobal(output, globalAlloc);
+            }
+        };
+
+        emitGlobalSection(GlobalSection::rodata, "  .section .rodata\n");
+        emitGlobalSection(GlobalSection::data, "  .data\n");
+        emitGlobalSection(GlobalSection::bss, "  .bss\n");
     }
 
     output << "  .text\n";

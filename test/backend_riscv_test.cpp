@@ -82,14 +82,14 @@ void testStackAllocatedStraightLineLowering()
         "int main(){int value = 4; value = value + 5; return value;}");
 
     requireContains(assembly, "  addi sp, sp, -16\n");
-    requireContains(assembly, "  li t0, 4\n");
-    requireContains(assembly, "  sw t0, 0(sp)\n");
-    requireContains(assembly, "  lw t0, 0(sp)\n");
-    requireContains(assembly, "  sw t0, 4(sp)\n");
+    requireContains(assembly, "  li t2, 4\n");
+    requireContains(assembly, "  sw t2, 0(sp)\n");
+    requireContains(assembly, "  lw t1, 0(sp)\n");
+    requireContains(assembly, "  sw t1, 4(sp)\n");
     requireContains(assembly, "  li t1, 5\n");
     requireContains(assembly, "  add t2, t0, t1\n");
     requireContains(assembly, "  sw t2, 8(sp)\n");
-    requireContains(assembly, "  sw t0, 0(sp)\n");
+    requireContains(assembly, "  sw t2, 0(sp)\n");
     requireContains(assembly, "  lw a0, 12(sp)\n");
     requireContains(assembly, "  addi sp, sp, 16\n");
 }
@@ -241,6 +241,44 @@ void testCalleeReadsArgumentsBeyondA7FromStack()
     requireContains(assembly, "  sw t0, 4(sp)\n");
 }
 
+void testGlobalArraySectionsAndNames()
+{
+    const std::string assembly = generateAssembly(
+        "const int carr[3] = {1, 2, 3};"
+        "int varr[3] = {4, 5, 6};"
+        "int zeros[3];"
+        "int main(){return carr[1] + varr[1] + zeros[1];}");
+
+    requireContains(assembly, "  .section .rodata\n");
+    requireContains(assembly, "  .globl c_carr\n");
+    requireContains(assembly, "c_carr:\n");
+    requireContains(assembly, "  .word 1\n");
+    requireContains(assembly, "  .word 2\n");
+    requireContains(assembly, "  .word 3\n");
+
+    requireContains(assembly, "  .data\n");
+    requireContains(assembly, "  .globl v_varr\n");
+    requireContains(assembly, "v_varr:\n");
+    requireContains(assembly, "  .word 4\n");
+    requireContains(assembly, "  .word 5\n");
+    requireContains(assembly, "  .word 6\n");
+
+    requireContains(assembly, "  .bss\n");
+    requireContains(assembly, "  .globl v_zeros\n");
+    requireContains(assembly, "v_zeros:\n");
+    requireContains(assembly, "  .zero 12\n");
+}
+
+void testArrayAddressingUsesScaledOffsets()
+{
+    const std::string assembly = generateAssembly(
+        "int main(){int arr[4]; int i = 2; arr[i] = 7; return arr[i];}");
+
+    requireContains(assembly, "  li t2, 4\n");
+    requireContains(assembly, "  mul t1, t1, t2\n");
+    requireContains(assembly, "  add t0, t0, t1\n");
+}
+
 } // namespace
 
 int main()
@@ -257,5 +295,7 @@ int main()
     testCallWithMoreThanEightArgumentsLowering();
     testRecursiveFunctionLowering();
     testCalleeReadsArgumentsBeyondA7FromStack();
+    testGlobalArraySectionsAndNames();
+    testArrayAddressingUsesScaledOffsets();
     return 0;
 }
