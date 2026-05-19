@@ -60,6 +60,11 @@ constexpr const char* kConstFoldedParamDimensionSource =
     "return 0;"
     "}";
 
+constexpr const char* kRecursiveArrayInitializerSource =
+    "const int N = 3;"
+    "int a[N][N][N] = {0, 1, 2, {3}, 4};"
+    "const int b[N][N][N] = {0, 1, 2, {3}, 4};";
+
 ast::Handle<ast::DeclNode> requireDeclNode(
     const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
@@ -464,6 +469,33 @@ void testConstExpressionsFoldInFunctionArrayDimensions()
         "function parameter trailing dimension should fold the const expression to 10");
 }
 
+void testRecursiveMultidimensionalArrayInitializersAnalyze()
+{
+    const auto output = analyzeSource(kRecursiveArrayInitializerSource);
+    require(output.success(),
+        "recursive multidimensional array initializers should pass semantic analysis");
+
+    const auto aDecl = requireVarDecl(
+        requireTopLevelDeclNode(output.m_root->m_topLevelItems[1]));
+    const auto bDecl = requireConstDecl(
+        requireTopLevelDeclNode(output.m_root->m_topLevelItems[2]));
+
+    const auto& aSymbol = requireSymbol(output, aDecl->m_varDefs[0]);
+    require(aSymbol.m_type.isArray() && aSymbol.m_type.m_arrayLength == 3,
+        "mutable three-dimensional array initializer should preserve outer length");
+    require(aSymbol.m_type.m_elementType != nullptr
+            && aSymbol.m_type.m_elementType->isArray()
+            && aSymbol.m_type.m_elementType->m_arrayLength == 3
+            && aSymbol.m_type.m_elementType->m_elementType != nullptr
+            && aSymbol.m_type.m_elementType->m_elementType->isArray()
+            && aSymbol.m_type.m_elementType->m_elementType->m_arrayLength == 3,
+        "mutable three-dimensional array initializer should preserve inner lengths");
+
+    const auto& bSymbol = requireSymbol(output, bDecl->m_constDefs[0]);
+    require(bSymbol.m_type == aSymbol.m_type,
+        "const three-dimensional array initializer should preserve the same folded type");
+}
+
 } // namespace
 
 int main()
@@ -476,5 +508,6 @@ int main()
     testArrayInitializersAcceptExpressions();
     testConstArrayInitializersRejectNonConstantExpressions();
     testConstExpressionsFoldInFunctionArrayDimensions();
+    testRecursiveMultidimensionalArrayInitializersAnalyze();
     return 0;
 }

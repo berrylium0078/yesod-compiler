@@ -54,6 +54,12 @@ constexpr const char* kMixedBraceArrayInitializerSource =
     "int b[3][3] = {0, 1, 2, {3}, 4, 5, 6};"
     "int main(){return 0;}";
 
+constexpr const char* kRecursiveArrayInitializerSource =
+    "const int N = 3;"
+    "int a[N][N][N] = {0, 1, 2, {3}, 4};"
+    "const int b[N][N][N] = {0, 1, 2, {3}, 4};"
+    "int main(){return 0;}";
+
 const BasicBlock* requireBlockNameContains(
     const Function& function, const std::string& infix)
 {
@@ -394,6 +400,54 @@ void testMixedBraceArrayInitializersPreserveSubobjectBoundaries()
     requireInteger(bRow2->getElement(2), 6);
 }
 
+void testRecursiveThreeDimensionalArrayInitializersPreserveBoundaries()
+{
+    auto program = generateProgram(kRecursiveArrayInitializerSource);
+
+    require(program->getNumVals() == 2,
+        "three-dimensional recursive array initializers should lower to two globals");
+
+    const auto* aGlobal = requireGlobalAlloc(program->getVal(0), "@v_a");
+    const auto* aInit = requireAggregate(aGlobal->getInitVal(), 3);
+    const auto* aPlane0 = requireAggregate(aInit->getElement(0), 3);
+    const auto* aRow00 = requireAggregate(aPlane0->getElement(0), 3);
+    const auto* aRow01 = requireAggregate(aPlane0->getElement(1), 3);
+    const auto* aRow02 = requireAggregate(aPlane0->getElement(2), 3);
+    requireInteger(aRow00->getElement(0), 0);
+    requireInteger(aRow00->getElement(1), 1);
+    requireInteger(aRow00->getElement(2), 2);
+    requireInteger(aRow01->getElement(0), 3);
+    requireInteger(aRow01->getElement(1), 0);
+    requireInteger(aRow01->getElement(2), 0);
+    requireInteger(aRow02->getElement(0), 4);
+    requireInteger(aRow02->getElement(1), 0);
+    requireInteger(aRow02->getElement(2), 0);
+    require(aInit->getElement(1)->isZeroInitValue(),
+        "remaining planes of mutable array may be represented as zeroinit");
+    require(aInit->getElement(2)->isZeroInitValue(),
+        "trailing mutable plane should be zeroinit");
+
+    const auto* bGlobal = requireGlobalAlloc(program->getVal(1), "@c_b");
+    const auto* bInit = requireAggregate(bGlobal->getInitVal(), 3);
+    const auto* bPlane0 = requireAggregate(bInit->getElement(0), 3);
+    const auto* bRow00 = requireAggregate(bPlane0->getElement(0), 3);
+    const auto* bRow01 = requireAggregate(bPlane0->getElement(1), 3);
+    const auto* bRow02 = requireAggregate(bPlane0->getElement(2), 3);
+    requireInteger(bRow00->getElement(0), 0);
+    requireInteger(bRow00->getElement(1), 1);
+    requireInteger(bRow00->getElement(2), 2);
+    requireInteger(bRow01->getElement(0), 3);
+    requireInteger(bRow01->getElement(1), 0);
+    requireInteger(bRow01->getElement(2), 0);
+    requireInteger(bRow02->getElement(0), 4);
+    requireInteger(bRow02->getElement(1), 0);
+    requireInteger(bRow02->getElement(2), 0);
+    require(bInit->getElement(1)->isZeroInitValue(),
+        "remaining planes of const array may be represented as zeroinit");
+    require(bInit->getElement(2)->isZeroInitValue(),
+        "trailing const plane should be zeroinit");
+}
+
 } // namespace
 
 int main()
@@ -404,5 +458,6 @@ int main()
     testGlobalArrayInitializerExpressionsLowerToComputedAggregates();
     testBuiltinArrayLibraryDeclarationsLowerToExternalFunctions();
     testMixedBraceArrayInitializersPreserveSubobjectBoundaries();
+    testRecursiveThreeDimensionalArrayInitializersPreserveBoundaries();
     return 0;
 }

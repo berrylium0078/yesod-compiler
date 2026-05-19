@@ -124,6 +124,40 @@ namespace {
         return (lhs != 0 || rhs != 0) ? 1 : 0;
     }
 
+    size_t countScalarSlots(const SemanticType& type)
+    {
+        if (!type.isArray()) {
+            return 1;
+        }
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
+        }
+        return static_cast<size_t>(type.m_arrayLength)
+            * countScalarSlots(*type.m_elementType);
+    }
+
+    size_t directSubobjectSlots(const SemanticType& type)
+    {
+        if (!type.isArray()) {
+            return 1;
+        }
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
+        }
+        return countScalarSlots(*type.m_elementType);
+    }
+
+    SemanticType scalarElementType(const SemanticType& type)
+    {
+        if (!type.isArray()) {
+            return type;
+        }
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
+        }
+        return scalarElementType(*type.m_elementType);
+    }
+
 } // namespace
 
 SemanticOutput SemanticAnalyzer::analyze(AST ast, Handle<CompUnit> compUnit_nn)
@@ -373,53 +407,15 @@ void SemanticAnalyzer::analyzeConstDecl(Handle<ConstDecl> constDecl_nn)
             = node(constDef_nn, "const declaration contains a null declarator");
         const auto& identifier = node(parsedConstDef.m_identifier_nn,
             "const declarator is missing an identifier");
-        const auto& constInitVal = node(parsedConstDef.m_constInitVal_nn,
+        (void)node(parsedConstDef.m_constInitVal_nn,
             "const declarator is missing an initializer");
         const auto objectType = analyzeObjectType(
             parsedConstDef.m_dimensions, parsedConstDef.m_sourcePos.m_offset);
 
-        auto analyzedInit = AnalyzedExp {
-            .m_type = objectType,
-            .m_valueKind = objectType.valueKind(),
-            .m_isConstant = false,
-            .m_constantValue = 0,
-        };
-        const auto analyzeConstInitLeafs =
-            [&](auto&& self, Handle<ConstInitVal> init_nn) -> void {
-            const auto& init
-                = node(init_nn, "const initializer element is missing");
-            std::visit(
-                [&](const auto& initAlt) {
-                    using AltType = std::decay_t<decltype(initAlt)>;
-                    if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
-                        const auto childExp = analyzeExp(initAlt);
-                        if (!isScalarType(childExp.m_type)
-                            || !childExp.m_isConstant) {
-                            recordDiagnostic(
-                                SemanticDiagnosticKind::nonConstantConstInitializer,
-                                init.m_sourcePos.m_offset,
-                                "const array initializer must use constant integer expressions");
-                        }
-                    } else {
-                        for (const auto child_nn : initAlt.m_values) {
-                            self(self, child_nn);
-                        }
-                    }
-                },
-                init.m_kind);
-        };
-        std::visit(
-            [&](const auto& initAlt) {
-                using AltType = std::decay_t<decltype(initAlt)>;
-                if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
-                    analyzedInit = analyzeExp(initAlt);
-                } else {
-                    for (const auto child_nn : initAlt.m_values) {
-                        analyzeConstInitLeafs(analyzeConstInitLeafs, child_nn);
-                    }
-                }
-            },
-            constInitVal.m_kind);
+        size_t nextIndex = 0;
+        bool hasRemainingWarning = false;
+        auto analyzedInit = analyzeConstInitVal(parsedConstDef.m_constInitVal_nn,
+            objectType, true, nextIndex, hasRemainingWarning);
 
         if (!parsedConstDef.m_dimensions.empty()) {
             analyzedInit.m_isConstant = false;
@@ -463,61 +459,10 @@ void SemanticAnalyzer::analyzeVarDecl(Handle<VarDecl> varDecl_nn)
         const auto objectType = analyzeObjectType(
             parsedVarDef.m_dimensions, parsedVarDef.m_sourcePos.m_offset);
         if (parsedVarDef.m_initVal_nn) {
-            const auto& initVal = node(parsedVarDef.m_initVal_nn,
-                "var declarator init payload is missing");
-            const auto analyzeInitLeafs =
-                [&](auto&& self, Handle<InitVal> init_nn) -> void {
-                const auto& init = node(init_nn, "initializer element is missing");
-                std::visit(
-                    [&](const auto& initAlt) {
-                        using AltType = std::decay_t<decltype(initAlt)>;
-                        if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
-                            const auto childExp = analyzeExp(initAlt);
-                            if (childExp.m_type.isVoid()
-                                || childExp.m_type.isArray()) {
-                                recordDiagnostic(
-                                    SemanticDiagnosticKind::typeMismatch,
-                                    init.m_sourcePos.m_offset,
-                                    "initializer elements must produce integer values");
-                            }
-                            if (isGlobalScope() && !childExp.m_isConstant) {
-                                recordDiagnostic(
-                                    SemanticDiagnosticKind::nonConstantGlobalInitializer,
-                                    init.m_sourcePos.m_offset,
-                                    "global initializer must be a constant expression");
-                            }
-                        } else {
-                            for (const auto child_nn : initAlt.m_values) {
-                                self(self, child_nn);
-                            }
-                        }
-                    },
-                    init.m_kind);
-            };
-            std::visit(
-                [&](const auto& initAlt) {
-                    using AltType = std::decay_t<decltype(initAlt)>;
-                    if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
-                        const auto analyzedInit = analyzeExp(initAlt);
-                        if (analyzedInit.m_type.isVoid()
-                            || analyzedInit.m_type.isArray()) {
-                            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                                parsedVarDef.m_sourcePos.m_offset,
-                                "variable initializer must produce an integer value");
-                        }
-                        if (isGlobalScope() && !analyzedInit.m_isConstant) {
-                            recordDiagnostic(
-                                SemanticDiagnosticKind::nonConstantGlobalInitializer,
-                                parsedVarDef.m_sourcePos.m_offset,
-                                "global initializer must be a constant expression");
-                        }
-                    } else {
-                        for (const auto child_nn : initAlt.m_values) {
-                            analyzeInitLeafs(analyzeInitLeafs, child_nn);
-                        }
-                    }
-                },
-                initVal.m_kind);
+            size_t nextIndex = 0;
+            bool hasRemainingWarning = false;
+            (void)analyzeInitVal(parsedVarDef.m_initVal_nn, objectType,
+                isGlobalScope(), true, nextIndex, hasRemainingWarning);
         }
 
         if (m_info.findSymbol(parsedVarDef.m_identifier_nn) == nullptr) {
@@ -557,6 +502,252 @@ void SemanticAnalyzer::declareVarDecl(Handle<VarDecl> varDecl_nn)
         }
         bindSymbol(parsedVarDef.m_identifier_nn, symbol);
     }
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
+    Handle<ConstInitVal> constInitVal_nn, const SemanticType& expectedType,
+    bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
+{
+    const auto& init
+        = node(constInitVal_nn, "const initializer element is missing");
+    AnalyzedExp analyzedInit {
+        .m_type = expectedType,
+        .m_valueKind = expectedType.valueKind(),
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+
+    const auto recordExcessInitializer = [&](int32_t offset) {
+        if (hasRemainingWarning) {
+            return;
+        }
+        recordDiagnostic(SemanticDiagnosticKind::excessInitializerElements,
+            offset, "excess initializer elements",
+            SemanticDiagnosticSeverity::warning);
+        hasRemainingWarning = true;
+    };
+
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                analyzedInit = analyzeExp(initAlt);
+                ++nextIndex;
+                if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        init.m_sourcePos.m_offset,
+                        expectedType.isArray()
+                            ? "const array initializer must use constant integer expressions"
+                            : "const initializer must produce an integer value");
+                }
+                if (!analyzedInit.m_isConstant) {
+                    recordDiagnostic(
+                        SemanticDiagnosticKind::nonConstantConstInitializer,
+                        init.m_sourcePos.m_offset,
+                        expectedType.isArray()
+                            ? "const array initializer must use constant integer expressions"
+                            : "const initializer must be a constant expression");
+                }
+            } else {
+                if (!expectedType.isArray()) {
+                    if (!initAlt.m_values.empty()) {
+                        size_t consumed = 0;
+                        analyzedInit = analyzeConstInitVal(initAlt.m_values.front(),
+                            expectedType, false, consumed, hasRemainingWarning);
+                        nextIndex += consumed;
+                    }
+                    if (initAlt.m_values.size() > 1) {
+                        recordExcessInitializer(init.m_sourcePos.m_offset);
+                    }
+                    return;
+                }
+
+                if (expectedType.m_elementType == nullptr) {
+                    throw std::runtime_error("array type is missing element type");
+                }
+
+                const size_t totalSlots = countScalarSlots(expectedType);
+                const size_t elementSlots = directSubobjectSlots(expectedType);
+                const auto scalarType = scalarElementType(expectedType);
+                size_t localIndex = 0;
+
+                for (const auto child_nn : initAlt.m_values) {
+                    if (localIndex >= totalSlots) {
+                        recordExcessInitializer(node(child_nn,
+                            "initializer element is missing")
+                            .m_sourcePos.m_offset);
+                        continue;
+                    }
+
+                    const auto& child = node(child_nn,
+                        "const initializer element is missing");
+                    std::visit(
+                        [&](const auto& childAlt) {
+                            using ChildAltType = std::decay_t<decltype(childAlt)>;
+                            if constexpr (std::is_same_v<ChildAltType,
+                                              Handle<Exp>>) {
+                                size_t consumed = 0;
+                                (void)analyzeConstInitVal(child_nn, scalarType,
+                                    false, consumed, hasRemainingWarning);
+                                localIndex += consumed;
+                            } else {
+                                if (localIndex % elementSlots != 0) {
+                                    localIndex
+                                        += elementSlots - (localIndex % elementSlots);
+                                }
+                                if (localIndex >= totalSlots) {
+                                    recordExcessInitializer(child.m_sourcePos.m_offset);
+                                    return;
+                                }
+                                size_t consumed = 0;
+                                (void)analyzeConstInitVal(child_nn,
+                                    *expectedType.m_elementType, false,
+                                    consumed, hasRemainingWarning);
+                                localIndex += elementSlots;
+                            }
+                        },
+                        child.m_kind);
+                }
+
+                nextIndex += localIndex;
+                analyzedInit = AnalyzedExp {
+                    .m_type = expectedType,
+                    .m_valueKind = expectedType.valueKind(),
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            }
+        },
+        init.m_kind);
+
+    if (isOutermost && expectedType.isArray()) {
+        analyzedInit.m_isConstant = false;
+        analyzedInit.m_constantValue = 0;
+    }
+    return analyzedInit;
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
+    Handle<InitVal> initVal_nn, const SemanticType& expectedType,
+    bool isGlobal, bool isOutermost, size_t& nextIndex,
+    bool& hasRemainingWarning)
+{
+    const auto& init = node(initVal_nn, "initializer element is missing");
+    AnalyzedExp analyzedInit {
+        .m_type = expectedType,
+        .m_valueKind = expectedType.valueKind(),
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+
+    const auto recordExcessInitializer = [&](int32_t offset) {
+        if (hasRemainingWarning) {
+            return;
+        }
+        recordDiagnostic(SemanticDiagnosticKind::excessInitializerElements,
+            offset, "excess initializer elements",
+            SemanticDiagnosticSeverity::warning);
+        hasRemainingWarning = true;
+    };
+
+    std::visit(
+        [&](const auto& initAlt) {
+            using AltType = std::decay_t<decltype(initAlt)>;
+            if constexpr (std::is_same_v<AltType, Handle<Exp>>) {
+                analyzedInit = analyzeExp(initAlt);
+                ++nextIndex;
+                if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        init.m_sourcePos.m_offset,
+                        expectedType.isArray()
+                            ? "initializer elements must produce integer values"
+                            : "variable initializer must produce an integer value");
+                }
+                if (isGlobal && !analyzedInit.m_isConstant) {
+                    recordDiagnostic(
+                        SemanticDiagnosticKind::nonConstantGlobalInitializer,
+                        init.m_sourcePos.m_offset,
+                        "global initializer must be a constant expression");
+                }
+            } else {
+                if (!expectedType.isArray()) {
+                    if (!initAlt.m_values.empty()) {
+                        size_t consumed = 0;
+                        analyzedInit = analyzeInitVal(initAlt.m_values.front(),
+                            expectedType, isGlobal, false, consumed,
+                            hasRemainingWarning);
+                        nextIndex += consumed;
+                    }
+                    if (initAlt.m_values.size() > 1) {
+                        recordExcessInitializer(init.m_sourcePos.m_offset);
+                    }
+                    return;
+                }
+
+                if (expectedType.m_elementType == nullptr) {
+                    throw std::runtime_error("array type is missing element type");
+                }
+
+                const size_t totalSlots = countScalarSlots(expectedType);
+                const size_t elementSlots = directSubobjectSlots(expectedType);
+                const auto scalarType = scalarElementType(expectedType);
+                size_t localIndex = 0;
+
+                for (const auto child_nn : initAlt.m_values) {
+                    if (localIndex >= totalSlots) {
+                        recordExcessInitializer(node(child_nn,
+                            "initializer element is missing")
+                            .m_sourcePos.m_offset);
+                        continue;
+                    }
+
+                    const auto& child = node(child_nn,
+                        "initializer element is missing");
+                    std::visit(
+                        [&](const auto& childAlt) {
+                            using ChildAltType = std::decay_t<decltype(childAlt)>;
+                            if constexpr (std::is_same_v<ChildAltType,
+                                              Handle<Exp>>) {
+                                size_t consumed = 0;
+                                (void)analyzeInitVal(child_nn, scalarType,
+                                    isGlobal, false, consumed,
+                                    hasRemainingWarning);
+                                localIndex += consumed;
+                            } else {
+                                if (localIndex % elementSlots != 0) {
+                                    localIndex
+                                        += elementSlots - (localIndex % elementSlots);
+                                }
+                                if (localIndex >= totalSlots) {
+                                    recordExcessInitializer(child.m_sourcePos.m_offset);
+                                    return;
+                                }
+                                size_t consumed = 0;
+                                (void)analyzeInitVal(child_nn,
+                                    *expectedType.m_elementType, isGlobal,
+                                    false, consumed, hasRemainingWarning);
+                                localIndex += elementSlots;
+                            }
+                        },
+                        child.m_kind);
+                }
+
+                nextIndex += localIndex;
+                analyzedInit = AnalyzedExp {
+                    .m_type = expectedType,
+                    .m_valueKind = expectedType.valueKind(),
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            }
+        },
+        init.m_kind);
+
+    if (isOutermost && expectedType.isArray()) {
+        analyzedInit.m_isConstant = false;
+        analyzedInit.m_constantValue = 0;
+    }
+    return analyzedInit;
 }
 
 void SemanticAnalyzer::analyzeStmtNode(Handle<StmtNode> stmtNode_nn)

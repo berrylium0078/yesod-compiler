@@ -27,73 +27,77 @@ namespace {
     }
 
     template <typename InitNode>
-    size_t fillScalarInitializerSlots(const frontend::AST& ast,
+    void fillScalarInitializerSlots(const frontend::AST& ast,
+        frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
+        size_t baseOffset,
+        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs);
+
+    template <typename InitNode>
+    void consumeInitializerSequence(const frontend::AST& ast,
+        const std::vector<frontend::Handle<InitNode>>& values,
+        size_t& nextValueIndex, const frontend::SemanticType& type,
+        size_t baseOffset,
+        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
+    {
+        if (nextValueIndex >= values.size()) {
+            return;
+        }
+
+        if (!type.isArray()) {
+            fillScalarInitializerSlots(
+                ast, values[nextValueIndex], type, baseOffset, scalarExprs);
+            ++nextValueIndex;
+            return;
+        }
+
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
+        }
+
+        const size_t elementSlots = countScalarSlots(*type.m_elementType);
+        for (int32_t i = 0;
+             i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
+            const auto& child = ast.get(values[nextValueIndex]);
+            std::visit(
+                [&](const auto& childAlt) {
+                    using ChildAltType = std::decay_t<decltype(childAlt)>;
+                    if constexpr (std::is_same_v<ChildAltType,
+                                      frontend::Handle<frontend::Exp>>) {
+                        consumeInitializerSequence(ast, values, nextValueIndex,
+                            *type.m_elementType,
+                            baseOffset + static_cast<size_t>(i) * elementSlots,
+                            scalarExprs);
+                    } else {
+                        fillScalarInitializerSlots(ast, values[nextValueIndex],
+                            *type.m_elementType,
+                            baseOffset + static_cast<size_t>(i) * elementSlots,
+                            scalarExprs);
+                        ++nextValueIndex;
+                    }
+                },
+                child.m_kind);
+        }
+    }
+
+    template <typename InitNode>
+    void fillScalarInitializerSlots(const frontend::AST& ast,
         frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
         size_t baseOffset,
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast.get(init_nn);
-        const size_t totalSlots = countScalarSlots(type);
-
-        return std::visit(
-            [&](const auto& initAlt) -> size_t {
+        std::visit(
+            [&](const auto& initAlt) {
                 using AltType = std::decay_t<decltype(initAlt)>;
                 if constexpr (std::is_same_v<AltType,
                                   frontend::Handle<frontend::Exp>>) {
                     if (baseOffset < scalarExprs.size()) {
                         scalarExprs[baseOffset] = initAlt;
                     }
-                    return 1;
                 } else {
-                    if (!type.isArray()) {
-                        if (initAlt.m_values.empty()) {
-                            return 0;
-                        }
-                        return fillScalarInitializerSlots(ast,
-                            initAlt.m_values.front(), type, baseOffset,
-                            scalarExprs);
-                    }
-
-                    if (type.m_elementType == nullptr) {
-                        throw std::runtime_error(
-                            "array type is missing element type");
-                    }
-
-                    const size_t elementSlots
-                        = countScalarSlots(*type.m_elementType);
-                    size_t cursor = 0;
-                    for (const auto child_nn : initAlt.m_values) {
-                        if (cursor >= totalSlots) {
-                            break;
-                        }
-
-                        const auto& child = ast.get(child_nn);
-                        std::visit(
-                            [&](const auto& childAlt) {
-                                using ChildAltType
-                                    = std::decay_t<decltype(childAlt)>;
-                                if constexpr (std::is_same_v<ChildAltType,
-                                                  frontend::Handle<frontend::Exp>>) {
-                                    if (baseOffset + cursor < scalarExprs.size()) {
-                                        scalarExprs[baseOffset + cursor] = childAlt;
-                                    }
-                                    ++cursor;
-                                } else {
-                                    if (cursor % elementSlots != 0) {
-                                        cursor += elementSlots - (cursor % elementSlots);
-                                    }
-                                    if (cursor >= totalSlots) {
-                                        return;
-                                    }
-                                    fillScalarInitializerSlots(ast, child_nn,
-                                        *type.m_elementType,
-                                        baseOffset + cursor, scalarExprs);
-                                    cursor += elementSlots;
-                                }
-                            },
-                            child.m_kind);
-                    }
-                    return cursor;
+                    size_t nextValueIndex = 0;
+                    consumeInitializerSequence(ast, initAlt.m_values,
+                        nextValueIndex, type, baseOffset, scalarExprs);
                 }
             },
             init.m_kind);
