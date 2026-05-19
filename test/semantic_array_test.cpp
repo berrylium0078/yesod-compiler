@@ -50,6 +50,16 @@ constexpr const char* kNonConstantConstArrayInitializerSource =
     "int a = 2, b = 3;"
     "const int c[2] = {a + b, a - b};";
 
+constexpr const char* kConstFoldedParamDimensionSource =
+    "const int N = 10;"
+    "int a[N][N];"
+    "int foo(int a[][N]) {"
+    "}"
+    "int main() {"
+    "foo(a);"
+    "return 0;"
+    "}";
+
 ast::Handle<ast::DeclNode> requireDeclNode(
     const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
@@ -412,6 +422,48 @@ void testConstArrayInitializersRejectNonConstantExpressions()
         "non-constant const array initializer should report the dedicated semantic label");
 }
 
+void testConstExpressionsFoldInFunctionArrayDimensions()
+{
+    const auto output = analyzeSource(kConstFoldedParamDimensionSource);
+    require(output.success(),
+        "const expressions in function array parameter dimensions should fold during semantic analysis");
+
+    const auto globalVarDecl = requireVarDecl(
+        requireTopLevelDeclNode(output.m_root->m_topLevelItems[1]));
+    const auto& globalArraySymbol = requireSymbol(output, globalVarDecl->m_varDefs[0]);
+    require(globalArraySymbol.m_type.isArray()
+            && globalArraySymbol.m_type.m_arrayLength == 10,
+        "global array declaration should preserve the folded outer dimension");
+    require(globalArraySymbol.m_type.m_elementType != nullptr
+            && globalArraySymbol.m_type.m_elementType->isArray()
+            && globalArraySymbol.m_type.m_elementType->m_arrayLength == 10,
+        "global array declaration should preserve the folded inner dimension");
+
+    ast::Handle<ast::FuncDef> fooFunc_nn;
+    for (const auto topLevelItem_nn : output.m_root->m_topLevelItems) {
+        std::visit(
+            [&](const auto& topLevelAlt) {
+                using AltType = std::decay_t<decltype(topLevelAlt)>;
+                if constexpr (std::is_same_v<AltType, ast::Handle<ast::FuncDef>>) {
+                    if (topLevelAlt->m_identifier_nn->m_name == "foo") {
+                        fooFunc_nn = topLevelAlt;
+                    }
+                }
+            },
+            topLevelItem_nn->m_topLevelItem);
+    }
+    require(fooFunc_nn != nullptr, "expected foo function definition");
+
+    const auto& paramSymbol = requireSymbol(
+        output, fooFunc_nn->m_funcFParams[0]->m_identifier_nn);
+    require(paramSymbol.m_type.isArray() && paramSymbol.m_type.m_arrayLength == -1,
+        "function parameter should preserve the unsized first dimension");
+    require(paramSymbol.m_type.m_elementType != nullptr
+            && paramSymbol.m_type.m_elementType->isArray()
+            && paramSymbol.m_type.m_elementType->m_arrayLength == 10,
+        "function parameter trailing dimension should fold the const expression to 10");
+}
+
 } // namespace
 
 int main()
@@ -423,5 +475,6 @@ int main()
     testNestedFunctionArrayParametersAnalyze();
     testArrayInitializersAcceptExpressions();
     testConstArrayInitializersRejectNonConstantExpressions();
+    testConstExpressionsFoldInFunctionArrayDimensions();
     return 0;
 }

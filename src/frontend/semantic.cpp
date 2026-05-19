@@ -161,7 +161,21 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
         std::visit(
             [&](const auto& topLevelAlt) {
                 using AltType = std::decay_t<decltype(topLevelAlt)>;
-                if constexpr (std::is_same_v<AltType, Handle<FuncDef>>) {
+                if constexpr (std::is_same_v<AltType, Handle<DeclNode>>) {
+                    const auto& declNode
+                        = node(topLevelAlt, "declaration payload is missing");
+                    std::visit(
+                        [&](const auto& declAlt) {
+                            using DeclAltType = std::decay_t<decltype(declAlt)>;
+                            if constexpr (std::is_same_v<DeclAltType,
+                                              Handle<ConstDecl>>) {
+                                analyzeConstDecl(declAlt);
+                            } else {
+                                declareVarDecl(declAlt);
+                            }
+                        },
+                        declNode.m_decl);
+                } else {
                     declareFuncDef(topLevelAlt);
                 }
             },
@@ -175,7 +189,17 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
             [&](const auto& topLevelAlt) {
                 using AltType = std::decay_t<decltype(topLevelAlt)>;
                 if constexpr (std::is_same_v<AltType, Handle<DeclNode>>) {
-                    analyzeDeclNode(topLevelAlt);
+                    const auto& declNode
+                        = node(topLevelAlt, "declaration payload is missing");
+                    std::visit(
+                        [&](const auto& declAlt) {
+                            using DeclAltType = std::decay_t<decltype(declAlt)>;
+                            if constexpr (std::is_same_v<DeclAltType,
+                                              Handle<VarDecl>>) {
+                                analyzeVarDecl(declAlt);
+                            }
+                        },
+                        declNode.m_decl);
                 }
             },
             topLevelItem.m_topLevelItem);
@@ -496,12 +520,40 @@ void SemanticAnalyzer::analyzeVarDecl(Handle<VarDecl> varDecl_nn)
                 initVal.m_kind);
         }
 
+        if (m_info.findSymbol(parsedVarDef.m_identifier_nn) == nullptr) {
+            const auto symbol = makeObjectSymbol(parsedVarDef.m_identifier_nn,
+                false, false, 0, objectType);
+            if (!defineSymbol(identifier.m_name, parsedVarDef.m_identifier_nn)) {
+                recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+                    identifier.m_sourcePos.m_offset,
+                    "double definition of '" + identifier.m_name + "'");
+            }
+            bindSymbol(parsedVarDef.m_identifier_nn, symbol);
+        }
+    }
+}
+
+void SemanticAnalyzer::declareVarDecl(Handle<VarDecl> varDecl_nn)
+{
+    const auto& varDecl
+        = node(varDecl_nn, "var declaration payload is missing");
+    for (const auto varDef_nn : varDecl.m_varDefs) {
+        const auto& parsedVarDef
+            = node(varDef_nn, "var declaration contains a null declarator");
+        const auto& identifier = node(parsedVarDef.m_identifier_nn,
+            "var declarator is missing an identifier");
+        const auto objectType = analyzeObjectType(
+            parsedVarDef.m_dimensions, parsedVarDef.m_sourcePos.m_offset);
+        if (m_info.findSymbol(parsedVarDef.m_identifier_nn) != nullptr) {
+            continue;
+        }
         const auto symbol = makeObjectSymbol(parsedVarDef.m_identifier_nn,
             false, false, 0, objectType);
         if (!defineSymbol(identifier.m_name, parsedVarDef.m_identifier_nn)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
                 identifier.m_sourcePos.m_offset,
                 "double definition of '" + identifier.m_name + "'");
+            continue;
         }
         bindSymbol(parsedVarDef.m_identifier_nn, symbol);
     }

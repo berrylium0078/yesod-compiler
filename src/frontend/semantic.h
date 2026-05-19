@@ -309,6 +309,7 @@ class SemanticAnalyzer {
     void analyzeBlockItemNode(Handle<BlockItemNode> blockItemNode_nn);
     void analyzeDeclNode(Handle<DeclNode> declNode_nn);
     void analyzeConstDecl(Handle<ConstDecl> constDecl_nn);
+    void declareVarDecl(Handle<VarDecl> varDecl_nn);
     void analyzeVarDecl(Handle<VarDecl> varDecl_nn);
     void analyzeStmtNode(Handle<StmtNode> stmtNode_nn);
     void analyzeIfStmt(Handle<IfStmt> ifStmt_nn);
