@@ -27,13 +27,18 @@ namespace {
     }
 
     template <typename InitNode>
-    void fillScalarInitializerSlots(const frontend::AST& ast,
+    void fillObjectFromNode(const frontend::AST& ast,
         frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
         size_t baseOffset,
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs);
 
     template <typename InitNode>
-    void consumeInitializerSequence(const frontend::AST& ast,
+    void assignScalarInitializerFromNode(const frontend::AST& ast,
+        frontend::Handle<InitNode> init_nn, size_t baseOffset,
+        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs);
+
+    template <typename InitNode>
+    void fillObjectFromSequence(const frontend::AST& ast,
         const std::vector<frontend::Handle<InitNode>>& values,
         size_t& nextValueIndex, const frontend::SemanticType& type,
         size_t baseOffset,
@@ -44,8 +49,8 @@ namespace {
         }
 
         if (!type.isArray()) {
-            fillScalarInitializerSlots(
-                ast, values[nextValueIndex], type, baseOffset, scalarExprs);
+            assignScalarInitializerFromNode(
+                ast, values[nextValueIndex], baseOffset, scalarExprs);
             ++nextValueIndex;
             return;
         }
@@ -63,12 +68,12 @@ namespace {
                     using ChildAltType = std::decay_t<decltype(childAlt)>;
                     if constexpr (std::is_same_v<ChildAltType,
                                       frontend::Handle<frontend::Exp>>) {
-                        consumeInitializerSequence(ast, values, nextValueIndex,
+                        fillObjectFromSequence(ast, values, nextValueIndex,
                             *type.m_elementType,
                             baseOffset + static_cast<size_t>(i) * elementSlots,
                             scalarExprs);
                     } else {
-                        fillScalarInitializerSlots(ast, values[nextValueIndex],
+                        fillObjectFromNode(ast, values[nextValueIndex],
                             *type.m_elementType,
                             baseOffset + static_cast<size_t>(i) * elementSlots,
                             scalarExprs);
@@ -80,9 +85,33 @@ namespace {
     }
 
     template <typename InitNode>
-    void fillScalarInitializerSlots(const frontend::AST& ast,
+    void fillObjectFromNode(const frontend::AST& ast,
         frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
         size_t baseOffset,
+        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
+    {
+        const auto& init = ast.get(init_nn);
+        std::visit(
+            [&](const auto& initAlt) {
+                using AltType = std::decay_t<decltype(initAlt)>;
+                if constexpr (std::is_same_v<AltType,
+                                  frontend::Handle<frontend::Exp>>) {
+                    size_t nextValueIndex = 0;
+                    const std::vector<frontend::Handle<InitNode>> singleton { init_nn };
+                    fillObjectFromSequence(ast, singleton, nextValueIndex, type,
+                        baseOffset, scalarExprs);
+                } else {
+                    size_t nextValueIndex = 0;
+                    fillObjectFromSequence(ast, initAlt.m_values,
+                        nextValueIndex, type, baseOffset, scalarExprs);
+                }
+            },
+            init.m_kind);
+    }
+
+    template <typename InitNode>
+    void assignScalarInitializerFromNode(const frontend::AST& ast,
+        frontend::Handle<InitNode> init_nn, size_t baseOffset,
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast.get(init_nn);
@@ -95,9 +124,10 @@ namespace {
                         scalarExprs[baseOffset] = initAlt;
                     }
                 } else {
-                    size_t nextValueIndex = 0;
-                    consumeInitializerSequence(ast, initAlt.m_values,
-                        nextValueIndex, type, baseOffset, scalarExprs);
+                    if (!initAlt.m_values.empty()) {
+                        assignScalarInitializerFromNode(
+                            ast, initAlt.m_values.front(), baseOffset, scalarExprs);
+                    }
                 }
             },
             init.m_kind);
@@ -110,7 +140,7 @@ namespace {
     {
         std::vector<frontend::Handle<frontend::Exp>> scalarExprs(
             countScalarSlots(type));
-        fillScalarInitializerSlots(ast, init_nn, type, 0, scalarExprs);
+        fillObjectFromNode(ast, init_nn, type, 0, scalarExprs);
         return scalarExprs;
     }
 

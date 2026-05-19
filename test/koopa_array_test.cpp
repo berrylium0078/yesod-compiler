@@ -60,6 +60,15 @@ constexpr const char* kRecursiveArrayInitializerSource =
     "const int b[N][N][N] = {0, 1, 2, {3}, 4};"
     "int main(){return 0;}";
 
+constexpr const char* kStressGeneratedArrayInitializerSource =
+    "const int N1 = 6;"
+    "const int N2 = 3;"
+    "const int N3 = 7;"
+    "const int N4 = 5;"
+    "const int N5 = 1;"
+    "int a[N1][N2][N3][N4][N5] = {{}, {48, {19, 53, {{20, 4}, 55, 8}}, 38, {3, 54}}, 34, 35, 56};"
+    "int main(){return 0;}";
+
 const BasicBlock* requireBlockNameContains(
     const Function& function, const std::string& infix)
 {
@@ -448,6 +457,17 @@ void testRecursiveThreeDimensionalArrayInitializersPreserveBoundaries()
         "trailing const plane should be zeroinit");
 }
 
+void testStressGeneratedArrayInitializerLowers()
+{
+    auto program = generateProgram(kStressGeneratedArrayInitializerSource);
+
+    require(program->getNumVals() == 1,
+        "stress-generated deep array initializer should lower to one global");
+    const auto* global = requireGlobalAlloc(program->getVal(0), "@v_a");
+    require(global->getInitVal()->isAggregateValue(),
+        "stress-generated deep array initializer should lower without a fake non-constant error");
+}
+
 } // namespace
 
 int main()
@@ -459,5 +479,6 @@ int main()
     testBuiltinArrayLibraryDeclarationsLowerToExternalFunctions();
     testMixedBraceArrayInitializersPreserveSubobjectBoundaries();
     testRecursiveThreeDimensionalArrayInitializersPreserveBoundaries();
+    testStressGeneratedArrayInitializerLowers();
     return 0;
 }

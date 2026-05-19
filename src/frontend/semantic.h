@@ -330,9 +330,16 @@ class SemanticAnalyzer {
     [[nodiscard]] AnalyzedExp analyzeConstInitVal(
         Handle<ConstInitVal> constInitVal_nn, const SemanticType& expectedType,
         bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning);
+    [[nodiscard]] AnalyzedExp analyzeConstInitSequence(
+        const std::vector<Handle<ConstInitVal>>& values, size_t& nextValueIndex,
+        const SemanticType& expectedType, bool& hasRemainingWarning);
     [[nodiscard]] AnalyzedExp analyzeInitVal(Handle<InitVal> initVal_nn,
         const SemanticType& expectedType, bool isGlobal, bool isOutermost,
         size_t& nextIndex, bool& hasRemainingWarning);
+    [[nodiscard]] AnalyzedExp analyzeInitSequence(
+        const std::vector<Handle<InitVal>>& values, size_t& nextValueIndex,
+        const SemanticType& expectedType, bool isGlobal,
+        bool& hasRemainingWarning);
     [[nodiscard]] bool typesMatchForCall(
         const SemanticType& paramType, const SemanticType& argType) const;
     [[nodiscard]] bool isScalarType(const SemanticType& type) const;

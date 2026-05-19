@@ -251,7 +251,6 @@ struct InitVal {
 
 struct ConstDef {
     ConstDef() = default;
-
     ConstDef(int32_t startOffset, Handle<Identifier> identifier_nn,
         std::vector<Handle<Exp>> dimensions,
         Handle<ConstInitVal> constInitVal_nn)

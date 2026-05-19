@@ -65,6 +65,15 @@ constexpr const char* kRecursiveArrayInitializerSource =
     "int a[N][N][N] = {0, 1, 2, {3}, 4};"
     "const int b[N][N][N] = {0, 1, 2, {3}, 4};";
 
+constexpr const char* kStressGeneratedArrayInitializerSource =
+    "const int N1 = 6;"
+    "const int N2 = 3;"
+    "const int N3 = 7;"
+    "const int N4 = 5;"
+    "const int N5 = 1;"
+    "int a[N1][N2][N3][N4][N5] = {{}, {48, {19, 53, {{20, 4}, 55, 8}}, 38, {3, 54}}, 34, 35, 56};"
+    "int main(){return 0;}";
+
 ast::Handle<ast::DeclNode> requireDeclNode(
     const ast::Handle<ast::BlockItemNode>& blockItem_nn)
 {
@@ -496,6 +505,13 @@ void testRecursiveMultidimensionalArrayInitializersAnalyze()
         "const three-dimensional array initializer should preserve the same folded type");
 }
 
+void testStressGeneratedArrayInitializerAnalyzes()
+{
+    const auto output = analyzeSource(kStressGeneratedArrayInitializerSource);
+    require(output.success(),
+        "stress-generated deep array initializer should pass semantic analysis");
+}
+
 } // namespace
 
 int main()
@@ -509,5 +525,6 @@ int main()
     testConstArrayInitializersRejectNonConstantExpressions();
     testConstExpressionsFoldInFunctionArrayDimensions();
     testRecursiveMultidimensionalArrayInitializersAnalyze();
+    testStressGeneratedArrayInitializerAnalyzes();
     return 0;
 }
