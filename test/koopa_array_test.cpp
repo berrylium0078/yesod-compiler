@@ -49,6 +49,11 @@ constexpr const char* kArrayInitializerExpressionSource =
 constexpr const char* kBuiltinArrayDeclSource =
     "int main(){int a[2]; putarray(2, a); return getarray(a);}";
 
+constexpr const char* kMixedBraceArrayInitializerSource =
+    "int a[3][3] = {{0, 1}, {2, 3}};"
+    "int b[3][3] = {0, 1, 2, {3}, 4, 5, 6};"
+    "int main(){return 0;}";
+
 const BasicBlock* requireBlockNameContains(
     const Function& function, const std::string& infix)
 {
@@ -353,6 +358,42 @@ void testBuiltinArrayLibraryDeclarationsLowerToExternalFunctions()
         "main should call the lowered getarray declaration");
 }
 
+void testMixedBraceArrayInitializersPreserveSubobjectBoundaries()
+{
+    auto program = generateProgram(kMixedBraceArrayInitializerSource);
+
+    require(program->getNumVals() == 2,
+        "mixed brace/scalar global array initializers should lower to two globals");
+
+    const auto* aGlobal = requireGlobalAlloc(program->getVal(0), "@v_a");
+    const auto* aInit = requireAggregate(aGlobal->getInitVal(), 3);
+    const auto* aRow0 = requireAggregate(aInit->getElement(0), 3);
+    const auto* aRow1 = requireAggregate(aInit->getElement(1), 3);
+    requireInteger(aRow0->getElement(0), 0);
+    requireInteger(aRow0->getElement(1), 1);
+    requireInteger(aRow0->getElement(2), 0);
+    requireInteger(aRow1->getElement(0), 2);
+    requireInteger(aRow1->getElement(1), 3);
+    requireInteger(aRow1->getElement(2), 0);
+    require(aInit->getElement(2)->isZeroInitValue(),
+        "fully zero trailing rows may be represented as zeroinit");
+
+    const auto* bGlobal = requireGlobalAlloc(program->getVal(1), "@v_b");
+    const auto* bInit = requireAggregate(bGlobal->getInitVal(), 3);
+    const auto* bRow0 = requireAggregate(bInit->getElement(0), 3);
+    const auto* bRow1 = requireAggregate(bInit->getElement(1), 3);
+    const auto* bRow2 = requireAggregate(bInit->getElement(2), 3);
+    requireInteger(bRow0->getElement(0), 0);
+    requireInteger(bRow0->getElement(1), 1);
+    requireInteger(bRow0->getElement(2), 2);
+    requireInteger(bRow1->getElement(0), 3);
+    requireInteger(bRow1->getElement(1), 0);
+    requireInteger(bRow1->getElement(2), 0);
+    requireInteger(bRow2->getElement(0), 4);
+    requireInteger(bRow2->getElement(1), 5);
+    requireInteger(bRow2->getElement(2), 6);
+}
+
 } // namespace
 
 int main()
@@ -362,5 +403,6 @@ int main()
     testFunctionArrayParametersLowerThroughPointerDepths();
     testGlobalArrayInitializerExpressionsLowerToComputedAggregates();
     testBuiltinArrayLibraryDeclarationsLowerToExternalFunctions();
+    testMixedBraceArrayInitializersPreserveSubobjectBoundaries();
     return 0;
 }

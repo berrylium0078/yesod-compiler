@@ -108,13 +108,13 @@ class Generator {
         bool decayUnsizedArrayToPointer = true) const;
     [[nodiscard]] Value* generateGlobalArrayInitializer(
         const frontend::SemanticType& type,
-        const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
-        size_t& nextLeafIndex,
+        const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+        size_t& nextScalarIndex,
         const frontend::SemanticInfo& semanticInfo) const;
     void generateLocalArrayInitializer(Value* address,
         const frontend::SemanticType& type,
-        const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
-        size_t& nextLeafIndex, FunctionGenerationState& state) const;
+        const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+        size_t& nextScalarIndex, FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateLValueAddress(const frontend::LVal& lVal,
         FunctionGenerationState& state) const;
     template <typename T>

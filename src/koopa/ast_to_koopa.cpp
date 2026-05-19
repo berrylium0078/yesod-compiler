@@ -1,5 +1,6 @@
 #include "koopa/ast_to_koopa.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -11,25 +12,102 @@ namespace yesod::koopa {
 
 namespace {
 
+    size_t countScalarSlots(const frontend::SemanticType& type)
+    {
+        if (!type.isArray()) {
+            return 1;
+        }
+
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
+        }
+
+        return static_cast<size_t>(type.m_arrayLength)
+            * countScalarSlots(*type.m_elementType);
+    }
+
     template <typename InitNode>
-    void collectInitLeafExprs(const frontend::AST& ast,
-        frontend::Handle<InitNode> init_nn,
-        std::vector<frontend::Handle<frontend::Exp>>& leafExprs)
+    size_t fillScalarInitializerSlots(const frontend::AST& ast,
+        frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
+        size_t baseOffset,
+        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast.get(init_nn);
-        std::visit(
-            [&](const auto& initAlt) {
+        const size_t totalSlots = countScalarSlots(type);
+
+        return std::visit(
+            [&](const auto& initAlt) -> size_t {
                 using AltType = std::decay_t<decltype(initAlt)>;
                 if constexpr (std::is_same_v<AltType,
                                   frontend::Handle<frontend::Exp>>) {
-                    leafExprs.push_back(initAlt);
-                } else {
-                    for (const auto child_nn : initAlt.m_values) {
-                        collectInitLeafExprs(ast, child_nn, leafExprs);
+                    if (baseOffset < scalarExprs.size()) {
+                        scalarExprs[baseOffset] = initAlt;
                     }
+                    return 1;
+                } else {
+                    if (!type.isArray()) {
+                        if (initAlt.m_values.empty()) {
+                            return 0;
+                        }
+                        return fillScalarInitializerSlots(ast,
+                            initAlt.m_values.front(), type, baseOffset,
+                            scalarExprs);
+                    }
+
+                    if (type.m_elementType == nullptr) {
+                        throw std::runtime_error(
+                            "array type is missing element type");
+                    }
+
+                    const size_t elementSlots
+                        = countScalarSlots(*type.m_elementType);
+                    size_t cursor = 0;
+                    for (const auto child_nn : initAlt.m_values) {
+                        if (cursor >= totalSlots) {
+                            break;
+                        }
+
+                        const auto& child = ast.get(child_nn);
+                        std::visit(
+                            [&](const auto& childAlt) {
+                                using ChildAltType
+                                    = std::decay_t<decltype(childAlt)>;
+                                if constexpr (std::is_same_v<ChildAltType,
+                                                  frontend::Handle<frontend::Exp>>) {
+                                    if (baseOffset + cursor < scalarExprs.size()) {
+                                        scalarExprs[baseOffset + cursor] = childAlt;
+                                    }
+                                    ++cursor;
+                                } else {
+                                    if (cursor % elementSlots != 0) {
+                                        cursor += elementSlots - (cursor % elementSlots);
+                                    }
+                                    if (cursor >= totalSlots) {
+                                        return;
+                                    }
+                                    fillScalarInitializerSlots(ast, child_nn,
+                                        *type.m_elementType,
+                                        baseOffset + cursor, scalarExprs);
+                                    cursor += elementSlots;
+                                }
+                            },
+                            child.m_kind);
+                    }
+                    return cursor;
                 }
             },
             init.m_kind);
+    }
+
+    template <typename InitNode>
+    std::vector<frontend::Handle<frontend::Exp>> flattenArrayInitializer(
+        const frontend::AST& ast, frontend::Handle<InitNode> init_nn,
+        const frontend::SemanticType& type)
+    {
+        std::vector<frontend::Handle<frontend::Exp>> scalarExprs(
+            countScalarSlots(type));
+        fillScalarInitializerSlots(ast, init_nn, type, 0, scalarExprs);
+        return scalarExprs;
     }
 
     bool isZeroInitializerValue(const Value* value)
@@ -333,12 +411,12 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                     if (!symbol.m_type.isArray()) {
                         continue;
                     }
-                    std::vector<frontend::Handle<frontend::Exp>> leafExprs;
-                    collectInitLeafExprs(
-                        ast, constDef.m_constInitVal_nn, leafExprs);
-                    size_t nextLeafIndex = 0;
+                    auto scalarExprs = flattenArrayInitializer(
+                        ast, constDef.m_constInitVal_nn, symbol.m_type);
+                    size_t nextScalarIndex = 0;
                     Value* initValue = generateGlobalArrayInitializer(
-                        symbol.m_type, leafExprs, nextLeafIndex, semanticInfo);
+                        symbol.m_type, scalarExprs, nextScalarIndex,
+                        semanticInfo);
                     auto* globalAlloc = GlobalAllocValue::get(
                         initValue, makeGlobalName(symbol.m_name));
                     program.pushVal(globalAlloc);
@@ -354,11 +432,12 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                     Value* initValue
                         = ZeroInitValue::get(lowerSemanticType(symbol.m_type, false));
                     if (symbol.m_type.isArray() && varDef.m_initVal_nn) {
-                        std::vector<frontend::Handle<frontend::Exp>> leafExprs;
-                        collectInitLeafExprs(ast, varDef.m_initVal_nn, leafExprs);
-                        size_t nextLeafIndex = 0;
+                        auto scalarExprs = flattenArrayInitializer(
+                            ast, varDef.m_initVal_nn, symbol.m_type);
+                        size_t nextScalarIndex = 0;
                         initValue = generateGlobalArrayInitializer(
-                            symbol.m_type, leafExprs, nextLeafIndex, semanticInfo);
+                            symbol.m_type, scalarExprs, nextScalarIndex,
+                            semanticInfo);
                     } else if (varDef.m_initVal_nn) {
                         const auto& initVal = ast.get(varDef.m_initVal_nn);
                         std::visit(
@@ -447,12 +526,12 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         = node(parsedConstDef.m_constInitVal_nn, state,
                             "const declarator is missing an initializer");
                     if (symbol.m_type.isArray()) {
-                        std::vector<frontend::Handle<frontend::Exp>> leafExprs;
-                        collectInitLeafExprs(*state.m_ast_nn,
-                            parsedConstDef.m_constInitVal_nn, leafExprs);
-                        size_t nextLeafIndex = 0;
+                        auto scalarExprs = flattenArrayInitializer(
+                            *state.m_ast_nn, parsedConstDef.m_constInitVal_nn,
+                            symbol.m_type);
+                        size_t nextScalarIndex = 0;
                         generateLocalArrayInitializer(alloc, symbol.m_type,
-                            leafExprs, nextLeafIndex, state);
+                            scalarExprs, nextScalarIndex, state);
                     } else {
                         std::visit(
                             [&](const auto& initAlt) {
@@ -483,12 +562,12 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                     state.m_storageBySymbolId[symbol.m_id] = alloc;
                     if (resolvedVarDef.m_initVal_nn) {
                         if (symbol.m_type.isArray()) {
-                            std::vector<frontend::Handle<frontend::Exp>> leafExprs;
-                            collectInitLeafExprs(*state.m_ast_nn,
-                                resolvedVarDef.m_initVal_nn, leafExprs);
-                            size_t nextLeafIndex = 0;
+                            auto scalarExprs = flattenArrayInitializer(
+                                *state.m_ast_nn, resolvedVarDef.m_initVal_nn,
+                                symbol.m_type);
+                            size_t nextScalarIndex = 0;
                             generateLocalArrayInitializer(alloc, symbol.m_type,
-                                leafExprs, nextLeafIndex, state);
+                                scalarExprs, nextScalarIndex, state);
                         } else {
                             const auto& initVal = node(resolvedVarDef.m_initVal_nn,
                                 state, "var declarator init payload is null");
@@ -955,16 +1034,20 @@ Type* Generator::lowerSemanticType(const frontend::SemanticType& type,
 
 Value* Generator::generateGlobalArrayInitializer(
     const frontend::SemanticType& type,
-    const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
-    size_t& nextLeafIndex, const frontend::SemanticInfo& semanticInfo) const
+    const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+    size_t& nextScalarIndex, const frontend::SemanticInfo& semanticInfo) const
 {
     if (!type.isArray()) {
-        if (nextLeafIndex >= leafExprs.size()) {
+        if (nextScalarIndex >= scalarExprs.size()) {
             return IntegerValue::get(0);
         }
 
-        const auto constantValue
-            = semanticInfo.findConstantValue(leafExprs[nextLeafIndex++]);
+        const auto exp_nn = scalarExprs[nextScalarIndex++];
+        if (!exp_nn) {
+            return IntegerValue::get(0);
+        }
+
+        const auto constantValue = semanticInfo.findConstantValue(exp_nn);
         if (!constantValue.has_value()) {
             throw std::runtime_error(
                 "global array initializer element must be constant");
@@ -980,7 +1063,7 @@ Value* Generator::generateGlobalArrayInitializer(
     elements.reserve(static_cast<size_t>(type.m_arrayLength));
     for (int32_t i = 0; i < type.m_arrayLength; ++i) {
         elements.push_back(generateGlobalArrayInitializer(
-            *type.m_elementType, leafExprs, nextLeafIndex, semanticInfo));
+            *type.m_elementType, scalarExprs, nextScalarIndex, semanticInfo));
     }
 
     auto* arrayType = lowerSemanticType(type, false);
@@ -998,13 +1081,16 @@ Value* Generator::generateGlobalArrayInitializer(
 
 void Generator::generateLocalArrayInitializer(Value* address,
     const frontend::SemanticType& type,
-    const std::vector<frontend::Handle<frontend::Exp>>& leafExprs,
-    size_t& nextLeafIndex, FunctionGenerationState& state) const
+    const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+    size_t& nextScalarIndex, FunctionGenerationState& state) const
 {
     if (!type.isArray()) {
         Value* initValue = IntegerValue::get(0);
-        if (nextLeafIndex < leafExprs.size()) {
-            initValue = generateExp(leafExprs[nextLeafIndex++], state);
+        if (nextScalarIndex < scalarExprs.size()) {
+            const auto exp_nn = scalarExprs[nextScalarIndex++];
+            if (exp_nn) {
+                initValue = generateExp(exp_nn, state);
+            }
         }
         state.m_currentBasicBlock_nn->pushInst(
             StoreValue::get(initValue, address));
@@ -1020,7 +1106,8 @@ void Generator::generateLocalArrayInitializer(Value* address,
             address, IntegerValue::get(i), makeTempName(state.m_nextTempId));
         state.m_currentBasicBlock_nn->pushInst(elementAddress);
         generateLocalArrayInitializer(
-            elementAddress, *type.m_elementType, leafExprs, nextLeafIndex, state);
+            elementAddress, *type.m_elementType, scalarExprs, nextScalarIndex,
+            state);
     }
 }
 
