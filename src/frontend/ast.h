@@ -15,7 +15,7 @@
 namespace yesod::frontend {
 
 /** 
- *  Helper class for std::visitor
+ *  Helper class for std::visit
  *  Example usage (WTF?):
  *  match(..., with {
  *      [](int i){ std::print("int = {}\n", i); },

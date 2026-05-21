@@ -12,6 +12,8 @@ namespace yesod::koopa {
 
 namespace {
 
+    using yesod::frontend::with;
+
     size_t countScalarSlots(const frontend::SemanticType& type)
     {
         if (!type.isArray()) {
@@ -63,24 +65,22 @@ namespace {
         for (int32_t i = 0;
              i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
             const auto& child = values[nextValueIndex](ast);
-            std::visit(
-                [&](const auto& childAlt) {
-                    using ChildAltType = std::decay_t<decltype(childAlt)>;
-                    if constexpr (std::is_same_v<ChildAltType,
-                                      frontend::Handle<frontend::Exp>>) {
+            match(child.m_kind,
+                with {
+                    [&](frontend::Handle<frontend::Exp>) {
                         fillObjectFromSequence(ast, values, nextValueIndex,
                             *type.m_elementType,
                             baseOffset + static_cast<size_t>(i) * elementSlots,
                             scalarExprs);
-                    } else {
+                    },
+                    [&](const typename InitNode::List&) {
                         fillObjectFromNode(ast, values[nextValueIndex],
                             *type.m_elementType,
                             baseOffset + static_cast<size_t>(i) * elementSlots,
                             scalarExprs);
                         ++nextValueIndex;
-                    }
-                },
-                child.m_kind);
+                    },
+                });
         }
     }
 
@@ -91,22 +91,21 @@ namespace {
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
-        std::visit(
-            [&](const auto& initAlt) {
-                using AltType = std::decay_t<decltype(initAlt)>;
-                if constexpr (std::is_same_v<AltType,
-                                  frontend::Handle<frontend::Exp>>) {
+        match(init.m_kind,
+            with {
+                [&](frontend::Handle<frontend::Exp>) {
                     size_t nextValueIndex = 0;
-                    const std::vector<frontend::Handle<InitNode>> singleton { init_nn };
+                    const std::vector<frontend::Handle<InitNode>> singleton {
+                        init_nn };
                     fillObjectFromSequence(ast, singleton, nextValueIndex, type,
                         baseOffset, scalarExprs);
-                } else {
+                },
+                [&](const typename InitNode::List& initAlt) {
                     size_t nextValueIndex = 0;
                     fillObjectFromSequence(ast, initAlt.m_values,
                         nextValueIndex, type, baseOffset, scalarExprs);
-                }
-            },
-            init.m_kind);
+                },
+            });
     }
 
     template <typename InitNode>
@@ -115,22 +114,20 @@ namespace {
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
-        std::visit(
-            [&](const auto& initAlt) {
-                using AltType = std::decay_t<decltype(initAlt)>;
-                if constexpr (std::is_same_v<AltType,
-                                  frontend::Handle<frontend::Exp>>) {
+        match(init.m_kind,
+            with {
+                [&](frontend::Handle<frontend::Exp> initAlt) {
                     if (baseOffset < scalarExprs.size()) {
                         scalarExprs[baseOffset] = initAlt;
                     }
-                } else {
+                },
+                [&](const typename InitNode::List& initAlt) {
                     if (!initAlt.m_values.empty()) {
-                        assignScalarInitializerFromNode(
-                            ast, initAlt.m_values.front(), baseOffset, scalarExprs);
+                        assignScalarInitializerFromNode(ast,
+                            initAlt.m_values.front(), baseOffset, scalarExprs);
                     }
-                }
-            },
-            init.m_kind);
+                },
+            });
     }
 
     template <typename InitNode>
@@ -249,10 +246,9 @@ Program* Generator::generate(const frontend::AST& ast,
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        std::visit(
-            [&](const auto& topLevelAlt) {
-                using AltType = std::decay_t<decltype(topLevelAlt)>;
-                if constexpr (std::is_same_v<AltType, frontend::Handle<frontend::FuncDef>>) {
+        match(topLevelItem.m_topLevelItem,
+            with {
+                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
                     const auto& funcDef = ast[topLevelAlt];
                     const auto* functionSymbol
                         = semanticInfo.findSymbol(funcDef.m_identifier_nn);
@@ -261,9 +257,9 @@ Program* Generator::generate(const frontend::AST& ast,
                             "function declaration missing semantic symbol during lowering");
                     }
                     definedFunctionSymbolIds.insert(functionSymbol->m_id);
-                }
-            },
-            topLevelItem.m_topLevelItem);
+                },
+                [&](const auto&) { },
+            });
     }
 
     for (const auto& [identifier_nn, symbol] : semanticInfo.m_symbolByIdentifier) {
@@ -291,33 +287,29 @@ Program* Generator::generate(const frontend::AST& ast,
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        std::visit(
-            [&](const auto& topLevelAlt) {
-                using AltType = std::decay_t<decltype(topLevelAlt)>;
-                if constexpr (std::is_same_v<AltType,
-                                  frontend::Handle<frontend::DeclNode>>) {
+        match(topLevelItem.m_topLevelItem,
+            with {
+                [&](frontend::Handle<frontend::DeclNode> topLevelAlt) {
                     generateGlobalDecl(topLevelAlt, *program, ast,
                         semanticInfo, globalStorageBySymbolId);
-                } else {
-                    auto* function
-                        = createFunctionDecl(ast, topLevelAlt, semanticInfo);
+                },
+                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+                    auto* function = createFunctionDecl(ast, topLevelAlt,
+                        semanticInfo);
                     const auto& symbol = requireSymbolForIdentifier(
                         ast[topLevelAlt].m_identifier_nn, semanticInfo,
                         "function definition is missing a symbol binding");
                     functionBySymbolId[symbol.m_id] = function;
                     program->pushFunc(function);
-                }
-            },
-            topLevelItem.m_topLevelItem);
+                },
+            });
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        std::visit(
-            [&](const auto& topLevelAlt) {
-                using AltType = std::decay_t<decltype(topLevelAlt)>;
-                if constexpr (std::is_same_v<AltType,
-                                  frontend::Handle<frontend::FuncDef>>) {
+        match(topLevelItem.m_topLevelItem,
+            with {
+                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
                     const auto& symbol = requireSymbolForIdentifier(
                         ast[topLevelAlt].m_identifier_nn, semanticInfo,
                         "function definition is missing a symbol binding");
@@ -329,9 +321,9 @@ Program* Generator::generate(const frontend::AST& ast,
                     (void)generateFuncDef(ast, topLevelAlt, semanticInfo,
                         globalStorageBySymbolId, functionBySymbolId,
                         functionIt->second);
-                }
-            },
-            topLevelItem.m_topLevelItem);
+                },
+                [&](const auto&) { },
+            });
     }
 
     return program;
@@ -431,11 +423,9 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
     std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
 {
     const auto& parsedDeclNode = ast[declNode];
-    std::visit(
-        [&](const auto& declAlt) {
-            using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              frontend::Handle<frontend::ConstDecl>>) {
+    match(parsedDeclNode.m_decl,
+        with {
+            [&](frontend::Handle<frontend::ConstDecl> declAlt) {
                 const auto& constDecl = ast[declAlt];
                 for (const auto constDef_nn : constDecl.m_constDefs) {
                     const auto& constDef = ast[constDef_nn];
@@ -456,7 +446,8 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                     program.pushVal(globalAlloc);
                     globalStorageBySymbolId[symbol.m_id] = globalAlloc;
                 }
-            } else {
+            },
+            [&](frontend::Handle<frontend::VarDecl> declAlt) {
                 const auto& varDecl = ast[declAlt];
                 for (const auto varDef_nn : varDecl.m_varDefs) {
                     const auto& varDef = ast[varDef_nn];
@@ -474,11 +465,9 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                             semanticInfo);
                     } else if (varDef.m_initVal_nn) {
                         const auto& initVal = ast[varDef.m_initVal_nn];
-                        std::visit(
-                            [&](const auto& initAlt) {
-                                using InitAltType = std::decay_t<decltype(initAlt)>;
-                                if constexpr (std::is_same_v<InitAltType,
-                                                  frontend::Handle<frontend::Exp>>) {
+                        match(initVal.m_kind,
+                            with {
+                                [&](frontend::Handle<frontend::Exp> initAlt) {
                                     const auto constantValue
                                         = semanticInfo.findConstantValue(initAlt);
                                     if (!constantValue.has_value()) {
@@ -486,18 +475,17 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                                             "global variable initializer must be constant");
                                     }
                                     initValue = IntegerValue::get(*constantValue);
-                                }
-                            },
-                            initVal.m_kind);
+                                },
+                                [&](const auto&) { },
+                            });
                     }
                     auto* globalAlloc = GlobalAllocValue::get(
                         initValue, makeGlobalName(symbol.m_name));
                     program.pushVal(globalAlloc);
                     globalStorageBySymbolId[symbol.m_id] = globalAlloc;
                 }
-            }
-        },
-        parsedDeclNode.m_decl);
+            },
+        });
 }
 
 void Generator::generateBlock(frontend::Handle<frontend::Block> block,
@@ -521,28 +509,24 @@ void Generator::generateBlockItem(
     }
 
     const auto& parsedBlockItem = node(blockItem, state, "block item is null");
-    std::visit(
-        [&](const auto& blockItemAlt) {
-            using AltType = std::decay_t<decltype(blockItemAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              frontend::Handle<frontend::DeclNode>>) {
+    match(parsedBlockItem.m_blockItem,
+        with {
+            [&](frontend::Handle<frontend::DeclNode> blockItemAlt) {
                 generateDecl(blockItemAlt, state);
-            } else {
+            },
+            [&](frontend::Handle<frontend::StmtNode> blockItemAlt) {
                 generateStmt(blockItemAlt, state);
-            }
-        },
-        parsedBlockItem.m_blockItem);
+            },
+        });
 }
 
 void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedDeclNode = node(declNode, state, "declaration is null");
-    std::visit(
-        [&](const auto& declAlt) {
-            using AltType = std::decay_t<decltype(declAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              frontend::Handle<frontend::ConstDecl>>) {
+    match(parsedDeclNode.m_decl,
+        with {
+            [&](frontend::Handle<frontend::ConstDecl> declAlt) {
                 const auto& constDecl
                     = node(declAlt, state, "const declaration payload is null");
                 for (const auto constDef : constDecl.m_constDefs) {
@@ -552,7 +536,8 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         parsedConstDef.m_identifier_nn,
                         *state.m_semanticInfo_nn,
                         "const declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(lowerSemanticType(symbol.m_type, false),
+                    auto* alloc = AllocValue::get(
+                        lowerSemanticType(symbol.m_type, false),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
                     state.m_storageBySymbolId[symbol.m_id] = alloc;
@@ -567,20 +552,19 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         generateLocalArrayInitializer(alloc, symbol.m_type,
                             scalarExprs, nextScalarIndex, state);
                     } else {
-                        std::visit(
-                            [&](const auto& initAlt) {
-                                using InitAltType = std::decay_t<decltype(initAlt)>;
-                                if constexpr (std::is_same_v<InitAltType,
-                                                  frontend::Handle<frontend::Exp>>) {
+                        match(constInitVal.m_kind,
+                            with {
+                                [&](frontend::Handle<frontend::Exp> initAlt) {
                                     auto* initValue = generateExp(initAlt, state);
                                     state.m_currentBasicBlock_nn->pushInst(
                                         StoreValue::get(initValue, alloc));
-                                }
-                            },
-                            constInitVal.m_kind);
+                                },
+                                [&](const auto&) { },
+                            });
                     }
                 }
-            } else {
+            },
+            [&](frontend::Handle<frontend::VarDecl> declAlt) {
                 const auto& varDecl
                     = node(declAlt, state, "var declaration payload is null");
                 for (const auto varDef : varDecl.m_varDefs) {
@@ -590,7 +574,8 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         resolvedVarDef.m_identifier_nn,
                         *state.m_semanticInfo_nn,
                         "var declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(lowerSemanticType(symbol.m_type, false),
+                    auto* alloc = AllocValue::get(
+                        lowerSemanticType(symbol.m_type, false),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
                     state.m_currentBasicBlock_nn->pushInst(alloc);
                     state.m_storageBySymbolId[symbol.m_id] = alloc;
@@ -605,59 +590,53 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                         } else {
                             const auto& initVal = node(resolvedVarDef.m_initVal_nn,
                                 state, "var declarator init payload is null");
-                            std::visit(
-                                [&](const auto& initAlt) {
-                                    using InitAltType = std::decay_t<decltype(initAlt)>;
-                                    if constexpr (std::is_same_v<InitAltType,
-                                                      frontend::Handle<frontend::Exp>>) {
+                            match(initVal.m_kind,
+                                with {
+                                    [&](frontend::Handle<frontend::Exp> initAlt) {
                                         auto* initValue = generateExp(initAlt, state);
                                         state.m_currentBasicBlock_nn->pushInst(
                                             StoreValue::get(initValue, alloc));
-                                    }
-                                },
-                                initVal.m_kind);
+                                    },
+                                    [&](const auto&) { },
+                                });
                         }
                     }
                 }
-            }
-        },
-        parsedDeclNode.m_decl);
+            },
+        });
 }
 
 void Generator::generateStmt(frontend::Handle<frontend::StmtNode> stmtNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedStmtNode = node(stmtNode, state, "statement is null");
-    std::visit(
-        [&](const auto& stmtAlt) {
-            using AltType = std::decay_t<decltype(stmtAlt)>;
-            if constexpr (std::is_same_v<AltType,
-                              frontend::Handle<frontend::IfStmt>>) {
+    match(parsedStmtNode.m_stmt,
+        with {
+            [&](frontend::Handle<frontend::IfStmt> stmtAlt) {
                 generateIfStmt(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<frontend::WhileStmt>>) {
+            },
+            [&](frontend::Handle<frontend::WhileStmt> stmtAlt) {
                 generateWhileStmt(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<frontend::BreakStmt>>) {
+            },
+            [&](frontend::Handle<frontend::BreakStmt> stmtAlt) {
                 generateBreakStmt(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<
-                                         frontend::ContinueStmt>>) {
+            },
+            [&](frontend::Handle<frontend::ContinueStmt> stmtAlt) {
                 generateContinueStmt(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<frontend::AssignStmt>>) {
+            },
+            [&](frontend::Handle<frontend::AssignStmt> stmtAlt) {
                 generateAssignStmt(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<frontend::Block>>) {
+            },
+            [&](frontend::Handle<frontend::Block> stmtAlt) {
                 generateBlock(stmtAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Handle<frontend::ExpStmt>>) {
-                generateExpStmt(stmtAlt, state);
-            } else {
+            },
+            [&](frontend::Handle<frontend::ReturnStmt> stmtAlt) {
                 (void)generateReturnStmt(stmtAlt, state);
-            }
-        },
-        parsedStmtNode.m_stmt);
+            },
+            [&](frontend::Handle<frontend::ExpStmt> stmtAlt) {
+                generateExpStmt(stmtAlt, state);
+            },
+        });
 }
 
 void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
@@ -770,20 +749,19 @@ void Generator::generateAssignStmt(
         = node(assignStmt, state, "assignment is null");
     const auto& lValExp = node(parsedAssignStmt.m_lVal_nn, state,
         "assignment lvalue expression is null");
-    std::visit(
-        [&](const auto& expAlt) {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType, frontend::LVal>) {
+    match(lValExp.m_kind,
+        with {
+            [&](frontend::LVal expAlt) {
                 auto* address = generateLValueAddress(expAlt, state);
                 auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
                 state.m_currentBasicBlock_nn->pushInst(
                     StoreValue::get(value, address));
-            } else {
+            },
+            [&](const auto&) {
                 throw std::runtime_error(
                     "assignment lhs is not an lvalue expression");
-            }
-        },
-        lValExp.m_kind);
+            },
+        });
 }
 
 void Generator::generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
@@ -818,20 +796,19 @@ Value* Generator::generateExp(
         return IntegerValue::get(*constantValue);
     }
     const auto& parsedExp = node(exp, state, "expression is missing");
-    return std::visit(
-        [&](const auto& expAlt) -> Value* {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType, frontend::Exp::Binary>) {
+    return match(parsedExp.m_kind,
+        with {
+            [&](frontend::Exp::Binary expAlt) -> Value* {
                 if (expAlt.m_op == frontend::BinaryOpKeyword::orOr
                     || expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
                     return generateBooleanAsInt(exp, state);
                 }
                 return generateBinaryExpValue(expAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Exp::Unary>) {
+            },
+            [&](frontend::Exp::Unary expAlt) -> Value* {
                 return generateUnaryExpValue(expAlt, state);
-            } else if constexpr (std::is_same_v<AltType,
-                                     frontend::Exp::Call>) {
+            },
+            [&](frontend::Exp::Call expAlt) -> Value* {
                 const auto& symbol = requireSymbolForIdentifier(
                     expAlt.m_func_nn, *state.m_semanticInfo_nn,
                     "call target is missing a symbol binding");
@@ -855,7 +832,8 @@ Value* Generator::generateExp(
                     functionIt->second, std::move(args), callName);
                 state.m_currentBasicBlock_nn->pushInst(callValue);
                 return callValue;
-            } else if constexpr (std::is_same_v<AltType, frontend::LVal>) {
+            },
+            [&](frontend::LVal expAlt) -> Value* {
                 auto* address = generateLValueAddress(expAlt, state);
                 const auto expType = state.m_semanticInfo_nn->findExpType(exp);
                 if (expType.has_value() && expType->isArray()) {
@@ -874,11 +852,11 @@ Value* Generator::generateExp(
                     address, makeTempName(state.m_nextTempId));
                 state.m_currentBasicBlock_nn->pushInst(loadValue);
                 return loadValue;
-            } else {
+            },
+            [&](frontend::Number expAlt) -> Value* {
                 return generateNumber(expAlt);
-            }
-        },
-        parsedExp.m_kind);
+            },
+        });
 }
 
 Value* Generator::generateBinaryExpValue(const frontend::Exp::Binary& binaryExp,
@@ -989,13 +967,11 @@ void Generator::generateBooleanBranch(frontend::Handle<frontend::Exp> exp,
     }
 
     const auto& parsedExp = node(exp, state, "expression is missing");
-    std::visit(
-        [&](const auto& expAlt) {
-            using AltType = std::decay_t<decltype(expAlt)>;
-            if constexpr (std::is_same_v<AltType, frontend::Exp::Binary>) {
+    match(parsedExp.m_kind,
+        with {
+            [&](frontend::Exp::Binary expAlt) {
                 if (expAlt.m_op == frontend::BinaryOpKeyword::orOr) {
-                    generateLogicalOrBranch(
-                        expAlt, trueBlock, falseBlock, state);
+                    generateLogicalOrBranch(expAlt, trueBlock, falseBlock, state);
                     return;
                 }
                 if (expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
@@ -1007,14 +983,13 @@ void Generator::generateBooleanBranch(frontend::Handle<frontend::Exp> exp,
                 auto* value = generateBinaryExpValue(expAlt, state);
                 state.m_currentBasicBlock_nn->pushInst(
                     BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
-                return;
-            } else {
+            },
+            [&](const auto&) {
                 auto* value = generateExp(exp, state);
                 state.m_currentBasicBlock_nn->pushInst(
                     BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
-            }
-        },
-        parsedExp.m_kind);
+            },
+        });
 }
 
 void Generator::generateLogicalOrBranch(const frontend::Exp::Binary& binaryExp,
