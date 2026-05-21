@@ -2,12 +2,42 @@
 
 #include <cstdint>
 
+#include <cctype>
 #include <map>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 
 namespace yesod::backend {
+
+bool isAllDigits(const std::string& text)
+{
+    for (auto c : text) {
+        if (!std::isdigit(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string normalizeIdentifierStem(std::string stem)
+{
+    if (!stem.empty() && std::isdigit(stem.front()) && !isAllDigits(stem)) {
+        stem.insert(stem.begin(), '_');
+    }
+    return stem;
+}
+
+std::string RiscvGenerator::genLabel(std::string hint)
+{
+    hint = normalizeIdentifierStem(std::move(hint));
+    std::string label = "_local" + hint;
+    const int duplicateCount = ++m_usedLabels[label];
+    if (duplicateCount > 1) {
+        label += "_" + std::to_string(duplicateCount);
+    }
+    return label;
+}
 namespace {
 
     enum class GlobalSection {
@@ -15,29 +45,6 @@ namespace {
         data,
         bss,
     };
-
-    bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
-
-    bool isAllDigits(const std::string& text)
-    {
-        if (text.empty()) {
-            return false;
-        }
-        for (const char ch : text) {
-            if (!isDigit(ch)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    std::string normalizeIdentifierStem(std::string stem)
-    {
-        if (!stem.empty() && isDigit(stem.front()) && !isAllDigits(stem)) {
-            stem.insert(stem.begin(), '_');
-        }
-        return stem;
-    }
 
     using yesod::koopa::AggregateValue;
     using yesod::koopa::AllocValue;
@@ -140,10 +147,10 @@ namespace {
     }
 
     class FunctionEmitter {
+        RiscvGenerator* m_parent;
         std::ostream& m_output;
         std::map<const Value*, int> m_stackSlots;
         std::map<const BasicBlock*, std::string> m_blockLabels;
-        std::map<std::string, int> m_usedLabels;
         int m_outgoingArgAreaSize = 0;
         int m_frameSize = 0;
         int m_savedRaOffset = 0;
@@ -151,10 +158,10 @@ namespace {
         const Function* m_currentFunction_nn = nullptr;
 
       public:
-        explicit FunctionEmitter(std::ostream& output)
-            : m_output(output)
+        explicit FunctionEmitter(RiscvGenerator* parent, std::ostream& output)
+            : m_parent(parent)
+            , m_output(output)
         {
-            m_usedLabels.clear();
         }
 
         void emitFunction(const Function& function)
@@ -201,16 +208,12 @@ namespace {
         void assignBlockLabels(const Function& function)
         {
             m_blockLabels.clear();
-            m_usedLabels.clear();
             const std::string functionName = symbolName(function.getName());
             for (const BasicBlock* basicBlock : function.bbs()) {
                 std::string label
                     = functionName + "_" + sanitizeBlockName(*basicBlock);
-                const int duplicateCount = ++m_usedLabels[label];
-                if (duplicateCount > 1) {
-                    label += "_" + std::to_string(duplicateCount);
-                }
-                m_blockLabels.emplace(basicBlock, std::move(label));
+                m_blockLabels.emplace(basicBlock,
+                    m_parent->genLabel(std::move(label)));
             }
         }
 
@@ -624,10 +627,8 @@ namespace {
             }
 
             loadValueToRegister(*branchValue.getCondition(), "t0");
-            std::string label = "_local" + std::to_string(m_usedLabels.size() + 1);
-            while (m_usedLabels.count(label)) label += "_";
-            m_output << "  bnez t0, " << label
-                     << "\n";
+            std::string label = m_parent->genLabel("_local");
+            m_output << "  bnez t0, " << label << "\n";
             m_output << "  j " << blockLabel(*branchValue.getFalseBB()) << "\n";
             m_output << label << ":\n";
             m_output << "  j " << blockLabel(*branchValue.getTrueBB()) << "\n";
@@ -709,7 +710,7 @@ void RiscvGenerator::generate(const Program& program, std::ostream& output)
     }
 
     output << "  .text\n";
-    FunctionEmitter functionEmitter(output);
+    FunctionEmitter functionEmitter(this, output);
     for (const auto* function : program.funcs()) {
         if (function->getNumBBs() == 0) {
             continue;
