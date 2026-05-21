@@ -39,7 +39,9 @@ namespace {
         return stem;
     }
 
+    using yesod::koopa::AggregateValue;
     using yesod::koopa::AllocValue;
+    using yesod::koopa::ArrayType;
     using yesod::koopa::BasicBlock;
     using yesod::koopa::BinaryValue;
     using yesod::koopa::BranchValue;
@@ -47,21 +49,19 @@ namespace {
     using yesod::koopa::FuncArgRefValue;
     using yesod::koopa::Function;
     using yesod::koopa::FunctionType;
+    using yesod::koopa::GetElemPtrValue;
+    using yesod::koopa::GetPtrValue;
     using yesod::koopa::GlobalAllocValue;
     using yesod::koopa::IntegerValue;
     using yesod::koopa::JumpValue;
     using yesod::koopa::LoadValue;
-    using yesod::koopa::ArrayType;
     using yesod::koopa::PointerType;
     using yesod::koopa::Program;
     using yesod::koopa::ReturnValue;
     using yesod::koopa::StoreValue;
-    using yesod::koopa::GetPtrValue;
-    using yesod::koopa::GetElemPtrValue;
-    using yesod::koopa::AggregateValue;
-    using yesod::koopa::ZeroInitValue;
     using yesod::koopa::Type;
     using yesod::koopa::Value;
+    using yesod::koopa::ZeroInitValue;
 
     std::string symbolName(const std::string& koopaName)
     {
@@ -119,7 +119,8 @@ namespace {
             return;
         }
         if (initVal.isAggregateValue()) {
-            const auto& aggregate = dynamic_cast<const AggregateValue&>(initVal);
+            const auto& aggregate
+                = dynamic_cast<const AggregateValue&>(initVal);
             for (size_t i = 0; i < aggregate.getNumElements(); ++i) {
                 emitGlobalInitializer(output, *aggregate.getElement(i));
             }
@@ -142,6 +143,7 @@ namespace {
         std::ostream& m_output;
         std::map<const Value*, int> m_stackSlots;
         std::map<const BasicBlock*, std::string> m_blockLabels;
+        std::map<std::string, int> m_usedLabels;
         int m_outgoingArgAreaSize = 0;
         int m_frameSize = 0;
         int m_savedRaOffset = 0;
@@ -152,6 +154,7 @@ namespace {
         explicit FunctionEmitter(std::ostream& output)
             : m_output(output)
         {
+            m_usedLabels.clear();
         }
 
         void emitFunction(const Function& function)
@@ -198,13 +201,12 @@ namespace {
         void assignBlockLabels(const Function& function)
         {
             m_blockLabels.clear();
-
-            std::map<std::string, int> usedLabels;
+            m_usedLabels.clear();
             const std::string functionName = symbolName(function.getName());
             for (const BasicBlock* basicBlock : function.bbs()) {
                 std::string label
                     = functionName + "_" + sanitizeBlockName(*basicBlock);
-                const int duplicateCount = ++usedLabels[label];
+                const int duplicateCount = ++m_usedLabels[label];
                 if (duplicateCount > 1) {
                     label += "_" + std::to_string(duplicateCount);
                 }
@@ -275,8 +277,9 @@ namespace {
         static int valueStorageSize(const Value& value)
         {
             if (value.isAllocValue()) {
-                return typeSize(*dynamic_cast<const PointerType*>(value.getVType())
-                                     ->getPointeeType());
+                return typeSize(
+                    *dynamic_cast<const PointerType*>(value.getVType())
+                        ->getPointeeType());
             }
             return typeSize(*value.getVType());
         }
@@ -313,7 +316,8 @@ namespace {
             m_output << "  add sp, sp, t3\n";
         }
 
-        void emitAddressOfStackSlot(int offset, const std::string& targetRegister)
+        void emitAddressOfStackSlot(
+            int offset, const std::string& targetRegister)
         {
             if (fitsImm12(offset)) {
                 m_output << "  addi " << targetRegister << ", sp, " << offset
@@ -337,8 +341,7 @@ namespace {
             m_output << "  lw " << targetRegister << ", 0(t3)\n";
         }
 
-        void emitStoreToStackSlot(
-            const std::string& sourceRegister, int offset)
+        void emitStoreToStackSlot(const std::string& sourceRegister, int offset)
         {
             if (fitsImm12(offset)) {
                 m_output << "  sw " << sourceRegister << ", " << offset
@@ -502,7 +505,8 @@ namespace {
         void emitLoad(const LoadValue& loadValue)
         {
             if (loadValue.getSource()->isAllocValue()) {
-                emitLoadFromStackSlot(stackOffset(*loadValue.getSource()), "t1");
+                emitLoadFromStackSlot(
+                    stackOffset(*loadValue.getSource()), "t1");
                 emitStoreToStackSlot("t1", stackOffset(loadValue));
                 return;
             }
@@ -524,9 +528,10 @@ namespace {
 
         void emitGetPtr(const GetPtrValue& getPtrValue)
         {
-            const auto* pointerType
-                = dynamic_cast<const PointerType*>(getPtrValue.getSource()->getVType());
-            emitIndexedPointer(*getPtrValue.getSource(), *getPtrValue.getIndex(),
+            const auto* pointerType = dynamic_cast<const PointerType*>(
+                getPtrValue.getSource()->getVType());
+            emitIndexedPointer(*getPtrValue.getSource(),
+                *getPtrValue.getIndex(),
                 typeSize(*pointerType->getPointeeType()), getPtrValue);
         }
 
@@ -619,9 +624,13 @@ namespace {
             }
 
             loadValueToRegister(*branchValue.getCondition(), "t0");
-            m_output << "  bnez t0, " << blockLabel(*branchValue.getTrueBB())
+            std::string label = "_local" + std::to_string(m_usedLabels.size() + 1);
+            while (m_usedLabels.count(label)) label += "_";
+            m_output << "  bnez t0, " << label
                      << "\n";
             m_output << "  j " << blockLabel(*branchValue.getFalseBB()) << "\n";
+            m_output << label << ":\n";
+            m_output << "  j " << blockLabel(*branchValue.getTrueBB()) << "\n";
         }
 
         void emitJump(const JumpValue& jumpValue)
@@ -677,22 +686,22 @@ void RiscvGenerator::generate(const Program& program, std::ostream& output)
     }
 
     if (program.getNumVals() != 0) {
-        auto emitGlobalSection = [&](GlobalSection section,
-                                     const char* header) {
-            bool emittedHeader = false;
-            for (const auto* value : program.vals()) {
-                const auto& globalAlloc
-                    = dynamic_cast<const GlobalAllocValue&>(*value);
-                if (classifyGlobal(globalAlloc) != section) {
-                    continue;
-                }
-                if (!emittedHeader) {
-                    output << header;
-                    emittedHeader = true;
-                }
-                emitGlobal(output, globalAlloc);
-            }
-        };
+        auto emitGlobalSection
+            = [&](GlobalSection section, const char* header) {
+                  bool emittedHeader = false;
+                  for (const auto* value : program.vals()) {
+                      const auto& globalAlloc
+                          = dynamic_cast<const GlobalAllocValue&>(*value);
+                      if (classifyGlobal(globalAlloc) != section) {
+                          continue;
+                      }
+                      if (!emittedHeader) {
+                          output << header;
+                          emittedHeader = true;
+                      }
+                      emitGlobal(output, globalAlloc);
+                  }
+              };
 
         emitGlobalSection(GlobalSection::rodata, "  .section .rodata\n");
         emitGlobalSection(GlobalSection::data, "  .data\n");
