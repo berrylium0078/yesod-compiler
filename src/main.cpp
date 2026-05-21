@@ -3,6 +3,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <algorithm>
+#include <vector>
 
 #include "backend/riscv.h"
 #include "frontend/parser.h"
@@ -25,19 +27,67 @@ std::string readTextFile(const std::string& path)
     return buffer.str();
 }
 
-void printDiagnostics(const yesod::frontend::ParseOutput& parseOutput)
+struct DiagInfo {
+    std::size_t m_offset;
+    std::string m_message;
+    std::string m_kind; // "parse" or "semantic"
+};
+
+static std::vector<std::size_t> buildLineStarts(const std::string& src)
 {
-    for (const auto& diagnostic : parseOutput.m_diagnostics) {
-        std::cerr << "parse error at offset " << diagnostic.m_offset << ": "
-                  << diagnostic.m_message << std::endl;
+    std::vector<std::size_t> starts;
+    starts.reserve(128);
+    starts.emplace_back(0);
+    for (std::size_t i = 0; i < src.size(); ++i) {
+        if (src[i] == '\n') {
+            starts.emplace_back(i + 1);
+        }
     }
+    return starts;
 }
 
-void printDiagnostics(const yesod::frontend::SemanticOutput& semanticOutput)
+static void printDiagnosticsAggregate(const std::string& inputPath,
+                                      const std::string& source,
+                                      std::vector<DiagInfo>& diags)
 {
-    for (const auto& diagnostic : semanticOutput.m_diagnostics) {
-        std::cerr << "semantic error at offset " << diagnostic.m_offset << ": "
-                  << diagnostic.m_message << std::endl;
+    if (diags.empty()) return;
+
+    std::sort(diags.begin(), diags.end(),
+              [](const DiagInfo& a, const DiagInfo& b) {
+                  return a.m_offset < b.m_offset;
+              });
+
+    const auto lineStarts = buildLineStarts(source);
+
+    for (const auto& d : diags) {
+        // map offset -> line/col
+        const std::size_t offset = d.m_offset;
+        auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), offset);
+        std::size_t line = 0;
+        if (it == lineStarts.begin()) {
+            line = 0;
+        } else {
+            line = static_cast<std::size_t>(std::distance(lineStarts.begin(), it) - 1);
+        }
+        const std::size_t col = offset - lineStarts[line] + 1;
+
+        std::cerr << d.m_kind << " error at " << inputPath << ":"
+                  << (line + 1) << ":" << col << " (offset " << offset << "): "
+                  << d.m_message << std::endl;
+
+        // print the source line and a caret
+        const std::size_t lineBegin = lineStarts[line];
+        const std::size_t lineEnd = (line + 1 < lineStarts.size()) ? (lineStarts[line + 1] - 1)
+                                                                       : source.size();
+        const std::string lineText = source.substr(lineBegin, lineEnd - lineBegin);
+        std::cerr << lineText << std::endl;
+
+        std::string caret;
+        // naive caret alignment; tabs are counted as single chars here
+        const std::size_t caretPos = (col > 0) ? (col - 1) : 0;
+        caret.assign(caretPos, ' ');
+        caret += '^';
+        std::cerr << caret << std::endl;
     }
 }
 
@@ -91,7 +141,12 @@ int main(int argc, const char* argv[])
         yesod::frontend::Parser parser(source);
         auto parseOutput = parser.parse();
         if (!parseOutput.success()) {
-            printDiagnostics(parseOutput);
+            std::vector<DiagInfo> diags;
+            diags.reserve(parseOutput.m_diagnostics.size());
+            for (const auto& d : parseOutput.m_diagnostics) {
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("parse")});
+            }
+            printDiagnosticsAggregate(inputPath, source, diags);
             return 1;
         }
 
@@ -99,7 +154,16 @@ int main(int argc, const char* argv[])
         auto semanticOutput = semanticAnalyzer.analyze(
             std::move(parseOutput.m_ast), parseOutput.m_root);
         if (!semanticOutput.success()) {
-            printDiagnostics(semanticOutput);
+            std::vector<DiagInfo> diags;
+            // include any parse diagnostics (if present) and semantic diagnostics
+            diags.reserve(parseOutput.m_diagnostics.size() + semanticOutput.m_diagnostics.size());
+            for (const auto& d : parseOutput.m_diagnostics) {
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("parse")});
+            }
+            for (const auto& d : semanticOutput.m_diagnostics) {
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("semantic")});
+            }
+            printDiagnosticsAggregate(inputPath, source, diags);
             return 1;
         }
 
