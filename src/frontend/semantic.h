@@ -276,17 +276,7 @@ struct SemanticOutput {
         return true;
     }
 
-    [[nodiscard]] AST::Ref<CompUnit> root() { return m_ast.ref(m_root); }
-
-    [[nodiscard]] AST::ConstRef<CompUnit> root() const
-    {
-        return m_ast.ref(m_root);
-    }
-
-    [[nodiscard]] const CompUnit* operator->() const
-    {
-        return m_root ? &m_ast.get(m_root) : nullptr;
-    }
+    Handle<CompUnit> root() { return m_root; }
 };
 
 class SemanticAnalyzer {
@@ -391,7 +381,7 @@ const T& SemanticAnalyzer::node(Handle<T> handle_nn, const char* message) const
     if (!handle_nn) {
         throw std::runtime_error(message);
     }
-    return m_ast.get(handle_nn);
+    return m_ast[handle_nn];
 }
 
 inline SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::normalizeToArithmetic(

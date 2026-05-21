@@ -14,6 +14,23 @@
 
 namespace yesod::frontend {
 
+/** 
+ *  Helper class for std::visitor
+ *  Example usage (WTF?):
+ *  match(..., with {
+ *      [](int i){ std::print("int = {}\n", i); },
+ *      [](std::string_view s){ std::println("string = “{}”", s); },
+ *      [](const Base&){ std::println("base"); }
+ *  });
+*/
+template<class... Ts>
+struct with : Ts... { using Ts::operator()...; };
+template <class T, class Visitor>
+decltype(auto) match(T&& variant, Visitor&& visitor)
+{
+    return std::visit(std::forward<Visitor>(visitor), std::forward<T>(variant));
+}
+
 struct SourcePos {
     constexpr SourcePos() = default;
 
@@ -80,6 +97,7 @@ struct Block;
 struct TopLevelItemNode;
 
 struct Identifier {
+    static constexpr std::string_view name = "identifier";
     Identifier() = default;
 
     Identifier(int32_t startOffset, std::string name)
@@ -99,6 +117,7 @@ struct Identifier {
 };
 
 struct Number {
+    static constexpr std::string_view name = "number";
     Number() = default;
 
     explicit Number(int32_t value)
@@ -115,6 +134,7 @@ struct Number {
 };
 
 struct LVal {
+    static constexpr std::string_view name = "lvalue";
     LVal() = default;
 
     explicit LVal(Handle<Identifier> identifier_nn,
@@ -136,6 +156,7 @@ struct LVal {
 };
 
 struct Exp {
+    static constexpr std::string_view name = "expression";
     struct Binary {
         Handle<Exp> m_lhs_nn;
         Handle<Exp> m_rhs_nn;
@@ -176,6 +197,7 @@ struct Exp {
 };
 
 struct ConstInitVal {
+    static constexpr std::string_view name = "constant init value";
     struct List {
         std::vector<Handle<ConstInitVal>> m_values;
     };
@@ -213,6 +235,7 @@ struct ConstInitVal {
 };
 
 struct InitVal {
+    static constexpr std::string_view name = "init value";
     struct List {
         std::vector<Handle<InitVal>> m_values;
     };
@@ -250,6 +273,7 @@ struct InitVal {
 };
 
 struct ConstDef {
+    static constexpr std::string_view name = "constant definition";
     ConstDef() = default;
     ConstDef(int32_t startOffset, Handle<Identifier> identifier_nn,
         std::vector<Handle<Exp>> dimensions,
@@ -278,6 +302,7 @@ struct ConstDef {
 };
 
 struct VarDef {
+    static constexpr std::string_view name = "variable definition";
     VarDef() = default;
 
     VarDef(int32_t startOffset, Handle<Identifier> identifier_nn,
@@ -305,6 +330,7 @@ struct VarDef {
 };
 
 struct ConstDecl {
+    static constexpr std::string_view name = "constant declaration";
     ConstDecl() = default;
 
     ConstDecl(int32_t startOffset, BTypeKeyword bType,
@@ -329,6 +355,7 @@ struct ConstDecl {
 };
 
 struct VarDecl {
+    static constexpr std::string_view name = "variable declaration";
     VarDecl() = default;
 
     VarDecl(int32_t startOffset, BTypeKeyword bType,
@@ -355,6 +382,7 @@ struct VarDecl {
 using Decl = std::variant<Handle<ConstDecl>, Handle<VarDecl>>;
 
 struct DeclNode {
+    static constexpr std::string_view name = "declaration";
     DeclNode() = default;
 
     DeclNode(int32_t startOffset, Decl decl)
@@ -374,6 +402,7 @@ struct DeclNode {
 };
 
 struct IfStmt {
+    static constexpr std::string_view name = "if statement";
     IfStmt() = default;
 
     IfStmt(int32_t startOffset, Handle<Exp> condExp_nn,
@@ -401,6 +430,7 @@ struct IfStmt {
 };
 
 struct WhileStmt {
+    static constexpr std::string_view name = "while statement";
     WhileStmt() = default;
 
     WhileStmt(int32_t startOffset, Handle<Exp> condExp_nn,
@@ -425,6 +455,7 @@ struct WhileStmt {
 };
 
 struct BreakStmt {
+    static constexpr std::string_view name = "break statement";
     BreakStmt() = default;
 
     explicit BreakStmt(int32_t startOffset)
@@ -441,6 +472,7 @@ struct BreakStmt {
 };
 
 struct ContinueStmt {
+    static constexpr std::string_view name = "continue statement";
     ContinueStmt() = default;
 
     explicit ContinueStmt(int32_t startOffset)
@@ -457,6 +489,7 @@ struct ContinueStmt {
 };
 
 struct AssignStmt {
+    static constexpr std::string_view name = "assignment statement";
     AssignStmt() = default;
 
     AssignStmt(int32_t startOffset, Handle<Exp> lVal_nn, Handle<Exp> exp_nn)
@@ -479,6 +512,7 @@ struct AssignStmt {
 };
 
 struct ExpStmt {
+    static constexpr std::string_view name = "expression statement";
     ExpStmt() = default;
 
     ExpStmt(int32_t startOffset, Handle<Exp> exp_nn)
@@ -498,6 +532,7 @@ struct ExpStmt {
 };
 
 struct ReturnStmt {
+    static constexpr std::string_view name = "return statement";
     ReturnStmt() = default;
 
     ReturnStmt(int32_t startOffset, Handle<Exp> exp_nn)
@@ -521,6 +556,7 @@ using Stmt = std::variant<Handle<IfStmt>, Handle<WhileStmt>, Handle<BreakStmt>,
     Handle<ExpStmt>>;
 
 struct StmtNode {
+    static constexpr std::string_view name = "statement";
     StmtNode() = default;
 
     StmtNode(int32_t startOffset, Stmt stmt)
@@ -542,6 +578,7 @@ struct StmtNode {
 using BlockItem = std::variant<Handle<DeclNode>, Handle<StmtNode>>;
 
 struct BlockItemNode {
+    static constexpr std::string_view name = "block item";
     BlockItemNode() = default;
 
     BlockItemNode(int32_t startOffset, BlockItem blockItem)
@@ -561,6 +598,7 @@ struct BlockItemNode {
 };
 
 struct Block {
+    static constexpr std::string_view name = "block";
     Block() = default;
 
     Block(int32_t startOffset, std::vector<Handle<BlockItemNode>> blockItems)
@@ -580,6 +618,7 @@ struct Block {
 };
 
 struct FuncFParam {
+    static constexpr std::string_view name = "function parameter";
     FuncFParam() = default;
 
     FuncFParam(int32_t startOffset, BTypeKeyword bType,
@@ -612,6 +651,7 @@ struct FuncFParam {
 };
 
 struct FuncDef {
+    static constexpr std::string_view name = "function definition";
     FuncDef() = default;
 
     FuncDef(int32_t startOffset, FuncTypeKeyword funcType,
@@ -646,6 +686,7 @@ struct FuncDef {
 using TopLevelItem = std::variant<Handle<DeclNode>, Handle<FuncDef>>;
 
 struct TopLevelItemNode {
+    static constexpr std::string_view name = "top level item";
     TopLevelItemNode() = default;
 
     TopLevelItemNode(int32_t startOffset, TopLevelItem topLevelItem)
@@ -665,6 +706,7 @@ struct TopLevelItemNode {
 };
 
 struct CompUnit {
+    static constexpr std::string_view name = "AST root";
     CompUnit() = default;
 
     CompUnit(int32_t startOffset,
@@ -685,214 +727,16 @@ struct CompUnit {
     std::vector<Handle<TopLevelItemNode>> m_topLevelItems;
 };
 
-class AST {
+class AST: public Arena<Identifier, Exp,
+        ConstInitVal, InitVal, ConstDef, VarDef,
+        ConstDecl, VarDecl, DeclNode, FuncFParam,
+        IfStmt, WhileStmt, BreakStmt,
+        ContinueStmt, AssignStmt, ExpStmt,
+        ReturnStmt, StmtNode, BlockItemNode, Block,
+        FuncDef, TopLevelItemNode, CompUnit> {
   public:
-    class ScopedCurrent {
-      public:
-        ScopedCurrent() = default;
 
-        explicit ScopedCurrent(AST& ast_nn)
-            : m_previousAst_nn(s_currentAst_nn)
-            , m_previousConstAst_nn(s_currentConstAst_nn)
-            , m_active(true)
-        {
-            s_currentAst_nn = &ast_nn;
-            s_currentConstAst_nn = &ast_nn;
-        }
-
-        explicit ScopedCurrent(const AST& ast_nn)
-            : m_previousAst_nn(s_currentAst_nn)
-            , m_previousConstAst_nn(s_currentConstAst_nn)
-            , m_active(true)
-        {
-            s_currentAst_nn = nullptr;
-            s_currentConstAst_nn = &ast_nn;
-        }
-
-        ScopedCurrent(const ScopedCurrent&) = delete;
-        ScopedCurrent& operator=(const ScopedCurrent&) = delete;
-
-        ScopedCurrent(ScopedCurrent&& other) noexcept
-            : m_previousAst_nn(other.m_previousAst_nn)
-            , m_previousConstAst_nn(other.m_previousConstAst_nn)
-            , m_active(other.m_active)
-        {
-            other.m_active = false;
-        }
-
-        ScopedCurrent& operator=(ScopedCurrent&& other) noexcept
-        {
-            if (this == &other) {
-                return *this;
-            }
-
-            reset();
-            m_previousAst_nn = other.m_previousAst_nn;
-            m_previousConstAst_nn = other.m_previousConstAst_nn;
-            m_active = other.m_active;
-            other.m_active = false;
-            return *this;
-        }
-
-        ~ScopedCurrent() { reset(); }
-
-        void rebind(AST& ast_nn)
-        {
-            if (!m_active) {
-                m_previousAst_nn = s_currentAst_nn;
-                m_previousConstAst_nn = s_currentConstAst_nn;
-                m_active = true;
-            }
-
-            s_currentAst_nn = &ast_nn;
-            s_currentConstAst_nn = &ast_nn;
-        }
-
-      private:
-        void reset()
-        {
-            if (!m_active) {
-                return;
-            }
-
-            s_currentAst_nn = m_previousAst_nn;
-            s_currentConstAst_nn = m_previousConstAst_nn;
-            m_active = false;
-        }
-
-        AST* m_previousAst_nn = nullptr;
-        const AST* m_previousConstAst_nn = nullptr;
-        bool m_active = false;
-    };
-
-    template <typename T, typename TAst> class BasicRef {
-      public:
-        using Pointer = typename std::conditional<std::is_const<TAst>::value,
-            const T*, T*>::type;
-        using Reference = typename std::conditional<std::is_const<TAst>::value,
-            const T&, T&>::type;
-
-        BasicRef() = default;
-
-        BasicRef(TAst* ast_nn, Handle<T> handle)
-            : m_ast_nn(ast_nn)
-            , m_handle(handle)
-        {
-        }
-
-        [[nodiscard]] explicit operator bool() const
-        {
-            return m_ast_nn != nullptr && static_cast<bool>(m_handle);
-        }
-
-        [[nodiscard]] Pointer operator->() const
-        {
-            return &m_ast_nn->get(m_handle);
-        }
-
-        [[nodiscard]] Reference operator*() const
-        {
-            return m_ast_nn->get(m_handle);
-        }
-
-        [[nodiscard]] Handle<T> handle() const { return m_handle; }
-
-      private:
-        TAst* m_ast_nn = nullptr;
-        Handle<T> m_handle {};
-    };
-
-    template <typename T> using Ref = BasicRef<T, AST>;
-    template <typename T> using ConstRef = BasicRef<T, const AST>;
-
-    using Arenas = std::tuple<Arena<Identifier>, Arena<Exp>,
-        Arena<ConstInitVal>, Arena<InitVal>, Arena<ConstDef>, Arena<VarDef>,
-        Arena<ConstDecl>, Arena<VarDecl>, Arena<DeclNode>, Arena<FuncFParam>,
-        Arena<IfStmt>, Arena<WhileStmt>, Arena<BreakStmt>,
-        Arena<ContinueStmt>, Arena<AssignStmt>, Arena<ExpStmt>,
-        Arena<ReturnStmt>, Arena<StmtNode>, Arena<BlockItemNode>, Arena<Block>,
-        Arena<FuncDef>, Arena<TopLevelItemNode>, Arena<CompUnit>>;
-
-    template <typename T> [[nodiscard]] Arena<T>& arena()
-    {
-        return std::get<Arena<T>>(m_arenas);
-    }
-
-    template <typename T> [[nodiscard]] const Arena<T>& arena() const
-    {
-        return std::get<Arena<T>>(m_arenas);
-    }
-
-    template <typename T, typename... Args>
-    [[nodiscard]] Handle<T> emplace(Args&&... args)
-    {
-        return arena<T>().emplace(std::forward<Args>(args)...);
-    }
-
-    template <typename T> [[nodiscard]] T& get(Handle<T> handle)
-    {
-        return handle(m_arenas);
-    }
-
-    template <typename T> [[nodiscard]] const T& get(Handle<T> handle) const
-    {
-        return handle(m_arenas);
-    }
-
-    template <typename T> [[nodiscard]] Ref<T> ref(Handle<T> handle)
-    {
-        return Ref<T>(this, handle);
-    }
-
-    template <typename T> [[nodiscard]] ConstRef<T> ref(Handle<T> handle) const
-    {
-        return ConstRef<T>(this, handle);
-    }
-
-    [[nodiscard]] Arenas& arenas() { return m_arenas; }
-
-    [[nodiscard]] const Arenas& arenas() const { return m_arenas; }
-
-    void clear() { m_arenas = Arenas {}; }
-
-    [[nodiscard]] ScopedCurrent bindCurrent() { return ScopedCurrent(*this); }
-
-    [[nodiscard]] ScopedCurrent bindCurrent() const
-    {
-        return ScopedCurrent(*this);
-    }
-
-  private:
-    template <typename T> friend T& detail::currentAstGet(int32_t index);
-    template <typename T>
-    friend const T& detail::currentAstGetConst(int32_t index);
-
-    inline static thread_local AST* s_currentAst_nn = nullptr;
-    inline static thread_local const AST* s_currentConstAst_nn = nullptr;
-
-    Arenas m_arenas;
 };
-
-namespace detail {
-
-    template <typename T> T& currentAstGet(int32_t index)
-    {
-        if (AST::s_currentAst_nn == nullptr || index < 0) {
-            throw std::runtime_error(
-                "handle dereference requires a bound mutable AST");
-        }
-        return AST::s_currentAst_nn->get(Handle<T>(index));
-    }
-
-    template <typename T> const T& currentAstGetConst(int32_t index)
-    {
-        if (AST::s_currentConstAst_nn == nullptr || index < 0) {
-            throw std::runtime_error("handle dereference requires a bound AST");
-        }
-        return AST::s_currentConstAst_nn->get(Handle<T>(index));
-    }
-
-} // namespace detail
 
 } // namespace yesod::frontend
 

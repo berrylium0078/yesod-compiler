@@ -68,21 +68,13 @@ struct ParseOutput {
     Handle<CompUnit> m_root;
     std::vector<Diagnostic> m_diagnostics;
 
-    [[nodiscard]] bool success() const
+    bool success() const
     {
         return static_cast<bool>(m_root) && m_diagnostics.empty();
     }
 
-    [[nodiscard]] AST::Ref<CompUnit> root() { return m_ast.ref(m_root); }
-
-    [[nodiscard]] AST::ConstRef<CompUnit> root() const
-    {
-        return m_ast.ref(m_root);
-    }
-
-    [[nodiscard]] const CompUnit* operator->() const
-    {
-        return m_root ? &m_ast.get(m_root) : nullptr;
+    Handle<CompUnit> root() {
+        return m_root;
     }
 };
 

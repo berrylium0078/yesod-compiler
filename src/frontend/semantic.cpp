@@ -243,7 +243,7 @@ void SemanticAnalyzer::declareBuiltinFunctions()
 
     for (const auto& builtin : builtins) {
         const auto identifier_nn
-            = m_ast.emplace<Identifier>(SourcePos(-1), std::string(builtin.m_name));
+            = m_ast.alloc<Identifier>(SourcePos(-1), std::string(builtin.m_name));
         const auto symbol = makeFunctionSymbol(
             identifier_nn, builtin.m_returnType, builtin.m_paramTypes);
         if (!defineSymbol(builtin.m_name, identifier_nn)) {

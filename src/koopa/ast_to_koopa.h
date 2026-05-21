@@ -139,7 +139,7 @@ const T& Generator::node(frontend::Handle<T> handle,
     if (!handle) {
         throw std::runtime_error(message);
     }
-    return state.m_ast_nn->get(handle);
+    return handle(*state.m_ast_nn);
 }
 
 inline const frontend::SemanticSymbol& Generator::requireSymbolForIdentifier(

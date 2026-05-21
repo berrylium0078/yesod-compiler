@@ -1,28 +1,16 @@
 cmake_minimum_required(VERSION 3.13)
 project(compiler)
 
+set(CMAKE_CXX_STANDARD 23)
+
 # Default build type: Release when not specified (single-config generators)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "No build type specified. Defaulting to Release.")
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
 endif()
-# settings
-# set to OFF to enable C mode
-set(CPP_MODE ON)
-if(CPP_MODE)
-  set(FB_EXT ".cpp")
-else()
-  set(FB_EXT ".c")
-endif()
-message(STATUS "Flex/Bison generated source file extension: ${FB_EXT}")
 
-# enable all warnings
-if(MSVC)
-  add_compile_options(/W3)
-else()
-  # disable warnings caused by old version of Flex
-  add_compile_options(-Wall -Wno-register)
-endif()
+set(FB_EXT ".cpp")
+add_compile_options(-Wall -Wno-register)
 
 # options about libraries and includes
 set(LIB_DIR "$ENV{CDE_LIBRARY_PATH}/native" CACHE STRING "directory of libraries")
@@ -40,9 +28,9 @@ include_directories(${INC_DIR})
 
 # all of C/C++ source files
 file(GLOB_RECURSE C_SOURCES CONFIGURE_DEPENDS "src/*.c")
-file(GLOB_RECURSE CXX_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+file(GLOB_RECURSE _SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE CC_SOURCES CONFIGURE_DEPENDS "src/*.cc")
-set(ALL_SOURCES ${C_SOURCES} ${CXX_SOURCES} ${CC_SOURCES})
+set(ALL_SOURCES ${C_SOURCES} ${_SOURCES} ${CC_SOURCES})
 
 # Split out main so we can build a reusable static library for tests.
 set(MAIN_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
@@ -50,12 +38,11 @@ list(REMOVE_ITEM ALL_SOURCES ${MAIN_SRC})
 
 # core static library used by the compiler and tests
 add_library(core STATIC ${ALL_SOURCES})
-set_target_properties(core PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
+
 target_link_libraries(core koopa pthread dl)
 
 # compiler executable links the library and provides its own main
 add_executable(compiler ${MAIN_SRC})
-set_target_properties(compiler PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
 target_link_libraries(compiler core)
 
 # Test target(s) - only build tests in Debug builds
@@ -63,127 +50,102 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   enable_testing()
 
   add_executable(parser_basic_test test/parser_basic_test.cpp)
-  set_target_properties(parser_basic_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_basic_test core)
   add_test(NAME parser_basic_test COMMAND parser_basic_test)
 
   add_executable(parser_unary_test test/parser_unary_test.cpp)
-  set_target_properties(parser_unary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_unary_test core)
   add_test(NAME parser_unary_test COMMAND parser_unary_test)
 
   add_executable(parser_binary_test test/parser_binary_test.cpp)
-  set_target_properties(parser_binary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_binary_test core)
   add_test(NAME parser_binary_test COMMAND parser_binary_test)
 
   add_executable(parser_decl_test test/parser_decl_test.cpp)
-  set_target_properties(parser_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_decl_test core)
   add_test(NAME parser_decl_test COMMAND parser_decl_test)
 
   add_executable(parser_assign_test test/parser_assign_test.cpp)
-  set_target_properties(parser_assign_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_assign_test core)
   add_test(NAME parser_assign_test COMMAND parser_assign_test)
 
   add_executable(parser_stmt_test test/parser_stmt_test.cpp)
-  set_target_properties(parser_stmt_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_stmt_test core)
   add_test(NAME parser_stmt_test COMMAND parser_stmt_test)
 
   add_executable(parser_if_test test/parser_if_test.cpp)
-  set_target_properties(parser_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_if_test core)
   add_test(NAME parser_if_test COMMAND parser_if_test)
 
   add_executable(parser_while_test test/parser_while_test.cpp)
-  set_target_properties(parser_while_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_while_test core)
   add_test(NAME parser_while_test COMMAND parser_while_test)
 
   add_executable(parser_function_test test/parser_function_test.cpp)
-  set_target_properties(parser_function_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_function_test core)
   add_test(NAME parser_function_test COMMAND parser_function_test)
 
   add_executable(parser_array_test test/parser_array_test.cpp)
-  set_target_properties(parser_array_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(parser_array_test core)
   add_test(NAME parser_array_test COMMAND parser_array_test)
 
   add_executable(semantic_symbol_test test/semantic_symbol_test.cpp)
-  set_target_properties(semantic_symbol_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_symbol_test core)
   add_test(NAME semantic_symbol_test COMMAND semantic_symbol_test)
 
   add_executable(semantic_const_fold_test test/semantic_const_fold_test.cpp)
-  set_target_properties(semantic_const_fold_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_const_fold_test core)
   add_test(NAME semantic_const_fold_test COMMAND semantic_const_fold_test)
 
   add_executable(semantic_if_test test/semantic_if_test.cpp)
-  set_target_properties(semantic_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_if_test core)
   add_test(NAME semantic_if_test COMMAND semantic_if_test)
 
   add_executable(semantic_while_test test/semantic_while_test.cpp)
-  set_target_properties(semantic_while_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_while_test core)
   add_test(NAME semantic_while_test COMMAND semantic_while_test)
 
   add_executable(semantic_function_test test/semantic_function_test.cpp)
-  set_target_properties(semantic_function_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_function_test core)
   add_test(NAME semantic_function_test COMMAND semantic_function_test)
 
   add_executable(semantic_array_test test/semantic_array_test.cpp)
-  set_target_properties(semantic_array_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(semantic_array_test core)
   add_test(NAME semantic_array_test COMMAND semantic_array_test)
 
   add_executable(koopa_basic_test test/koopa_basic_test.cpp)
-  set_target_properties(koopa_basic_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_basic_test core)
   add_test(NAME koopa_basic_test COMMAND koopa_basic_test)
 
   add_executable(koopa_unary_test test/koopa_unary_test.cpp)
-  set_target_properties(koopa_unary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_unary_test core)
   add_test(NAME koopa_unary_test COMMAND koopa_unary_test)
 
   add_executable(koopa_binary_test test/koopa_binary_test.cpp)
-  set_target_properties(koopa_binary_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_binary_test core)
   add_test(NAME koopa_binary_test COMMAND koopa_binary_test)
 
   add_executable(koopa_if_test test/koopa_if_test.cpp)
-  set_target_properties(koopa_if_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_if_test core)
   add_test(NAME koopa_if_test COMMAND koopa_if_test)
 
   add_executable(koopa_while_test test/koopa_while_test.cpp)
-  set_target_properties(koopa_while_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_while_test core)
   add_test(NAME koopa_while_test COMMAND koopa_while_test)
 
   add_executable(koopa_decl_test test/koopa_decl_test.cpp)
-  set_target_properties(koopa_decl_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_decl_test core)
   add_test(NAME koopa_decl_test COMMAND koopa_decl_test)
 
   add_executable(koopa_function_test test/koopa_function_test.cpp)
-  set_target_properties(koopa_function_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_function_test core)
   add_test(NAME koopa_function_test COMMAND koopa_function_test)
 
   add_executable(koopa_array_test test/koopa_array_test.cpp)
-  set_target_properties(koopa_array_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(koopa_array_test core)
   add_test(NAME koopa_array_test COMMAND koopa_array_test)
 
   add_executable(backend_riscv_test test/backend_riscv_test.cpp)
-  set_target_properties(backend_riscv_test PROPERTIES C_STANDARD 11 CXX_STANDARD 17)
   target_link_libraries(backend_riscv_test core)
   add_test(NAME backend_riscv_test COMMAND backend_riscv_test)
 else()

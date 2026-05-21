@@ -2,5 +2,5 @@ BasedOnStyle: WebKit
 IndentWidth: 4
 DerivePointerAlignment: false
 PointerAlignment: Left
-AccessModifierOffset: -2
+AccessModifierOffset: -4
 ColumnLimit: 80

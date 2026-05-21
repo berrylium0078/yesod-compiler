@@ -62,7 +62,7 @@ namespace {
         const size_t elementSlots = countScalarSlots(*type.m_elementType);
         for (int32_t i = 0;
              i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
-            const auto& child = ast.get(values[nextValueIndex]);
+            const auto& child = values[nextValueIndex](ast);
             std::visit(
                 [&](const auto& childAlt) {
                     using ChildAltType = std::decay_t<decltype(childAlt)>;
@@ -90,7 +90,7 @@ namespace {
         size_t baseOffset,
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
-        const auto& init = ast.get(init_nn);
+        const auto& init = ast[init_nn];
         std::visit(
             [&](const auto& initAlt) {
                 using AltType = std::decay_t<decltype(initAlt)>;
@@ -114,7 +114,7 @@ namespace {
         frontend::Handle<InitNode> init_nn, size_t baseOffset,
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
-        const auto& init = ast.get(init_nn);
+        const auto& init = ast[init_nn];
         std::visit(
             [&](const auto& initAlt) {
                 using AltType = std::decay_t<decltype(initAlt)>;
@@ -236,7 +236,7 @@ Program* Generator::generate(const frontend::AST& ast,
     const frontend::SemanticInfo& semanticInfo) const
 {
     auto* program = Program::create();
-    const auto& parsedCompUnit = ast.get(compUnit);
+    const auto& parsedCompUnit = ast[compUnit];
     std::unordered_map<int32_t, Value*> globalStorageBySymbolId;
     std::unordered_map<int32_t, Function*> functionBySymbolId;
     std::unordered_map<int32_t, size_t> symbolUseCount;
@@ -248,12 +248,12 @@ Program* Generator::generate(const frontend::AST& ast,
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
-        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        const auto& topLevelItem = ast[topLevelItem_nn];
         std::visit(
             [&](const auto& topLevelAlt) {
                 using AltType = std::decay_t<decltype(topLevelAlt)>;
                 if constexpr (std::is_same_v<AltType, frontend::Handle<frontend::FuncDef>>) {
-                    const auto& funcDef = ast.get(topLevelAlt);
+                    const auto& funcDef = ast[topLevelAlt];
                     const auto* functionSymbol
                         = semanticInfo.findSymbol(funcDef.m_identifier_nn);
                     if (functionSymbol == nullptr) {
@@ -290,7 +290,7 @@ Program* Generator::generate(const frontend::AST& ast,
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
-        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        const auto& topLevelItem = ast[topLevelItem_nn];
         std::visit(
             [&](const auto& topLevelAlt) {
                 using AltType = std::decay_t<decltype(topLevelAlt)>;
@@ -302,7 +302,7 @@ Program* Generator::generate(const frontend::AST& ast,
                     auto* function
                         = createFunctionDecl(ast, topLevelAlt, semanticInfo);
                     const auto& symbol = requireSymbolForIdentifier(
-                        ast.get(topLevelAlt).m_identifier_nn, semanticInfo,
+                        ast[topLevelAlt].m_identifier_nn, semanticInfo,
                         "function definition is missing a symbol binding");
                     functionBySymbolId[symbol.m_id] = function;
                     program->pushFunc(function);
@@ -312,14 +312,14 @@ Program* Generator::generate(const frontend::AST& ast,
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
-        const auto& topLevelItem = ast.get(topLevelItem_nn);
+        const auto& topLevelItem = ast[topLevelItem_nn];
         std::visit(
             [&](const auto& topLevelAlt) {
                 using AltType = std::decay_t<decltype(topLevelAlt)>;
                 if constexpr (std::is_same_v<AltType,
                                   frontend::Handle<frontend::FuncDef>>) {
                     const auto& symbol = requireSymbolForIdentifier(
-                        ast.get(topLevelAlt).m_identifier_nn, semanticInfo,
+                        ast[topLevelAlt].m_identifier_nn, semanticInfo,
                         "function definition is missing a symbol binding");
                     const auto functionIt = functionBySymbolId.find(symbol.m_id);
                     if (functionIt == functionBySymbolId.end()) {
@@ -341,8 +341,8 @@ Function* Generator::createFunctionDecl(const frontend::AST& ast,
     frontend::Handle<frontend::FuncDef> funcDef,
     const frontend::SemanticInfo& semanticInfo) const
 {
-    const auto& parsedFuncDef = ast.get(funcDef);
-    const auto& identifier = ast.get(parsedFuncDef.m_identifier_nn);
+    const auto& parsedFuncDef = ast[funcDef];
+    const auto& identifier = ast[parsedFuncDef.m_identifier_nn];
     const auto& symbol = requireSymbolForIdentifier(
         parsedFuncDef.m_identifier_nn, semanticInfo,
         "function definition is missing a symbol binding");
@@ -386,7 +386,7 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
     const std::unordered_map<int32_t, Function*>& functionBySymbolId,
     Function* function_nn) const
 {
-    const auto& parsedFuncDef = ast.get(funcDef);
+    const auto& parsedFuncDef = ast[funcDef];
     auto* function = function_nn;
     auto* entryBlock = BasicBlock::createEntry("%entry");
     auto* endBlock = BasicBlock::createNonEntry("%end");
@@ -401,7 +401,7 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
         .m_functionBySymbolId = functionBySymbolId,
     };
     for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
-        const auto& funcFParam = ast.get(parsedFuncDef.m_funcFParams[i]);
+        const auto& funcFParam = ast[parsedFuncDef.m_funcFParams[i]];
         const auto& symbol = requireSymbolForIdentifier(funcFParam.m_identifier_nn,
             semanticInfo, "function parameter is missing a symbol binding");
         auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
@@ -430,15 +430,15 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
     const frontend::SemanticInfo& semanticInfo,
     std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
 {
-    const auto& parsedDeclNode = ast.get(declNode);
+    const auto& parsedDeclNode = ast[declNode];
     std::visit(
         [&](const auto& declAlt) {
             using AltType = std::decay_t<decltype(declAlt)>;
             if constexpr (std::is_same_v<AltType,
                               frontend::Handle<frontend::ConstDecl>>) {
-                const auto& constDecl = ast.get(declAlt);
+                const auto& constDecl = ast[declAlt];
                 for (const auto constDef_nn : constDecl.m_constDefs) {
-                    const auto& constDef = ast.get(constDef_nn);
+                    const auto& constDef = ast[constDef_nn];
                     const auto& symbol = requireSymbolForIdentifier(
                         constDef.m_identifier_nn, semanticInfo,
                         "global const is missing its symbol binding");
@@ -457,9 +457,9 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                     globalStorageBySymbolId[symbol.m_id] = globalAlloc;
                 }
             } else {
-                const auto& varDecl = ast.get(declAlt);
+                const auto& varDecl = ast[declAlt];
                 for (const auto varDef_nn : varDecl.m_varDefs) {
-                    const auto& varDef = ast.get(varDef_nn);
+                    const auto& varDef = ast[varDef_nn];
                     const auto& symbol = requireSymbolForIdentifier(
                         varDef.m_identifier_nn, semanticInfo,
                         "global variable is missing its symbol binding");
@@ -473,7 +473,7 @@ void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode
                             symbol.m_type, scalarExprs, nextScalarIndex,
                             semanticInfo);
                     } else if (varDef.m_initVal_nn) {
-                        const auto& initVal = ast.get(varDef.m_initVal_nn);
+                        const auto& initVal = ast[varDef.m_initVal_nn];
                         std::visit(
                             [&](const auto& initAlt) {
                                 using InitAltType = std::decay_t<decltype(initAlt)>;
