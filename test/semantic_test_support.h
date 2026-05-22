@@ -114,14 +114,14 @@ inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
     const ast::AST& ast, const ast::Handle<ast::Exp>& exp_nn)
 {
     const auto& exp = exp_nn(ast);
-    return match(exp.m_kind,
-        with {
+    return MATCH (exp.m_kind)
+        WITH (
             [](const ast::LVal& lVal) { return lVal.m_identifier_nn; },
             [](const auto&) {
                 require(false, "expected lvalue expression for symbol lookup");
                 return ast::Handle<ast::Identifier> {};
             },
-        });
+        );
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(

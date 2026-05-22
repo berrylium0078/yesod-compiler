@@ -31,11 +31,11 @@ constexpr const char* kFunctionArrayParamSource =
 struct ParserArrayTest : ParserTestBase {
     const InitVal::List& requireInitListHandle(const Handle<InitVal>& initVal_nn)
     {
-        const auto* list = match(initVal_nn(ast()).m_kind,
-            with {
+        const auto* list = MATCH (initVal_nn(ast()).m_kind)
+            WITH (
                 [](const InitVal::List& list) { return &list; },
                 [](const auto&) { return static_cast<const InitVal::List*>(nullptr); },
-            });
+            );
         require(list != nullptr, "expected brace initializer list");
         return *list;
     }
@@ -96,13 +96,13 @@ struct ParserArrayTest : ParserTestBase {
 
         std::vector<Handle<FuncDef>> funcs;
         for (const auto topLevelItem_nn : root()(ast()).m_topLevelItems) {
-            const auto funcDef_nn = match(topLevelItem_nn(ast()).m_topLevelItem,
-                with {
+            const auto funcDef_nn = MATCH (topLevelItem_nn(ast()).m_topLevelItem)
+                WITH (
                     [](const Handle<FuncDef>& funcDef_nn) {
                         return funcDef_nn;
                     },
                     [](const auto&) { return Handle<FuncDef> {}; },
-                });
+                );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);
             }

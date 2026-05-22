@@ -4,89 +4,87 @@ using namespace yesod::test_support::semantic;
 
 namespace {
 
-constexpr const char* kFunctionArrayParamSource =
-    "void f1(int n, int a[]) {"
-    "while (n > 0) {"
-    "n = n - 1;"
-    "a[n] = 0;"
-    "}"
-    "}"
-    "void f2(int n, int a[][10]) {"
-    "while (n > 0) {"
-    "n = n - 1;"
-    "f1(10, a[n]);"
-    "}"
-    "}"
-    "void f3(int n, int a[][10][10]) {"
-    "while (n > 0) {"
-    "n = n - 1;"
-    "f2(10, a[n]);"
-    "}"
-    "}"
-    "int main() {"
-    "int a[10][10][10];"
-    "f3(10, a);"
-    "}";
+constexpr const char* kFunctionArrayParamSource
+    = "void f1(int n, int a[]) {"
+      "while (n > 0) {"
+      "n = n - 1;"
+      "a[n] = 0;"
+      "}"
+      "}"
+      "void f2(int n, int a[][10]) {"
+      "while (n > 0) {"
+      "n = n - 1;"
+      "f1(10, a[n]);"
+      "}"
+      "}"
+      "void f3(int n, int a[][10][10]) {"
+      "while (n > 0) {"
+      "n = n - 1;"
+      "f2(10, a[n]);"
+      "}"
+      "}"
+      "int main() {"
+      "int a[10][10][10];"
+      "f3(10, a);"
+      "}";
 
-constexpr const char* kShadowedConstArraySource =
-    "const int garr[10] = {6, 7, 8, 9, 10, 11, 12, 13, 14, 15};"
-    "int main(){"
-    "const int arr[10] = {1, 2, 3, 4, 5};"
-    "int i = 0, sum = 0;"
-    "while(i < 10){"
-    "sum = sum + arr[i] + garr[i];"
-    "i = i + 1;"
-    "}"
-    "const int garr[10] = {1};"
-    "return sum + garr[0];"
-    "}";
+constexpr const char* kShadowedConstArraySource
+    = "const int garr[10] = {6, 7, 8, 9, 10, 11, 12, 13, 14, 15};"
+      "int main(){"
+      "const int arr[10] = {1, 2, 3, 4, 5};"
+      "int i = 0, sum = 0;"
+      "while(i < 10){"
+      "sum = sum + arr[i] + garr[i];"
+      "i = i + 1;"
+      "}"
+      "const int garr[10] = {1};"
+      "return sum + garr[0];"
+      "}";
 
-constexpr const char* kArrayInitializerExpressionSource =
-    "const int a = 2, b = 3;"
-    "const int c[2] = {a + b, a - b};"
-    "int d[2][2] = {a + b, a - b, {a * 2, b * 2}};";
+constexpr const char* kArrayInitializerExpressionSource
+    = "const int a = 2, b = 3;"
+      "const int c[2] = {a + b, a - b};"
+      "int d[2][2] = {a + b, a - b, {a * 2, b * 2}};";
 
-constexpr const char* kNonConstantConstArrayInitializerSource =
-    "int a = 2, b = 3;"
-    "const int c[2] = {a + b, a - b};";
+constexpr const char* kNonConstantConstArrayInitializerSource
+    = "int a = 2, b = 3;"
+      "const int c[2] = {a + b, a - b};";
 
-constexpr const char* kConstFoldedParamDimensionSource =
-    "const int N = 10;"
-    "int a[N][N];"
-    "int foo(int a[][N]) {"
-    "}"
-    "int main() {"
-    "foo(a);"
-    "return 0;"
-    "}";
+constexpr const char* kConstFoldedParamDimensionSource = "const int N = 10;"
+                                                         "int a[N][N];"
+                                                         "int foo(int a[][N]) {"
+                                                         "}"
+                                                         "int main() {"
+                                                         "foo(a);"
+                                                         "return 0;"
+                                                         "}";
 
-constexpr const char* kRecursiveArrayInitializerSource =
-    "const int N = 3;"
-    "int a[N][N][N] = {0, 1, 2, {3}, 4};"
-    "const int b[N][N][N] = {0, 1, 2, {3}, 4};";
+constexpr const char* kRecursiveArrayInitializerSource
+    = "const int N = 3;"
+      "int a[N][N][N] = {0, 1, 2, {3}, 4};"
+      "const int b[N][N][N] = {0, 1, 2, {3}, 4};";
 
-constexpr const char* kStressGeneratedArrayInitializerSource =
-    "const int N1 = 6;"
-    "const int N2 = 3;"
-    "const int N3 = 7;"
-    "const int N4 = 5;"
-    "const int N5 = 1;"
-    "int a[N1][N2][N3][N4][N5] = {{}, {48, {19, 53, {{20, 4}, 55, 8}}, 38, {3, 54}}, 34, 35, 56};"
-    "int main(){return 0;}";
+constexpr const char* kStressGeneratedArrayInitializerSource
+    = "const int N1 = 6;"
+      "const int N2 = 3;"
+      "const int N3 = 7;"
+      "const int N4 = 5;"
+      "const int N5 = 1;"
+      "int a[N1][N2][N3][N4][N5] = {{}, {48, {19, 53, {{20, 4}, 55, 8}}, 38, "
+      "{3, 54}}, 34, 35, 56};"
+      "int main(){return 0;}";
 
 struct SemanticArrayTest : SemanticTestBase {
     std::vector<Handle<ast::FuncDef>> collectFunctions() const
     {
         std::vector<Handle<ast::FuncDef>> funcs;
         for (const auto topLevelItem_nn : root()(ast()).m_topLevelItems) {
-            const auto funcDef_nn = ast::match(
-                topLevelItem_nn(ast()).m_topLevelItem,
-                ast::with {
+            const auto funcDef_nn
+                = MATCH(topLevelItem_nn(ast()).m_topLevelItem) WITH(
                     [](const Handle<ast::FuncDef>& funcDef_nn) {
                         return funcDef_nn;
                     },
-                    [](const auto&) { return Handle<ast::FuncDef> {}; },
-                });
+                    [](const auto&) { return Handle<ast::FuncDef> { }; }, );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);
             }
@@ -96,14 +94,15 @@ struct SemanticArrayTest : SemanticTestBase {
 
     void testArraySymbolsAndArrayParameterCalls()
     {
-        m_output = analyzeSource(
-            "int take(int a[]){return a[0];} int main(){int arr[2]; arr[1] = 7; return take(arr);}"
-        );
-        require(success(), "array parameter call should pass semantic analysis");
+        m_output
+            = analyzeSource("int take(int a[]){return a[0];} int main(){int "
+                            "arr[2]; arr[1] = 7; return take(arr);}");
+        require(
+            success(), "array parameter call should pass semantic analysis");
 
         const auto takeFunc_nn = firstFuncDef();
-        const auto& takeSymbol = requireSymbol(
-            m_output, takeFunc_nn(ast()).m_funcFParams[0](ast()).m_identifier_nn);
+        const auto& takeSymbol = requireSymbol(m_output,
+            takeFunc_nn(ast()).m_funcFParams[0](ast()).m_identifier_nn);
         require(takeSymbol.m_type.isArray(),
             "array parameter should preserve an array semantic type");
         require(takeSymbol.m_type.m_arrayLength == -1,
@@ -112,8 +111,8 @@ struct SemanticArrayTest : SemanticTestBase {
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto varDecl_nn = extractVarDecl(extractDeclNode(
             mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[0]));
-        const auto& arraySymbol = requireSymbol(
-            m_output, varDecl_nn(ast()).m_varDefs[0]);
+        const auto& arraySymbol
+            = requireSymbol(m_output, varDecl_nn(ast()).m_varDefs[0]);
         require(arraySymbol.m_type.isArray(),
             "local array declaration should preserve an array semantic type");
         require(arraySymbol.m_type.m_arrayLength == 2,
@@ -123,19 +122,21 @@ struct SemanticArrayTest : SemanticTestBase {
             mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[2]));
         require(requireExpValueKind(m_output, returnStmt_nn(ast()).m_exp_nn)
                 == ExpType::integer,
-            "call through an array parameter should still produce an integer value");
+            "call through an array parameter should still produce an integer "
+            "value");
     }
 
     void testConstArrayReadsDoNotFoldAsConstInitializers()
     {
-        m_output = analyzeSource(
-            "int main(){const int arr[2] = {1, 2}; const int value = arr[1]; return value;}"
-        );
+        m_output = analyzeSource("int main(){const int arr[2] = {1, 2}; const "
+                                 "int value = arr[1]; return value;}");
         require(!success(),
-            "const array element reads should not participate in constant folding");
+            "const array element reads should not participate in constant "
+            "folding");
         require(firstDiagnostic().m_kind
                 == SemanticDiagnosticKind::nonConstantConstInitializer,
-            "const array element read should report the non-constant const initializer label");
+            "const array element read should report the non-constant const "
+            "initializer label");
     }
 
     void testShadowedArrayNamesResolveToBoundSymbols()
@@ -146,22 +147,23 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto globalConstDecl_nn = extractConstDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[0]));
-        const auto& globalGarrSymbol = requireSymbol(
-            m_output, globalConstDecl_nn(ast()).m_constDefs[0]);
+        const auto& globalGarrSymbol
+            = requireSymbol(m_output, globalConstDecl_nn(ast()).m_constDefs[0]);
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto localConstDecl_nn = extractConstDecl(extractDeclNode(
             mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[3]));
-        const auto& localGarrSymbol = requireSymbol(
-            m_output, localConstDecl_nn(ast()).m_constDefs[0]);
+        const auto& localGarrSymbol
+            = requireSymbol(m_output, localConstDecl_nn(ast()).m_constDefs[0]);
         require(localGarrSymbol.m_id != globalGarrSymbol.m_id,
             "shadowed const arrays should bind distinct symbol identities");
 
         const auto whileStmt_nn = extractWhileStmt(extractStmtNode(
             mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[2]));
-        const auto whileBody_nn = extractBlockStmt(whileStmt_nn(ast()).m_bodyStmt_nn);
-        const auto sumAssign_nn = extractAssignStmt(extractStmtNode(
-            whileBody_nn(ast()).m_blockItems[0]));
+        const auto whileBody_nn
+            = extractBlockStmt(whileStmt_nn(ast()).m_bodyStmt_nn);
+        const auto sumAssign_nn = extractAssignStmt(
+            extractStmtNode(whileBody_nn(ast()).m_blockItems[0]));
         const auto& sumBinary = requireBinaryExp(sumAssign_nn(ast()).m_exp_nn);
         require(requireSymbol(m_output, sumBinary.m_rhs_nn).m_id
                 == globalGarrSymbol.m_id,
@@ -169,11 +171,12 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(
             mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[4]));
-        const auto& returnBinary = requireBinaryExp(
-            returnStmt_nn(ast()).m_exp_nn);
+        const auto& returnBinary
+            = requireBinaryExp(returnStmt_nn(ast()).m_exp_nn);
         require(requireSymbol(m_output, returnBinary.m_rhs_nn).m_id
                 == localGarrSymbol.m_id,
-            "garr[0] after the local declaration should resolve to the shadowing const array");
+            "garr[0] after the local declaration should resolve to the "
+            "shadowing const array");
     }
 
     void testConstArrayAssignmentIsRejected()
@@ -181,9 +184,12 @@ struct SemanticArrayTest : SemanticTestBase {
         m_output = analyzeSource(
             "int main(){const int arr[2] = {1, 2}; arr[1] = 3; return 0;}");
         require(!success(),
-            "assigning through a const array element should fail semantic analysis");
-        require(firstDiagnostic().m_kind == SemanticDiagnosticKind::assignToConst,
-            "const array assignment should report the assign-to-const semantic label");
+            "assigning through a const array element should fail semantic "
+            "analysis");
+        require(
+            firstDiagnostic().m_kind == SemanticDiagnosticKind::assignToConst,
+            "const array assignment should report the assign-to-const semantic "
+            "label");
     }
 
     void testNestedFunctionArrayParametersAnalyze()
@@ -194,7 +200,8 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto funcs = collectFunctions();
         require(funcs.size() == 4,
-            "function-array-parameter sample should analyze four function definitions");
+            "function-array-parameter sample should analyze four function "
+            "definitions");
 
         const auto& f1ArrayParam = requireSymbol(
             m_output, funcs[0](ast()).m_funcFParams[1](ast()).m_identifier_nn);
@@ -226,7 +233,8 @@ struct SemanticArrayTest : SemanticTestBase {
                 && f3ArrayParam.m_type.m_elementType->m_arrayLength == 10
                 && f3ArrayParam.m_type.m_elementType->m_elementType != nullptr
                 && f3ArrayParam.m_type.m_elementType->m_elementType->isArray()
-                && f3ArrayParam.m_type.m_elementType->m_elementType->m_arrayLength
+                && f3ArrayParam.m_type.m_elementType->m_elementType
+                        ->m_arrayLength
                     == 10,
             "f3 parameter should preserve both trailing array extents");
     }
@@ -235,7 +243,8 @@ struct SemanticArrayTest : SemanticTestBase {
     {
         m_output = analyzeSource(kArrayInitializerExpressionSource);
         require(success(),
-            "array initializers should accept expression elements when the required constness is satisfied");
+            "array initializers should accept expression elements when the "
+            "required constness is satisfied");
 
         const auto topLevelDecl0 = extractConstDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[0]));
@@ -244,19 +253,22 @@ struct SemanticArrayTest : SemanticTestBase {
         const auto topLevelDecl2 = extractVarDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[2]));
 
-        const auto& cSymbol = requireSymbol(
-            m_output, topLevelDecl1(ast()).m_constDefs[0]);
+        const auto& cSymbol
+            = requireSymbol(m_output, topLevelDecl1(ast()).m_constDefs[0]);
         require(cSymbol.m_type.isArray() && cSymbol.m_type.m_arrayLength == 2,
-            "const array expression initializer should preserve the declared array type");
+            "const array expression initializer should preserve the declared "
+            "array type");
 
-        const auto& dSymbol = requireSymbol(
-            m_output, topLevelDecl2(ast()).m_varDefs[0]);
+        const auto& dSymbol
+            = requireSymbol(m_output, topLevelDecl2(ast()).m_varDefs[0]);
         require(dSymbol.m_type.isArray() && dSymbol.m_type.m_arrayLength == 2,
-            "mutable array expression initializer should preserve the outer array length");
+            "mutable array expression initializer should preserve the outer "
+            "array length");
         require(dSymbol.m_type.m_elementType != nullptr
                 && dSymbol.m_type.m_elementType->isArray()
                 && dSymbol.m_type.m_elementType->m_arrayLength == 2,
-            "mutable array expression initializer should preserve the inner array length");
+            "mutable array expression initializer should preserve the inner "
+            "array length");
 
         (void)topLevelDecl0;
     }
@@ -265,56 +277,65 @@ struct SemanticArrayTest : SemanticTestBase {
     {
         m_output = analyzeSource(kNonConstantConstArrayInitializerSource);
         require(!success(),
-            "const array initializers should reject non-constant expression elements");
+            "const array initializers should reject non-constant expression "
+            "elements");
         require(firstDiagnostic().m_kind
                 == SemanticDiagnosticKind::nonConstantConstInitializer,
-            "non-constant const array initializer should report the dedicated semantic label");
+            "non-constant const array initializer should report the dedicated "
+            "semantic label");
     }
 
     void testConstExpressionsFoldInFunctionArrayDimensions()
     {
         m_output = analyzeSource(kConstFoldedParamDimensionSource);
         require(success(),
-            "const expressions in function array parameter dimensions should fold during semantic analysis");
+            "const expressions in function array parameter dimensions should "
+            "fold during semantic analysis");
 
         const auto globalVarDecl = extractVarDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[1]));
-        const auto& globalArraySymbol = requireSymbol(
-            m_output, globalVarDecl(ast()).m_varDefs[0]);
+        const auto& globalArraySymbol
+            = requireSymbol(m_output, globalVarDecl(ast()).m_varDefs[0]);
         require(globalArraySymbol.m_type.isArray()
                 && globalArraySymbol.m_type.m_arrayLength == 10,
-            "global array declaration should preserve the folded outer dimension");
+            "global array declaration should preserve the folded outer "
+            "dimension");
         require(globalArraySymbol.m_type.m_elementType != nullptr
                 && globalArraySymbol.m_type.m_elementType->isArray()
                 && globalArraySymbol.m_type.m_elementType->m_arrayLength == 10,
-            "global array declaration should preserve the folded inner dimension");
+            "global array declaration should preserve the folded inner "
+            "dimension");
 
         const auto fooFunc_nn = requireFuncDefByName(root(), "foo");
-        const auto& paramSymbol = requireSymbol(
-            m_output, fooFunc_nn(ast()).m_funcFParams[0](ast()).m_identifier_nn);
+        const auto& paramSymbol = requireSymbol(m_output,
+            fooFunc_nn(ast()).m_funcFParams[0](ast()).m_identifier_nn);
         require(paramSymbol.m_type.isArray()
                 && paramSymbol.m_type.m_arrayLength == -1,
             "function parameter should preserve the unsized first dimension");
         require(paramSymbol.m_type.m_elementType != nullptr
                 && paramSymbol.m_type.m_elementType->isArray()
                 && paramSymbol.m_type.m_elementType->m_arrayLength == 10,
-            "function parameter trailing dimension should fold the const expression to 10");
+            "function parameter trailing dimension should fold the const "
+            "expression to 10");
     }
 
     void testRecursiveMultidimensionalArrayInitializersAnalyze()
     {
         m_output = analyzeSource(kRecursiveArrayInitializerSource);
         require(success(),
-            "recursive multidimensional array initializers should pass semantic analysis");
+            "recursive multidimensional array initializers should pass "
+            "semantic analysis");
 
         const auto aDecl = extractVarDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[1]));
         const auto bDecl = extractConstDecl(
             requireTopLevelDecl(root()(ast()).m_topLevelItems[2]));
 
-        const auto& aSymbol = requireSymbol(m_output, aDecl(ast()).m_varDefs[0]);
+        const auto& aSymbol
+            = requireSymbol(m_output, aDecl(ast()).m_varDefs[0]);
         require(aSymbol.m_type.isArray() && aSymbol.m_type.m_arrayLength == 3,
-            "mutable three-dimensional array initializer should preserve outer length");
+            "mutable three-dimensional array initializer should preserve outer "
+            "length");
         require(aSymbol.m_type.m_elementType != nullptr
                 && aSymbol.m_type.m_elementType->isArray()
                 && aSymbol.m_type.m_elementType->m_arrayLength == 3
@@ -322,18 +343,22 @@ struct SemanticArrayTest : SemanticTestBase {
                 && aSymbol.m_type.m_elementType->m_elementType->isArray()
                 && aSymbol.m_type.m_elementType->m_elementType->m_arrayLength
                     == 3,
-            "mutable three-dimensional array initializer should preserve inner lengths");
+            "mutable three-dimensional array initializer should preserve inner "
+            "lengths");
 
-        const auto& bSymbol = requireSymbol(m_output, bDecl(ast()).m_constDefs[0]);
+        const auto& bSymbol
+            = requireSymbol(m_output, bDecl(ast()).m_constDefs[0]);
         require(bSymbol.m_type == aSymbol.m_type,
-            "const three-dimensional array initializer should preserve the same folded type");
+            "const three-dimensional array initializer should preserve the "
+            "same folded type");
     }
 
     void testStressGeneratedArrayInitializerAnalyzes()
     {
         m_output = analyzeSource(kStressGeneratedArrayInitializerSource);
         require(success(),
-            "stress-generated deep array initializer should pass semantic analysis");
+            "stress-generated deep array initializer should pass semantic "
+            "analysis");
     }
 };
 

@@ -259,11 +259,10 @@ public:
         return *varDecl;
     }
 
-    int32_t evaluateExp(const Handle<Exp>& exp)
+    int32_t evaluateExp(Handle<Exp> exp)
     {
-        return match(exp(ast()).m_kind,
-            with {
-                [](const Number& number) -> int32_t { return number.m_value; },
+        return MATCH(exp(ast()).m_kind)
+            WITH([](const Number& number) -> int32_t { return number.m_value; },
                 [](const LVal& lval) -> int32_t {
                     fail("cannot evaluate lvalue expression");
                 },
@@ -283,10 +282,8 @@ public:
                     fail("unexpected unary operator");
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
-                    const auto lhsValue
-                        = evaluateExp(binary.m_lhs_nn);
-                    const auto rhsValue
-                        = evaluateExp(binary.m_rhs_nn);
+                    const auto lhsValue = evaluateExp(binary.m_lhs_nn);
+                    const auto rhsValue = evaluateExp(binary.m_rhs_nn);
                     switch (binary.m_op) {
                     case BinaryOpKeyword::star:
                         return lhsValue * rhsValue;
@@ -316,7 +313,7 @@ public:
                         return (lhsValue != 0 || rhsValue != 0) ? 1 : 0;
                     }
                     fail("unexpected binary operator");
-                } });
+                });
     }
 
 private:

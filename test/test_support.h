@@ -29,10 +29,7 @@ inline void require(bool condition, const std::string& message)
 
 inline thread_local const AST* g_currentAst = nullptr;
 
-inline void bindCurrentAst(const AST& ast)
-{
-    g_currentAst = &ast;
-}
+inline void bindCurrentAst(const AST& ast) { g_currentAst = &ast; }
 
 [[nodiscard]] inline const AST& currentAst()
 {
@@ -41,7 +38,7 @@ inline void bindCurrentAst(const AST& ast)
 }
 
 template <typename T> class HandleView {
-  public:
+public:
     HandleView() = default;
     HandleView(Handle<T> handle)
         : m_handle(handle)
@@ -50,19 +47,19 @@ template <typename T> class HandleView {
 
     [[nodiscard]] operator Handle<T>() const { return m_handle; }
 
-    [[nodiscard]] auto operator->() const
-    {
-        return &m_handle(currentAst());
-    }
+    [[nodiscard]] auto operator->() const { return &m_handle(currentAst()); }
 
     [[nodiscard]] auto operator()(const AST& ast) const
     {
         return m_handle(ast);
     }
 
-    [[nodiscard]] explicit operator bool() const { return static_cast<bool>(m_handle); }
+    [[nodiscard]] explicit operator bool() const
+    {
+        return static_cast<bool>(m_handle);
+    }
 
-  private:
+private:
     Handle<T> m_handle;
 };
 
@@ -79,27 +76,25 @@ template <typename Output> struct OutputAstBase {
 };
 
 struct AstTestHelperBase {
-    template <class Self> [[nodiscard]] const Diagnostic& firstDiagnostic(this Self& self)
+    template <class Self>
+    [[nodiscard]] const Diagnostic& firstDiagnostic(this Self& self)
     {
         require(!self.m_output.m_diagnostics.empty(),
             "expected at least one diagnostic");
         return self.m_output.m_diagnostics.front();
     }
 
-    template <class Self> [[nodiscard]] Handle<FuncDef> firstFuncDef(this Self& self)
+    template <class Self>
+    [[nodiscard]] Handle<FuncDef> firstFuncDef(this Self& self)
     {
         auto compUnit_nn = self.root();
         require(compUnit_nn, "expected compilation unit node");
         const auto& compUnit = compUnit_nn(self.ast());
         for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
             const auto& topLevelItem = topLevelItem_nn(self.ast());
-            const auto funcDef_nn = match(topLevelItem.m_topLevelItem,
-                with {
-                    [](const Handle<FuncDef>& funcDef_nn) {
-                        return funcDef_nn;
-                    },
-                    [](const auto&) { return Handle<FuncDef> {}; },
-                });
+            const auto funcDef_nn = MATCH(topLevelItem.m_topLevelItem) WITH(
+                [](const Handle<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                [](const auto&) { return Handle<FuncDef> { }; }, );
             if (funcDef_nn) {
                 return funcDef_nn;
             }
@@ -111,11 +106,11 @@ struct AstTestHelperBase {
     [[nodiscard]] const Exp::Binary& requireBinaryExp(
         this Self& self, const Handle<Exp>& exp_nn)
     {
-        const auto binaryExp = match(exp_nn(self.ast()).m_kind,
-            with {
-                [](const Exp::Binary& binaryExp) { return &binaryExp; },
-                [](const auto&) { return static_cast<const Exp::Binary*>(nullptr); },
-            });
+        const auto binaryExp = MATCH(exp_nn(self.ast()).m_kind)
+            WITH([](const Exp::Binary& binaryExp) { return &binaryExp; },
+                [](const auto&) {
+                    return static_cast<const Exp::Binary*>(nullptr);
+                }, );
         require(binaryExp != nullptr, "expected binary expression root");
         return *binaryExp;
     }
@@ -124,23 +119,22 @@ struct AstTestHelperBase {
     [[nodiscard]] const Exp::Unary& requireUnaryExp(
         this Self& self, const Handle<Exp>& exp_nn)
     {
-        const auto unaryExp = match(exp_nn(self.ast()).m_kind,
-            with {
-                [](const Exp::Unary& unaryExp) { return &unaryExp; },
-                [](const auto&) { return static_cast<const Exp::Unary*>(nullptr); },
-            });
+        const auto unaryExp = MATCH(exp_nn(self.ast()).m_kind)
+            WITH([](const Exp::Unary& unaryExp) { return &unaryExp; },
+                [](const auto&) {
+                    return static_cast<const Exp::Unary*>(nullptr);
+                }, );
         require(unaryExp != nullptr, "expected unary expression root");
         return *unaryExp;
     }
 
     template <class Self>
-    [[nodiscard]] const LVal& requireLVal(this Self& self, const Handle<Exp>& exp_nn)
+    [[nodiscard]] const LVal& requireLVal(
+        this Self& self, const Handle<Exp>& exp_nn)
     {
-        const auto lVal = match(exp_nn(self.ast()).m_kind,
-            with {
-                [](const LVal& lVal) { return &lVal; },
-                [](const auto&) { return static_cast<const LVal*>(nullptr); },
-            });
+        const auto lVal = MATCH(exp_nn(self.ast()).m_kind) WITH(
+            [](const LVal& lVal) { return &lVal; },
+            [](const auto&) { return static_cast<const LVal*>(nullptr); }, );
         require(lVal != nullptr, "expected lvalue expression");
         return *lVal;
     }
@@ -149,11 +143,9 @@ struct AstTestHelperBase {
     [[nodiscard]] const Number& requireNumber(
         this Self& self, const Handle<Exp>& exp_nn)
     {
-        const auto number = match(exp_nn(self.ast()).m_kind,
-            with {
-                [](const Number& number) { return &number; },
-                [](const auto&) { return static_cast<const Number*>(nullptr); },
-            });
+        const auto number = MATCH(exp_nn(self.ast()).m_kind) WITH(
+            [](const Number& number) { return &number; },
+            [](const auto&) { return static_cast<const Number*>(nullptr); }, );
         require(number != nullptr, "expected number expression");
         return *number;
     }
@@ -170,12 +162,11 @@ struct AstTestHelperBase {
     [[nodiscard]] Handle<StmtNode> extractStmtNode(
         this Self& self, const Handle<BlockItemNode>& blockItemNode_nn)
     {
-        auto& blockItem = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
-        const auto stmtNode = match(blockItem,
-            with {
-                [](const Handle<StmtNode>& stmtNode) { return stmtNode; },
-                [](const auto&) { return Handle<StmtNode> {}; },
-            });
+        auto& blockItem
+            = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
+        const auto stmtNode = MATCH(blockItem)
+            WITH([](const Handle<StmtNode>& stmtNode) { return stmtNode; },
+                [](const auto&) { return Handle<StmtNode> { }; }, );
         require(stmtNode, "expected statement block item variant");
         return stmtNode;
     }
@@ -184,12 +175,11 @@ struct AstTestHelperBase {
     [[nodiscard]] Handle<DeclNode> extractDeclNode(
         this Self& self, const Handle<BlockItemNode>& blockItemNode_nn)
     {
-        auto& blockItem = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
-        const auto declNode = match(blockItem,
-            with {
-                [](const Handle<DeclNode>& declNode) { return declNode; },
-                [](const auto&) { return Handle<DeclNode> {}; },
-            });
+        auto& blockItem
+            = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
+        const auto declNode = MATCH(blockItem)
+            WITH([](const Handle<DeclNode>& declNode) { return declNode; },
+                [](const auto&) { return Handle<DeclNode> { }; }, );
         require(declNode, "expected declaration block item variant");
         return declNode;
     }
@@ -199,11 +189,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto returnStmt = match(stmt,
-            with {
-                [](const Handle<ReturnStmt>& returnStmt) { return returnStmt; },
-                [](const auto&) { return Handle<ReturnStmt> {}; },
-            });
+        const auto returnStmt = MATCH(stmt) WITH(
+            [](const Handle<ReturnStmt>& returnStmt) { return returnStmt; },
+            [](const auto&) { return Handle<ReturnStmt> { }; }, );
         require(returnStmt, "expected return statement variant");
         return returnStmt;
     }
@@ -220,11 +208,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto ifStmt = match(stmt,
-            with {
-                [](const Handle<IfStmt>& ifStmt) { return ifStmt; },
-                [](const auto&) { return Handle<IfStmt> {}; },
-            });
+        const auto ifStmt = MATCH(stmt)
+            WITH([](const Handle<IfStmt>& ifStmt) { return ifStmt; },
+                [](const auto&) { return Handle<IfStmt> { }; }, );
         require(ifStmt != nullptr, "expected if statement variant");
         return ifStmt;
     }
@@ -241,11 +227,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto whileStmt = match(stmt,
-            with {
-                [](const Handle<WhileStmt>& whileStmt) { return whileStmt; },
-                [](const auto&) { return Handle<WhileStmt> {}; },
-            });
+        const auto whileStmt = MATCH(stmt)
+            WITH([](const Handle<WhileStmt>& whileStmt) { return whileStmt; },
+                [](const auto&) { return Handle<WhileStmt> { }; }, );
         require(whileStmt != nullptr, "expected while statement variant");
         return whileStmt;
     }
@@ -262,11 +246,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto breakStmt = match(stmt,
-            with {
-                [](const Handle<BreakStmt>& breakStmt) { return breakStmt; },
-                [](const auto&) { return Handle<BreakStmt> {}; },
-            });
+        const auto breakStmt = MATCH(stmt)
+            WITH([](const Handle<BreakStmt>& breakStmt) { return breakStmt; },
+                [](const auto&) { return Handle<BreakStmt> { }; }, );
         require(breakStmt != nullptr, "expected break statement variant");
         return breakStmt;
     }
@@ -276,11 +258,11 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto continueStmt = match(stmt,
-            with {
-                [](const Handle<ContinueStmt>& continueStmt) { return continueStmt; },
-                [](const auto&) { return Handle<ContinueStmt> {}; },
-            });
+        const auto continueStmt = MATCH(stmt) WITH(
+            [](const Handle<ContinueStmt>& continueStmt) {
+                return continueStmt;
+            },
+            [](const auto&) { return Handle<ContinueStmt> { }; }, );
         require(continueStmt != nullptr, "expected continue statement variant");
         return continueStmt;
     }
@@ -290,11 +272,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto assignStmt = match(stmt,
-            with {
-                [](const Handle<AssignStmt>& assignStmt) { return assignStmt; },
-                [](const auto&) { return Handle<AssignStmt> {}; },
-            });
+        const auto assignStmt = MATCH(stmt) WITH(
+            [](const Handle<AssignStmt>& assignStmt) { return assignStmt; },
+            [](const auto&) { return Handle<AssignStmt> { }; }, );
         require(assignStmt != nullptr, "expected assignment statement variant");
         return assignStmt;
     }
@@ -311,11 +291,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto expStmt = match(stmt,
-            with {
-                [](const Handle<ExpStmt>& expStmt) { return expStmt; },
-                [](const auto&) { return Handle<ExpStmt> {}; },
-            });
+        const auto expStmt = MATCH(stmt)
+            WITH([](const Handle<ExpStmt>& expStmt) { return expStmt; },
+                [](const auto&) { return Handle<ExpStmt> { }; }, );
         require(expStmt != nullptr, "expected expression statement variant");
         return expStmt;
     }
@@ -332,11 +310,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<StmtNode>& stmtNode)
     {
         auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto block = match(stmt,
-            with {
-                [](const Handle<Block>& block) { return block; },
-                [](const auto&) { return Handle<Block> {}; },
-            });
+        const auto block
+            = MATCH(stmt) WITH([](const Handle<Block>& block) { return block; },
+                [](const auto&) { return Handle<Block> { }; }, );
         require(block != nullptr, "expected block statement variant");
         return block;
     }
@@ -353,11 +329,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<DeclNode>& declNode_nn)
     {
         auto& decl = declNode_nn(self.ast()).m_decl;
-        const auto constDecl = match(decl,
-            with {
-                [](const Handle<ConstDecl>& constDecl) { return constDecl; },
-                [](const auto&) { return Handle<ConstDecl> {}; },
-            });
+        const auto constDecl = MATCH(decl)
+            WITH([](const Handle<ConstDecl>& constDecl) { return constDecl; },
+                [](const auto&) { return Handle<ConstDecl> { }; }, );
         require(constDecl, "expected const declaration variant");
         return constDecl;
     }
@@ -367,11 +341,9 @@ struct AstTestHelperBase {
         this Self& self, const Handle<DeclNode>& declNode_nn)
     {
         auto& decl = declNode_nn(self.ast()).m_decl;
-        const auto varDecl = match(decl,
-            with {
-                [](const Handle<VarDecl>& varDecl) { return varDecl; },
-                [](const auto&) { return Handle<VarDecl> {}; },
-            });
+        const auto varDecl = MATCH(decl)
+            WITH([](const Handle<VarDecl>& varDecl) { return varDecl; },
+                [](const auto&) { return Handle<VarDecl> { }; }, );
         require(varDecl, "expected var declaration variant");
         return varDecl;
     }
@@ -379,9 +351,8 @@ struct AstTestHelperBase {
     template <class Self>
     [[nodiscard]] int32_t evaluateExp(this Self& self, const Handle<Exp>& exp)
     {
-        return match(exp(self.ast()).m_kind,
-            with {
-                [](const Number& number) -> int32_t { return number.m_value; },
+        return MATCH(exp(self.ast()).m_kind)
+            WITH([](const Number& number) -> int32_t { return number.m_value; },
                 [](const LVal&) -> int32_t {
                     fail("cannot evaluate lvalue expression");
                 },
@@ -432,21 +403,18 @@ struct AstTestHelperBase {
                         return (lhsValue != 0 || rhsValue != 0) ? 1 : 0;
                     }
                     fail("unexpected binary operator");
-                },
-            });
+                }, );
     }
 
     template <class Self>
     [[nodiscard]] Handle<Exp> requireScalarConstInitExp(
         this Self& self, const Handle<ConstInitVal>& initVal_nn)
     {
-        const auto exp_nn = match(initVal_nn(self.ast()).m_kind,
-            with {
-                [](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> {}; },
-            });
-        require(exp_nn != nullptr,
-            "expected scalar const initializer expression");
+        const auto exp_nn = MATCH(initVal_nn(self.ast()).m_kind)
+            WITH([](const Handle<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Handle<Exp> { }; }, );
+        require(
+            exp_nn != nullptr, "expected scalar const initializer expression");
         return exp_nn;
     }
 
@@ -454,11 +422,9 @@ struct AstTestHelperBase {
     [[nodiscard]] Handle<Exp> requireScalarInitExp(
         this Self& self, const Handle<InitVal>& initVal_nn)
     {
-        const auto exp_nn = match(initVal_nn(self.ast()).m_kind,
-            with {
-                [](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> {}; },
-            });
+        const auto exp_nn = MATCH(initVal_nn(self.ast()).m_kind)
+            WITH([](const Handle<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Handle<Exp> { }; }, );
         require(exp_nn != nullptr, "expected scalar initializer expression");
         return exp_nn;
     }
@@ -467,13 +433,11 @@ struct AstTestHelperBase {
     [[nodiscard]] const ConstInitVal::List& requireConstInitList(
         this Self& self, const Handle<ConstInitVal>& initVal_nn)
     {
-        const auto list = match(initVal_nn(self.ast()).m_kind,
-            with {
-                [](const ConstInitVal::List& list) { return &list; },
+        const auto list = MATCH(initVal_nn(self.ast()).m_kind)
+            WITH([](const ConstInitVal::List& list) { return &list; },
                 [](const auto&) {
                     return static_cast<const ConstInitVal::List*>(nullptr);
-                },
-            });
+                }, );
         require(list != nullptr, "expected brace initializer list");
         return *list;
     }
@@ -482,13 +446,11 @@ struct AstTestHelperBase {
     [[nodiscard]] const InitVal::List& requireInitList(
         this Self& self, const Handle<InitVal>& initVal_nn)
     {
-        const auto list = match(initVal_nn(self.ast()).m_kind,
-            with {
-                [](const InitVal::List& list) { return &list; },
+        const auto list = MATCH(initVal_nn(self.ast()).m_kind)
+            WITH([](const InitVal::List& list) { return &list; },
                 [](const auto&) {
                     return static_cast<const InitVal::List*>(nullptr);
-                },
-            });
+                }, );
         require(list != nullptr, "expected brace initializer list");
         return *list;
     }
@@ -497,14 +459,10 @@ struct AstTestHelperBase {
     [[nodiscard]] Handle<DeclNode> requireTopLevelDecl(
         this Self& self, const Handle<TopLevelItemNode>& topLevelItemNode_nn)
     {
-        const auto declNode_nn = match(
-            topLevelItemNode_nn(self.ast()).m_topLevelItem,
-            with {
-                [](const Handle<DeclNode>& declNode_nn) {
-                    return declNode_nn;
-                },
-                [](const auto&) { return Handle<DeclNode> {}; },
-            });
+        const auto declNode_nn
+            = MATCH(topLevelItemNode_nn(self.ast()).m_topLevelItem) WITH(
+                [](const Handle<DeclNode>& declNode_nn) { return declNode_nn; },
+                [](const auto&) { return Handle<DeclNode> { }; });
         require(declNode_nn != nullptr, "expected top-level declaration");
         return declNode_nn;
     }
@@ -513,34 +471,28 @@ struct AstTestHelperBase {
     [[nodiscard]] Handle<FuncDef> requireTopLevelFunc(
         this Self& self, const Handle<TopLevelItemNode>& topLevelItemNode_nn)
     {
-        const auto funcDef_nn = match(
-            topLevelItemNode_nn(self.ast()).m_topLevelItem,
-            with {
-                [](const Handle<FuncDef>& funcDef_nn) {
-                    return funcDef_nn;
-                },
-                [](const auto&) { return Handle<FuncDef> {}; },
-            });
-        require(funcDef_nn != nullptr,
-            "expected top-level function definition");
+        const auto funcDef_nn
+            = MATCH(topLevelItemNode_nn(self.ast()).m_topLevelItem) WITH(
+                [](const Handle<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                [](const auto&) { return Handle<FuncDef> { }; }, );
+        require(
+            funcDef_nn != nullptr, "expected top-level function definition");
         return funcDef_nn;
     }
 
     template <class Self>
-    [[nodiscard]] Handle<FuncDef> requireFuncDefByName(
-        this Self& self, const Handle<CompUnit>& compUnit_nn,
-        const std::string& expectedName)
+    [[nodiscard]] Handle<FuncDef> requireFuncDefByName(this Self& self,
+        const Handle<CompUnit>& compUnit_nn, const std::string& expectedName)
     {
         require(compUnit_nn != nullptr, "expected compilation unit node");
-        for (const auto topLevelItem_nn : compUnit_nn(self.ast()).m_topLevelItems) {
-            const auto funcDef_nn = match(
-                topLevelItem_nn(self.ast()).m_topLevelItem,
-                with {
+        for (const auto topLevelItem_nn :
+            compUnit_nn(self.ast()).m_topLevelItems) {
+            const auto funcDef_nn
+                = MATCH(topLevelItem_nn(self.ast()).m_topLevelItem) WITH(
                     [](const Handle<FuncDef>& funcDef_nn) {
                         return funcDef_nn;
                     },
-                    [](const auto&) { return Handle<FuncDef> {}; },
-                });
+                    [](const auto&) { return Handle<FuncDef> { }; }, );
             if (funcDef_nn != nullptr
                 && funcDef_nn(self.ast()).m_identifier_nn(self.ast()).m_name
                     == expectedName) {
@@ -554,29 +506,29 @@ struct AstTestHelperBase {
     [[nodiscard]] const Exp::Call& requireCallExp(
         this Self& self, const Handle<Exp>& exp_nn)
     {
-        const auto callExp = match(exp_nn(self.ast()).m_kind,
-            with {
-                [](const Exp::Call& callExp) { return &callExp; },
-                [](const auto&) { return static_cast<const Exp::Call*>(nullptr); },
-            });
+        const auto callExp = MATCH(exp_nn(self.ast()).m_kind)
+            WITH([](const Exp::Call& callExp) { return &callExp; },
+                [](const auto&) {
+                    return static_cast<const Exp::Call*>(nullptr);
+                }, );
         require(callExp != nullptr, "expected call expression root");
         return *callExp;
     }
 };
 
-struct TestBase : AstTestHelperBase {};
+struct TestBase : AstTestHelperBase { };
 
 inline HandleView<FuncDef> firstFuncDef(const Handle<CompUnit>& compUnit_nn)
 {
     require(compUnit_nn != nullptr, "expected compilation unit node");
-    for (const auto topLevelItem_nn : compUnit_nn(currentAst()).m_topLevelItems) {
-        const auto funcDef_nn = match(topLevelItem_nn(currentAst()).m_topLevelItem,
-            with {
+    for (const auto topLevelItem_nn :
+        compUnit_nn(currentAst()).m_topLevelItems) {
+        const auto funcDef_nn
+            = MATCH(topLevelItem_nn(currentAst()).m_topLevelItem) WITH(
                 [](const Handle<FuncDef>& funcDef_nn) {
                     return HandleView<FuncDef>(funcDef_nn);
                 },
-                [](const auto&) { return HandleView<FuncDef> {}; },
-            });
+                [](const auto&) { return HandleView<FuncDef> { }; }, );
         if (funcDef_nn) {
             return funcDef_nn;
         }

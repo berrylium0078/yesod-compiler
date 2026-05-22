@@ -158,11 +158,9 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
     for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
         const auto& topLevelItem
             = node(topLevelItem_nn, "top-level item is missing");
-        match(topLevelItem.m_topLevelItem,
-            with {
-                [&](Handle<DeclNode> declNode) { analyzeDeclNode(declNode); },
-                [&](Handle<FuncDef> funcDef) { declareFuncDef(funcDef); },
-            });
+        MATCH(topLevelItem.m_topLevelItem)
+        WITH([&](Handle<DeclNode> declNode) { analyzeDeclNode(declNode); },
+            [&](Handle<FuncDef> funcDef) { declareFuncDef(funcDef); });
     }
 
     for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
@@ -173,18 +171,18 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
         if (!decl)
             continue;
         auto& declNode = node(*decl, "declaration payload is missing");
-        match(declNode.m_decl,
-            with { [&](Handle<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
-                [](const auto&) { } });
+        MATCH(declNode.m_decl)
+        WITH([&](Handle<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
+            [](const auto&) { });
     }
 
     for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
         const auto& topLevelItem
             = node(topLevelItem_nn, "top-level item is missing");
 
-        match(topLevelItem.m_topLevelItem,
-            with { [&](Handle<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
-                [](const auto&) { } });
+        MATCH(topLevelItem.m_topLevelItem)
+        WITH([&](Handle<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
+            [](const auto&) { });
     }
 }
 
@@ -305,18 +303,17 @@ void SemanticAnalyzer::analyzeBlockItemNode(
 {
     const auto& blockItemNode
         = node(blockItemNode_nn, "block contains a null item");
-    match(blockItemNode.m_blockItem,
-        with { [&](Handle<DeclNode> decl) { analyzeDeclNode(decl); },
-            [&](Handle<StmtNode> stmt) { analyzeStmtNode(stmt); } });
+    MATCH(blockItemNode.m_blockItem)
+    WITH([&](Handle<DeclNode> decl) { analyzeDeclNode(decl); },
+        [&](Handle<StmtNode> stmt) { analyzeStmtNode(stmt); });
 }
 
 void SemanticAnalyzer::analyzeDeclNode(Handle<DeclNode> declNode_nn)
 {
     const auto& declNode = node(declNode_nn, "declaration payload is missing");
-    match(declNode.m_decl,
-        with {
-            [&](Handle<ConstDecl> constDecl) { analyzeConstDecl(constDecl); },
-            [&](Handle<VarDecl> varDecl) { analyzeVarDecl(varDecl); } });
+    MATCH(declNode.m_decl)
+    WITH([&](Handle<ConstDecl> constDecl) { analyzeConstDecl(constDecl); },
+        [&](Handle<VarDecl> varDecl) { analyzeVarDecl(varDecl); });
 }
 
 void SemanticAnalyzer::analyzeConstDecl(Handle<ConstDecl> constDecl_nn)
@@ -450,53 +447,53 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
         hasRemainingWarning = true;
     };
 
-    match(init.m_kind,
-        with {
-            [&](Handle<Exp> expr) {
-                if (!expectedType.isArray()) {
-                    analyzedInit = analyzeExp(expr);
-                    ++nextIndex;
-                    if (analyzedInit.m_type.isVoid()
-                        || analyzedInit.m_type.isArray()) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            init.m_sourcePos.m_offset,
-                            "const initializer must produce an integer value");
-                    }
-                    if (!analyzedInit.m_isConstant) {
-                        recordDiagnostic(
-                            SemanticDiagnosticKind::nonConstantConstInitializer,
-                            init.m_sourcePos.m_offset,
-                            "const initializer must be a constant expression");
-                    }
-                } else {
-                    const std::vector<Handle<ConstInitVal>> singleton {
-                        constInitVal_nn
-                    };
-                    size_t nextValueIndex = 0;
-                    analyzedInit = analyzeConstInitSequence(singleton,
-                        nextValueIndex, expectedType, hasRemainingWarning);
-                    nextIndex += nextValueIndex;
+    MATCH(init.m_kind)
+    WITH(
+        [&](Handle<Exp> expr) {
+            if (!expectedType.isArray()) {
+                analyzedInit = analyzeExp(expr);
+                ++nextIndex;
+                if (analyzedInit.m_type.isVoid()
+                    || analyzedInit.m_type.isArray()) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        init.m_sourcePos.m_offset,
+                        "const initializer must produce an integer value");
                 }
-            },
-            [&](const ConstInitVal::List& initList) {
-                auto& initValues = initList.m_values;
-                if (!expectedType.isArray()) {
-                    if (!initValues.empty()) {
-                        size_t consumed = 0;
-                        analyzedInit = analyzeConstInitVal(initValues.front(),
-                            expectedType, false, consumed, hasRemainingWarning);
-                        nextIndex += consumed;
-                    }
-                    if (initValues.size() > 1) {
-                        recordExcessInitializer(init.m_sourcePos.m_offset);
-                    }
-                } else {
-                    size_t nextValueIndex = 0;
-                    analyzedInit = analyzeConstInitSequence(initValues,
-                        nextValueIndex, expectedType, hasRemainingWarning);
-                    nextIndex += nextValueIndex;
+                if (!analyzedInit.m_isConstant) {
+                    recordDiagnostic(
+                        SemanticDiagnosticKind::nonConstantConstInitializer,
+                        init.m_sourcePos.m_offset,
+                        "const initializer must be a constant expression");
                 }
-            } });
+            } else {
+                const std::vector<Handle<ConstInitVal>> singleton {
+                    constInitVal_nn
+                };
+                size_t nextValueIndex = 0;
+                analyzedInit = analyzeConstInitSequence(singleton,
+                    nextValueIndex, expectedType, hasRemainingWarning);
+                nextIndex += nextValueIndex;
+            }
+        },
+        [&](const ConstInitVal::List& initList) {
+            auto& initValues = initList.m_values;
+            if (!expectedType.isArray()) {
+                if (!initValues.empty()) {
+                    size_t consumed = 0;
+                    analyzedInit = analyzeConstInitVal(initValues.front(),
+                        expectedType, false, consumed, hasRemainingWarning);
+                    nextIndex += consumed;
+                }
+                if (initValues.size() > 1) {
+                    recordExcessInitializer(init.m_sourcePos.m_offset);
+                }
+            } else {
+                size_t nextValueIndex = 0;
+                analyzedInit = analyzeConstInitSequence(initValues,
+                    nextValueIndex, expectedType, hasRemainingWarning);
+                nextIndex += nextValueIndex;
+            }
+        });
 
     if (isOutermost && expectedType.isArray()) {
         analyzedInit.m_isConstant = false;
@@ -534,19 +531,18 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
         i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
         const auto& child = node(
             values[nextValueIndex], "const initializer element is missing");
-        match(child.m_kind,
-            with {
-                [&](Handle<Exp>) {
-                    (void)analyzeConstInitSequence(values, nextValueIndex,
-                        *expectedType.m_elementType, hasRemainingWarning);
-                },
-                [&](const ConstInitVal::List&) {
-                    size_t consumed = 0;
-                    (void)analyzeConstInitVal(values[nextValueIndex],
-                        *expectedType.m_elementType, false, consumed,
-                        hasRemainingWarning);
-                    ++nextValueIndex;
-                },
+        MATCH(child.m_kind)
+        WITH(
+            [&](Handle<Exp>) {
+                (void)analyzeConstInitSequence(values, nextValueIndex,
+                    *expectedType.m_elementType, hasRemainingWarning);
+            },
+            [&](const ConstInitVal::List&) {
+                size_t consumed = 0;
+                (void)analyzeConstInitVal(values[nextValueIndex],
+                    *expectedType.m_elementType, false, consumed,
+                    hasRemainingWarning);
+                ++nextValueIndex;
             });
     }
 
@@ -580,54 +576,53 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
         hasRemainingWarning = true;
     };
 
-    match(init.m_kind,
-        with {
-            [&](Handle<Exp> initAlt) {
-                if (!expectedType.isArray()) {
-                    analyzedInit = analyzeExp(initAlt);
-                    ++nextIndex;
-                    if (analyzedInit.m_type.isVoid()
-                        || analyzedInit.m_type.isArray()) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            init.m_sourcePos.m_offset,
-                            "variable initializer must produce an integer "
-                            "value");
-                    }
-                    if (isGlobal && !analyzedInit.m_isConstant) {
-                        recordDiagnostic(SemanticDiagnosticKind::
-                                             nonConstantGlobalInitializer,
-                            init.m_sourcePos.m_offset,
-                            "global initializer must be a constant "
-                            "expression");
-                    }
-                } else {
-                    const std::vector<Handle<InitVal>> singleton { initVal_nn };
-                    size_t nextValueIndex = 0;
-                    analyzedInit = analyzeInitSequence(singleton, nextValueIndex,
+    MATCH(init.m_kind)
+    WITH(
+        [&](Handle<Exp> initAlt) {
+            if (!expectedType.isArray()) {
+                analyzedInit = analyzeExp(initAlt);
+                ++nextIndex;
+                if (analyzedInit.m_type.isVoid()
+                    || analyzedInit.m_type.isArray()) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        init.m_sourcePos.m_offset,
+                        "variable initializer must produce an integer "
+                        "value");
+                }
+                if (isGlobal && !analyzedInit.m_isConstant) {
+                    recordDiagnostic(
+                        SemanticDiagnosticKind::nonConstantGlobalInitializer,
+                        init.m_sourcePos.m_offset,
+                        "global initializer must be a constant "
+                        "expression");
+                }
+            } else {
+                const std::vector<Handle<InitVal>> singleton { initVal_nn };
+                size_t nextValueIndex = 0;
+                analyzedInit = analyzeInitSequence(singleton, nextValueIndex,
+                    expectedType, isGlobal, hasRemainingWarning);
+                nextIndex += nextValueIndex;
+            }
+        },
+        [&](const InitVal::List& initAlt) {
+            if (!expectedType.isArray()) {
+                if (!initAlt.m_values.empty()) {
+                    size_t consumed = 0;
+                    analyzedInit
+                        = analyzeInitVal(initAlt.m_values.front(), expectedType,
+                            isGlobal, false, consumed, hasRemainingWarning);
+                    nextIndex += consumed;
+                }
+                if (initAlt.m_values.size() > 1) {
+                    recordExcessInitializer(init.m_sourcePos.m_offset);
+                }
+            } else {
+                size_t nextValueIndex = 0;
+                analyzedInit
+                    = analyzeInitSequence(initAlt.m_values, nextValueIndex,
                         expectedType, isGlobal, hasRemainingWarning);
-                    nextIndex += nextValueIndex;
-                }
-            },
-            [&](const InitVal::List& initAlt) {
-                if (!expectedType.isArray()) {
-                    if (!initAlt.m_values.empty()) {
-                        size_t consumed = 0;
-                        analyzedInit = analyzeInitVal(initAlt.m_values.front(),
-                            expectedType, isGlobal, false, consumed,
-                            hasRemainingWarning);
-                        nextIndex += consumed;
-                    }
-                    if (initAlt.m_values.size() > 1) {
-                        recordExcessInitializer(init.m_sourcePos.m_offset);
-                    }
-                } else {
-                    size_t nextValueIndex = 0;
-                    analyzedInit = analyzeInitSequence(initAlt.m_values,
-                        nextValueIndex, expectedType, isGlobal,
-                        hasRemainingWarning);
-                    nextIndex += nextValueIndex;
-                }
-            },
+                nextIndex += nextValueIndex;
+            }
         });
 
     if (isOutermost && expectedType.isArray()) {
@@ -666,20 +661,18 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
         i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
         const auto& child
             = node(values[nextValueIndex], "initializer element is missing");
-        match(child.m_kind,
-            with {
-                [&](Handle<Exp>) {
-                    (void)analyzeInitSequence(values, nextValueIndex,
-                        *expectedType.m_elementType, isGlobal,
-                        hasRemainingWarning);
-                },
-                [&](const InitVal::List&) {
-                    size_t consumed = 0;
-                    (void)analyzeInitVal(values[nextValueIndex],
-                        *expectedType.m_elementType, isGlobal, false,
-                        consumed, hasRemainingWarning);
-                    ++nextValueIndex;
-                },
+        MATCH(child.m_kind)
+        WITH(
+            [&](Handle<Exp>) {
+                (void)analyzeInitSequence(values, nextValueIndex,
+                    *expectedType.m_elementType, isGlobal, hasRemainingWarning);
+            },
+            [&](const InitVal::List&) {
+                size_t consumed = 0;
+                (void)analyzeInitVal(values[nextValueIndex],
+                    *expectedType.m_elementType, isGlobal, false, consumed,
+                    hasRemainingWarning);
+                ++nextValueIndex;
             });
     }
 
@@ -694,23 +687,17 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
 void SemanticAnalyzer::analyzeStmtNode(Handle<StmtNode> stmtNode_nn)
 {
     const auto& stmtNode = node(stmtNode_nn, "statement payload is missing");
-    match(stmtNode.m_stmt,
-        with {
-            [&](Handle<IfStmt> ifStmt) { analyzeIfStmt(ifStmt); },
-            [&](Handle<WhileStmt> whileStmt) { analyzeWhileStmt(whileStmt); },
-            [&](Handle<BreakStmt> breakStmt) { analyzeBreakStmt(breakStmt); },
-            [&](Handle<ContinueStmt> continueStmt) {
-                analyzeContinueStmt(continueStmt);
-            },
-            [&](Handle<AssignStmt> assignStmt) {
-                analyzeAssignStmt(assignStmt);
-            },
-            [&](Handle<Block> block) { analyzeBlock(block); },
-            [&](Handle<ReturnStmt> returnStmt) {
-                analyzeReturnStmt(returnStmt);
-            },
-            [&](Handle<ExpStmt> expStmt) { analyzeExpStmt(expStmt); },
-        });
+    MATCH(stmtNode.m_stmt)
+    WITH([&](Handle<IfStmt> ifStmt) { analyzeIfStmt(ifStmt); },
+        [&](Handle<WhileStmt> whileStmt) { analyzeWhileStmt(whileStmt); },
+        [&](Handle<BreakStmt> breakStmt) { analyzeBreakStmt(breakStmt); },
+        [&](Handle<ContinueStmt> continueStmt) {
+            analyzeContinueStmt(continueStmt);
+        },
+        [&](Handle<AssignStmt> assignStmt) { analyzeAssignStmt(assignStmt); },
+        [&](Handle<Block> block) { analyzeBlock(block); },
+        [&](Handle<ReturnStmt> returnStmt) { analyzeReturnStmt(returnStmt); },
+        [&](Handle<ExpStmt> expStmt) { analyzeExpStmt(expStmt); });
 }
 
 void SemanticAnalyzer::analyzeIfStmt(Handle<IfStmt> ifStmt_nn)
@@ -767,47 +754,46 @@ void SemanticAnalyzer::analyzeAssignStmt(Handle<AssignStmt> assignStmt_nn)
         = node(assignStmt_nn, "assignment statement payload is missing");
     const auto& lValExp
         = node(assignStmt.m_lVal_nn, "assignment is missing an lvalue");
-    match(lValExp.m_kind,
-        with {
-            [&](LVal expAlt) {
-                const auto& identifier = node(expAlt.m_identifier_nn,
-                    "assignment lvalue is missing an identifier");
-                (void)resolveSymbol(expAlt.m_identifier_nn);
-                const auto* symbol = m_info.findSymbol(expAlt.m_identifier_nn);
-                if (symbol != nullptr && symbol->m_isConst) {
-                    recordDiagnostic(SemanticDiagnosticKind::assignToConst,
-                        identifier.m_sourcePos.m_offset,
-                        "cannot assign to const '" + symbol->m_name + "'");
+    MATCH(lValExp.m_kind)
+    WITH(
+        [&](LVal expAlt) {
+            const auto& identifier = node(expAlt.m_identifier_nn,
+                "assignment lvalue is missing an identifier");
+            (void)resolveSymbol(expAlt.m_identifier_nn);
+            const auto* symbol = m_info.findSymbol(expAlt.m_identifier_nn);
+            if (symbol != nullptr && symbol->m_isConst) {
+                recordDiagnostic(SemanticDiagnosticKind::assignToConst,
+                    identifier.m_sourcePos.m_offset,
+                    "cannot assign to const '" + symbol->m_name + "'");
+            }
+            auto currentType = symbol != nullptr ? symbol->m_type
+                                                 : SemanticType::makeInteger();
+            for (const auto index_nn : expAlt.m_indices) {
+                const auto analyzedIndex = analyzeExp(index_nn);
+                if (!isScalarType(analyzedIndex.m_type)) {
+                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                        node(index_nn, "array subscript is missing")
+                            .m_sourcePos.m_offset,
+                        "array subscript must produce an integer value");
                 }
-                auto currentType = symbol != nullptr ? symbol->m_type
-                                                     : SemanticType::makeInteger();
-                for (const auto index_nn : expAlt.m_indices) {
-                    const auto analyzedIndex = analyzeExp(index_nn);
-                    if (!isScalarType(analyzedIndex.m_type)) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            node(index_nn, "array subscript is missing")
-                                .m_sourcePos.m_offset,
-                            "array subscript must produce an integer value");
-                    }
-                    if (!currentType.isArray()
-                        || currentType.m_elementType == nullptr) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            identifier.m_sourcePos.m_offset,
-                            "subscripted assignment target is not an array");
-                        break;
-                    }
-                    currentType = *currentType.m_elementType;
-                }
-                if (currentType.isArray()) {
+                if (!currentType.isArray()
+                    || currentType.m_elementType == nullptr) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
                         identifier.m_sourcePos.m_offset,
-                        "assignment target must designate an integer object");
+                        "subscripted assignment target is not an array");
+                    break;
                 }
-            },
-            [&](const auto&) {
-                throw std::runtime_error(
-                    "assignment lhs is not an lvalue expression");
-            },
+                currentType = *currentType.m_elementType;
+            }
+            if (currentType.isArray()) {
+                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    identifier.m_sourcePos.m_offset,
+                    "assignment target must designate an integer object");
+            }
+        },
+        [&](const auto&) {
+            throw std::runtime_error(
+                "assignment lhs is not an lvalue expression");
         });
 
     const auto analyzedExp = analyzeExp(assignStmt.m_exp_nn);
@@ -864,287 +850,288 @@ void SemanticAnalyzer::analyzeReturnStmt(Handle<ReturnStmt> returnStmt_nn)
     }
 }
 
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
+    const Exp& exp, const Exp::Binary& binary)
+{
+    auto lhs = analyzeExp(binary.m_lhs_nn);
+    auto rhs = analyzeExp(binary.m_rhs_nn);
+    AnalyzedExp binaryExp {
+        .m_type = SemanticType::makeInteger(),
+        .m_valueKind = ExpType::integer,
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+
+    if (!isScalarType(lhs.m_type) || !isScalarType(rhs.m_type)) {
+        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+            exp.m_sourcePos.m_offset,
+            "binary operator requires integer operands");
+        return binaryExp;
+    }
+
+    switch (binary.m_op) {
+    case BinaryOpKeyword::orOr:
+        lhs = normalizeToBoolean(std::move(lhs));
+        rhs = normalizeToBoolean(std::move(rhs));
+        binaryExp.m_type = SemanticType::makeBoolean();
+        binaryExp.m_valueKind = ExpType::boolean;
+        if (lhs.m_isConstant && rhs.m_isConstant) {
+            binaryExp.m_isConstant = true;
+            binaryExp.m_constantValue = applyLOrOp(
+                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+        }
+        break;
+    case BinaryOpKeyword::andAnd:
+        lhs = normalizeToBoolean(std::move(lhs));
+        rhs = normalizeToBoolean(std::move(rhs));
+        binaryExp.m_type = SemanticType::makeBoolean();
+        binaryExp.m_valueKind = ExpType::boolean;
+        if (lhs.m_isConstant && rhs.m_isConstant) {
+            binaryExp.m_isConstant = true;
+            binaryExp.m_constantValue = applyLAndOp(
+                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+        }
+        break;
+    case BinaryOpKeyword::equal:
+    case BinaryOpKeyword::notEqual:
+        lhs = normalizeToArithmetic(std::move(lhs));
+        rhs = normalizeToArithmetic(std::move(rhs));
+        binaryExp.m_type = SemanticType::makeBoolean();
+        binaryExp.m_valueKind = ExpType::boolean;
+        if (lhs.m_isConstant && rhs.m_isConstant) {
+            binaryExp.m_isConstant = true;
+            binaryExp.m_constantValue = applyEqOp(
+                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+        }
+        break;
+    case BinaryOpKeyword::less:
+    case BinaryOpKeyword::greater:
+    case BinaryOpKeyword::lessEqual:
+    case BinaryOpKeyword::greaterEqual:
+        lhs = normalizeToArithmetic(std::move(lhs));
+        rhs = normalizeToArithmetic(std::move(rhs));
+        binaryExp.m_type = SemanticType::makeBoolean();
+        binaryExp.m_valueKind = ExpType::boolean;
+        if (lhs.m_isConstant && rhs.m_isConstant) {
+            binaryExp.m_isConstant = true;
+            binaryExp.m_constantValue = applyRelOp(
+                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+        }
+        break;
+    case BinaryOpKeyword::star:
+    case BinaryOpKeyword::slash:
+    case BinaryOpKeyword::percent:
+    case BinaryOpKeyword::plus:
+    case BinaryOpKeyword::minus:
+        lhs = normalizeToArithmetic(std::move(lhs));
+        rhs = normalizeToArithmetic(std::move(rhs));
+        if (lhs.m_isConstant && rhs.m_isConstant) {
+            const auto folded = applyArithmeticOp(
+                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+            if (folded.has_value()) {
+                binaryExp.m_isConstant = true;
+                binaryExp.m_constantValue = *folded;
+            }
+        }
+        break;
+    }
+    return binaryExp;
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
+    const Exp& exp, const Exp::Unary& unary)
+{
+    auto operand = analyzeExp(unary.m_lhs_nn);
+    if (!isScalarType(operand.m_type)) {
+        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+            exp.m_sourcePos.m_offset,
+            "unary operator requires an integer value operand");
+        return AnalyzedExp {
+            .m_type = unary.m_op == UnaryOpKeyword::bang
+                ? SemanticType::makeBoolean()
+                : SemanticType::makeInteger(),
+            .m_valueKind = unary.m_op == UnaryOpKeyword::bang
+                ? ExpType::boolean
+                : ExpType::integer,
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+    }
+    if (unary.m_op == UnaryOpKeyword::bang) {
+        operand = normalizeToBoolean(std::move(operand));
+    } else {
+        operand = normalizeToArithmetic(std::move(operand));
+    }
+    if (operand.m_isConstant) {
+        const auto folded = applyUnaryOp(unary.m_op, operand.m_constantValue);
+        if (folded.has_value()) {
+            return AnalyzedExp {
+                .m_type = unary.m_op == UnaryOpKeyword::bang
+                    ? SemanticType::makeBoolean()
+                    : SemanticType::makeInteger(),
+                .m_valueKind = unary.m_op == UnaryOpKeyword::bang
+                    ? ExpType::boolean
+                    : ExpType::integer,
+                .m_isConstant = true,
+                .m_constantValue = *folded,
+            };
+        }
+    }
+    return AnalyzedExp {
+        .m_type = unary.m_op == UnaryOpKeyword::bang
+            ? SemanticType::makeBoolean()
+            : SemanticType::makeInteger(),
+        .m_valueKind = unary.m_op == UnaryOpKeyword::bang ? ExpType::boolean
+                                                          : ExpType::integer,
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCallExp(
+    const Exp& exp, const Exp::Call& call)
+{
+    const auto definitionIdentifier = lookupSymbol(
+        node(call.m_func_nn, "call expression is missing a callee").m_name);
+    if (!definitionIdentifier.has_value()) {
+        const auto& calleeIdentifier
+            = node(call.m_func_nn, "call expression is missing a callee");
+        recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
+            calleeIdentifier.m_sourcePos.m_offset,
+            "use of '" + calleeIdentifier.m_name + "' before definition");
+        bindSymbol(call.m_func_nn, makePlaceholderSymbol(call.m_func_nn));
+        for (const auto arg_nn : call.m_params) {
+            const auto analyzedArg = analyzeExp(arg_nn);
+            if (analyzedArg.m_valueKind == ExpType::voidType) {
+                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    exp.m_sourcePos.m_offset,
+                    "call arguments must produce integer values");
+            }
+        }
+        return AnalyzedExp {
+            .m_type = SemanticType::makeInteger(),
+            .m_valueKind = ExpType::integer,
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+    }
+    const auto* calleeSymbol = m_info.findSymbol(*definitionIdentifier);
+    if (calleeSymbol == nullptr) {
+        throw std::runtime_error(
+            "call target definition is missing symbol binding");
+    }
+    bindSymbol(call.m_func_nn, *calleeSymbol);
+    if (calleeSymbol->m_kind != SemanticSymbolKind::function) {
+        recordDiagnostic(SemanticDiagnosticKind::invalidCallTarget,
+            exp.m_sourcePos.m_offset,
+            "call target '" + calleeSymbol->m_name + "' is not a function");
+    }
+    if (calleeSymbol->m_kind == SemanticSymbolKind::function
+        && calleeSymbol->m_functionSignature.m_paramTypes.size()
+            != call.m_params.size()) {
+        recordDiagnostic(SemanticDiagnosticKind::callArityMismatch,
+            exp.m_sourcePos.m_offset,
+            "call to '" + calleeSymbol->m_name
+                + "' uses the wrong number of arguments");
+    }
+    for (size_t i = 0; i < call.m_params.size(); ++i) {
+        const auto analyzedArg = analyzeExp(call.m_params[i]);
+        if (analyzedArg.m_valueKind == ExpType::voidType) {
+            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                exp.m_sourcePos.m_offset,
+                "call arguments must produce integer values");
+        }
+        if (calleeSymbol->m_kind == SemanticSymbolKind::function
+            && i < calleeSymbol->m_functionSignature.m_paramTypes.size()
+            && !typesMatchForCall(
+                calleeSymbol->m_functionSignature.m_paramTypes[i],
+                analyzedArg.m_type)) {
+            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                exp.m_sourcePos.m_offset,
+                "call argument type does not match parameter type");
+        }
+    }
+    return AnalyzedExp {
+        .m_type = calleeSymbol->m_kind == SemanticSymbolKind::function
+            ? calleeSymbol->m_functionSignature.m_returnType
+            : SemanticType::makeInteger(),
+        .m_valueKind = calleeSymbol->m_kind == SemanticSymbolKind::function
+            ? calleeSymbol->m_functionSignature.m_returnType.valueKind()
+            : ExpType::integer,
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+}
+
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
+    const Exp& exp, const LVal& lval)
+{
+    (void)resolveSymbol(lval.m_identifier_nn);
+    const auto* symbol = m_info.findSymbol(lval.m_identifier_nn);
+    if (symbol != nullptr && symbol->m_kind == SemanticSymbolKind::function) {
+        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+            exp.m_sourcePos.m_offset,
+            "function '" + symbol->m_name + "' must be called before use");
+        return AnalyzedExp {
+            .m_type = SemanticType::makeInteger(),
+            .m_valueKind = ExpType::integer,
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+    }
+    auto currentType
+        = symbol != nullptr ? symbol->m_type : SemanticType::makeInteger();
+    for (const auto index_nn : lval.m_indices) {
+        const auto analyzedIndex = analyzeExp(index_nn);
+        if (!isScalarType(analyzedIndex.m_type)) {
+            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                node(index_nn, "array subscript is missing")
+                    .m_sourcePos.m_offset,
+                "array subscript must produce an integer value");
+        }
+        if (!currentType.isArray() || currentType.m_elementType == nullptr) {
+            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                exp.m_sourcePos.m_offset,
+                "subscripted expression is not an array");
+            currentType = SemanticType::makeInteger();
+            break;
+        }
+        currentType = *currentType.m_elementType;
+    }
+    if (symbol != nullptr && lval.m_indices.empty() && symbol->m_isConst
+        && symbol->m_hasConstantValue) {
+        return AnalyzedExp {
+            .m_type = currentType,
+            .m_valueKind = currentType.valueKind(),
+            .m_isConstant = true,
+            .m_constantValue = symbol->m_constantValue,
+        };
+    }
+
+    return AnalyzedExp {
+        .m_type = currentType,
+        .m_valueKind = currentType.valueKind(),
+        .m_isConstant = false,
+        .m_constantValue = 0,
+    };
+}
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
 {
     const auto& exp = node(exp_nn, "expression is missing");
-    auto analyzedExp = match(exp.m_kind,
-        with {
-            [&](Exp::Binary expAlt) -> AnalyzedExp {
-                auto lhs = analyzeExp(expAlt.m_lhs_nn);
-                auto rhs = analyzeExp(expAlt.m_rhs_nn);
-                AnalyzedExp binaryExp {
-                    .m_type = SemanticType::makeInteger(),
-                    .m_valueKind = ExpType::integer,
-                    .m_isConstant = false,
-                    .m_constantValue = 0,
-                };
-
-                if (!isScalarType(lhs.m_type) || !isScalarType(rhs.m_type)) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        exp.m_sourcePos.m_offset,
-                        "binary operator requires integer operands");
-                    return binaryExp;
-                }
-
-                switch (expAlt.m_op) {
-                case BinaryOpKeyword::orOr:
-                    lhs = normalizeToBoolean(std::move(lhs));
-                    rhs = normalizeToBoolean(std::move(rhs));
-                    binaryExp.m_type = SemanticType::makeBoolean();
-                    binaryExp.m_valueKind = ExpType::boolean;
-                    if (lhs.m_isConstant && rhs.m_isConstant) {
-                        binaryExp.m_isConstant = true;
-                        binaryExp.m_constantValue = applyLOrOp(expAlt.m_op,
-                            lhs.m_constantValue, rhs.m_constantValue);
-                    }
-                    break;
-                case BinaryOpKeyword::andAnd:
-                    lhs = normalizeToBoolean(std::move(lhs));
-                    rhs = normalizeToBoolean(std::move(rhs));
-                    binaryExp.m_type = SemanticType::makeBoolean();
-                    binaryExp.m_valueKind = ExpType::boolean;
-                    if (lhs.m_isConstant && rhs.m_isConstant) {
-                        binaryExp.m_isConstant = true;
-                        binaryExp.m_constantValue = applyLAndOp(expAlt.m_op,
-                            lhs.m_constantValue, rhs.m_constantValue);
-                    }
-                    break;
-                case BinaryOpKeyword::equal:
-                case BinaryOpKeyword::notEqual:
-                    lhs = normalizeToArithmetic(std::move(lhs));
-                    rhs = normalizeToArithmetic(std::move(rhs));
-                    binaryExp.m_type = SemanticType::makeBoolean();
-                    binaryExp.m_valueKind = ExpType::boolean;
-                    if (lhs.m_isConstant && rhs.m_isConstant) {
-                        binaryExp.m_isConstant = true;
-                        binaryExp.m_constantValue = applyEqOp(expAlt.m_op,
-                            lhs.m_constantValue, rhs.m_constantValue);
-                    }
-                    break;
-                case BinaryOpKeyword::less:
-                case BinaryOpKeyword::greater:
-                case BinaryOpKeyword::lessEqual:
-                case BinaryOpKeyword::greaterEqual:
-                    lhs = normalizeToArithmetic(std::move(lhs));
-                    rhs = normalizeToArithmetic(std::move(rhs));
-                    binaryExp.m_type = SemanticType::makeBoolean();
-                    binaryExp.m_valueKind = ExpType::boolean;
-                    if (lhs.m_isConstant && rhs.m_isConstant) {
-                        binaryExp.m_isConstant = true;
-                        binaryExp.m_constantValue = applyRelOp(expAlt.m_op,
-                            lhs.m_constantValue, rhs.m_constantValue);
-                    }
-                    break;
-                case BinaryOpKeyword::star:
-                case BinaryOpKeyword::slash:
-                case BinaryOpKeyword::percent:
-                case BinaryOpKeyword::plus:
-                case BinaryOpKeyword::minus:
-                    lhs = normalizeToArithmetic(std::move(lhs));
-                    rhs = normalizeToArithmetic(std::move(rhs));
-                    if (lhs.m_isConstant && rhs.m_isConstant) {
-                        const auto folded = applyArithmeticOp(expAlt.m_op,
-                            lhs.m_constantValue, rhs.m_constantValue);
-                        if (folded.has_value()) {
-                            binaryExp.m_isConstant = true;
-                            binaryExp.m_constantValue = *folded;
-                        }
-                    }
-                    break;
-                }
-                return binaryExp;
-            },
-            [&](Exp::Unary expAlt) -> AnalyzedExp {
-                auto operand = analyzeExp(expAlt.m_lhs_nn);
-                if (!isScalarType(operand.m_type)) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        exp.m_sourcePos.m_offset,
-                        "unary operator requires an integer value operand");
-                    return AnalyzedExp {
-                        .m_type = expAlt.m_op == UnaryOpKeyword::bang
-                            ? SemanticType::makeBoolean()
-                            : SemanticType::makeInteger(),
-                        .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
-                            ? ExpType::boolean
-                            : ExpType::integer,
-                        .m_isConstant = false,
-                        .m_constantValue = 0,
-                    };
-                }
-                if (expAlt.m_op == UnaryOpKeyword::bang) {
-                    operand = normalizeToBoolean(std::move(operand));
-                } else {
-                    operand = normalizeToArithmetic(std::move(operand));
-                }
-                if (operand.m_isConstant) {
-                    const auto folded = applyUnaryOp(
-                        expAlt.m_op, operand.m_constantValue);
-                    if (folded.has_value()) {
-                        return AnalyzedExp {
-                            .m_type = expAlt.m_op == UnaryOpKeyword::bang
-                                ? SemanticType::makeBoolean()
-                                : SemanticType::makeInteger(),
-                            .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
-                                ? ExpType::boolean
-                                : ExpType::integer,
-                            .m_isConstant = true,
-                            .m_constantValue = *folded,
-                        };
-                    }
-                }
-                return AnalyzedExp {
-                    .m_type = expAlt.m_op == UnaryOpKeyword::bang
-                        ? SemanticType::makeBoolean()
-                        : SemanticType::makeInteger(),
-                    .m_valueKind = expAlt.m_op == UnaryOpKeyword::bang
-                        ? ExpType::boolean
-                        : ExpType::integer,
-                    .m_isConstant = false,
-                    .m_constantValue = 0,
-                };
-            },
-            [&](Exp::Call expAlt) -> AnalyzedExp {
-                const auto definitionIdentifier = lookupSymbol(node(
-                    expAlt.m_func_nn, "call expression is missing a callee")
-                        .m_name);
-                if (!definitionIdentifier.has_value()) {
-                    const auto& calleeIdentifier = node(expAlt.m_func_nn,
-                        "call expression is missing a callee");
-                    recordDiagnostic(
-                        SemanticDiagnosticKind::useBeforeDefinition,
-                        calleeIdentifier.m_sourcePos.m_offset,
-                        "use of '" + calleeIdentifier.m_name
-                            + "' before definition");
-                    bindSymbol(expAlt.m_func_nn,
-                        makePlaceholderSymbol(expAlt.m_func_nn));
-                    for (const auto arg_nn : expAlt.m_params) {
-                        const auto analyzedArg = analyzeExp(arg_nn);
-                        if (analyzedArg.m_valueKind == ExpType::voidType) {
-                            recordDiagnostic(
-                                SemanticDiagnosticKind::typeMismatch,
-                                exp.m_sourcePos.m_offset,
-                                "call arguments must produce integer values");
-                        }
-                    }
-                    return AnalyzedExp {
-                        .m_type = SemanticType::makeInteger(),
-                        .m_valueKind = ExpType::integer,
-                        .m_isConstant = false,
-                        .m_constantValue = 0,
-                    };
-                }
-
-                const auto* calleeSymbol = m_info.findSymbol(*definitionIdentifier);
-                if (calleeSymbol == nullptr) {
-                    throw std::runtime_error(
-                        "call target definition is missing symbol binding");
-                }
-                bindSymbol(expAlt.m_func_nn, *calleeSymbol);
-                if (calleeSymbol->m_kind != SemanticSymbolKind::function) {
-                    recordDiagnostic(SemanticDiagnosticKind::invalidCallTarget,
-                        exp.m_sourcePos.m_offset,
-                        "call target '" + calleeSymbol->m_name
-                            + "' is not a function");
-                }
-                if (calleeSymbol->m_kind == SemanticSymbolKind::function
-                    && calleeSymbol->m_functionSignature.m_paramTypes.size()
-                        != expAlt.m_params.size()) {
-                    recordDiagnostic(SemanticDiagnosticKind::callArityMismatch,
-                        exp.m_sourcePos.m_offset,
-                        "call to '" + calleeSymbol->m_name
-                            + "' uses the wrong number of arguments");
-                }
-                for (size_t i = 0; i < expAlt.m_params.size(); ++i) {
-                    const auto analyzedArg = analyzeExp(expAlt.m_params[i]);
-                    if (analyzedArg.m_valueKind == ExpType::voidType) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            exp.m_sourcePos.m_offset,
-                            "call arguments must produce integer values");
-                    }
-                    if (calleeSymbol->m_kind == SemanticSymbolKind::function
-                        && i < calleeSymbol->m_functionSignature.m_paramTypes.size()
-                        && !typesMatchForCall(
-                            calleeSymbol->m_functionSignature.m_paramTypes[i],
-                            analyzedArg.m_type)) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            exp.m_sourcePos.m_offset,
-                            "call argument type does not match parameter type");
-                    }
-                }
-                return AnalyzedExp {
-                    .m_type = calleeSymbol->m_kind == SemanticSymbolKind::function
-                        ? calleeSymbol->m_functionSignature.m_returnType
-                        : SemanticType::makeInteger(),
-                    .m_valueKind
-                    = calleeSymbol->m_kind == SemanticSymbolKind::function
-                        ? calleeSymbol->m_functionSignature.m_returnType.valueKind()
-                        : ExpType::integer,
-                    .m_isConstant = false,
-                    .m_constantValue = 0,
-                };
-            },
-            [&](LVal expAlt) -> AnalyzedExp {
-                (void)resolveSymbol(expAlt.m_identifier_nn);
-                const auto* symbol = m_info.findSymbol(expAlt.m_identifier_nn);
-                if (symbol != nullptr
-                    && symbol->m_kind == SemanticSymbolKind::function) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        exp.m_sourcePos.m_offset,
-                        "function '" + symbol->m_name
-                            + "' must be called before use");
-                    return AnalyzedExp {
-                        .m_type = SemanticType::makeInteger(),
-                        .m_valueKind = ExpType::integer,
-                        .m_isConstant = false,
-                        .m_constantValue = 0,
-                    };
-                }
-                auto currentType = symbol != nullptr
-                    ? symbol->m_type
-                    : SemanticType::makeInteger();
-                for (const auto index_nn : expAlt.m_indices) {
-                    const auto analyzedIndex = analyzeExp(index_nn);
-                    if (!isScalarType(analyzedIndex.m_type)) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            node(index_nn, "array subscript is missing")
-                                .m_sourcePos.m_offset,
-                            "array subscript must produce an integer value");
-                    }
-                    if (!currentType.isArray()
-                        || currentType.m_elementType == nullptr) {
-                        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                            exp.m_sourcePos.m_offset,
-                            "subscripted expression is not an array");
-                        currentType = SemanticType::makeInteger();
-                        break;
-                    }
-                    currentType = *currentType.m_elementType;
-                }
-                if (symbol != nullptr && expAlt.m_indices.empty()
-                    && symbol->m_isConst && symbol->m_hasConstantValue) {
-                    return AnalyzedExp {
-                        .m_type = currentType,
-                        .m_valueKind = currentType.valueKind(),
-                        .m_isConstant = true,
-                        .m_constantValue = symbol->m_constantValue,
-                    };
-                }
-
-                return AnalyzedExp {
-                    .m_type = currentType,
-                    .m_valueKind = currentType.valueKind(),
-                    .m_isConstant = false,
-                    .m_constantValue = 0,
-                };
-            },
-            [&](Number expAlt) -> AnalyzedExp {
-                return AnalyzedExp {
-                    .m_type = SemanticType::makeInteger(),
-                    .m_valueKind = ExpType::integer,
-                    .m_isConstant = true,
-                    .m_constantValue = expAlt.m_value,
-                };
-            },
+    auto analyzedExp = MATCH(exp.m_kind) WITH(
+        [&](const Exp::Binary& binary) {
+            return analyzeBinaryExp(exp, binary);
+        },
+        [&](const Exp::Unary& unary) { return analyzeUnaryExp(exp, unary); },
+        [&](const Exp::Call& call) { return analyzeCallExp(exp, call); },
+        [&](const LVal& lval) { return analyzeLvalExp(exp, lval); },
+        [&](Number number) {
+            return AnalyzedExp {
+                .m_type = SemanticType::makeInteger(),
+                .m_valueKind = ExpType::integer,
+                .m_isConstant = true,
+                .m_constantValue = number.m_value,
+            };
         });
     if (analyzedExp.m_valueKind != ExpType::voidType
         && analyzedExp.m_valueKind != ExpType::array) {

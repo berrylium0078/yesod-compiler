@@ -310,6 +310,10 @@ class SemanticAnalyzer {
     void analyzeExpStmt(Handle<ExpStmt> expStmt_nn);
     void analyzeReturnStmt(Handle<ReturnStmt> returnStmt_nn);
     [[nodiscard]] AnalyzedExp analyzeExp(Handle<Exp> exp_nn);
+    AnalyzedExp analyzeBinaryExp(const Exp &exp, const Exp::Binary &binary);
+    AnalyzedExp analyzeUnaryExp(const Exp &exp, const Exp::Unary &unary);
+    AnalyzedExp analyzeCallExp(const Exp &exp, const Exp::Call &call);
+    AnalyzedExp analyzeLvalExp(const Exp &exp, const LVal &lval);
     [[nodiscard]] AnalyzedExp analyzeCondExp(Handle<Exp> exp_nn);
     [[nodiscard]] std::optional<Handle<Identifier>> lookupSymbol(
         const std::string& name) const;

@@ -12,8 +12,6 @@ namespace yesod::koopa {
 
 namespace {
 
-    using yesod::frontend::with;
-
     size_t countScalarSlots(const frontend::SemanticType& type)
     {
         if (!type.isArray()) {
@@ -63,24 +61,23 @@ namespace {
 
         const size_t elementSlots = countScalarSlots(*type.m_elementType);
         for (int32_t i = 0;
-             i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
+            i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
             const auto& child = values[nextValueIndex](ast);
-            match(child.m_kind,
-                with {
-                    [&](frontend::Handle<frontend::Exp>) {
-                        fillObjectFromSequence(ast, values, nextValueIndex,
-                            *type.m_elementType,
-                            baseOffset + static_cast<size_t>(i) * elementSlots,
-                            scalarExprs);
-                    },
-                    [&](const typename InitNode::List&) {
-                        fillObjectFromNode(ast, values[nextValueIndex],
-                            *type.m_elementType,
-                            baseOffset + static_cast<size_t>(i) * elementSlots,
-                            scalarExprs);
-                        ++nextValueIndex;
-                    },
-                });
+            MATCH(child.m_kind)
+            WITH(
+                [&](frontend::Handle<frontend::Exp>) {
+                    fillObjectFromSequence(ast, values, nextValueIndex,
+                        *type.m_elementType,
+                        baseOffset + static_cast<size_t>(i) * elementSlots,
+                        scalarExprs);
+                },
+                [&](const typename InitNode::List&) {
+                    fillObjectFromNode(ast, values[nextValueIndex],
+                        *type.m_elementType,
+                        baseOffset + static_cast<size_t>(i) * elementSlots,
+                        scalarExprs);
+                    ++nextValueIndex;
+                }, );
         }
     }
 
@@ -91,21 +88,21 @@ namespace {
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
-        match(init.m_kind,
-            with {
-                [&](frontend::Handle<frontend::Exp>) {
-                    size_t nextValueIndex = 0;
-                    const std::vector<frontend::Handle<InitNode>> singleton {
-                        init_nn };
-                    fillObjectFromSequence(ast, singleton, nextValueIndex, type,
-                        baseOffset, scalarExprs);
-                },
-                [&](const typename InitNode::List& initAlt) {
-                    size_t nextValueIndex = 0;
-                    fillObjectFromSequence(ast, initAlt.m_values,
-                        nextValueIndex, type, baseOffset, scalarExprs);
-                },
-            });
+        MATCH(init.m_kind)
+        WITH(
+            [&](frontend::Handle<frontend::Exp>) {
+                size_t nextValueIndex = 0;
+                const std::vector<frontend::Handle<InitNode>> singleton {
+                    init_nn
+                };
+                fillObjectFromSequence(ast, singleton, nextValueIndex, type,
+                    baseOffset, scalarExprs);
+            },
+            [&](const typename InitNode::List& initAlt) {
+                size_t nextValueIndex = 0;
+                fillObjectFromSequence(ast, initAlt.m_values, nextValueIndex,
+                    type, baseOffset, scalarExprs);
+            }, );
     }
 
     template <typename InitNode>
@@ -114,20 +111,19 @@ namespace {
         std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
-        match(init.m_kind,
-            with {
-                [&](frontend::Handle<frontend::Exp> initAlt) {
-                    if (baseOffset < scalarExprs.size()) {
-                        scalarExprs[baseOffset] = initAlt;
-                    }
-                },
-                [&](const typename InitNode::List& initAlt) {
-                    if (!initAlt.m_values.empty()) {
-                        assignScalarInitializerFromNode(ast,
-                            initAlt.m_values.front(), baseOffset, scalarExprs);
-                    }
-                },
-            });
+        MATCH(init.m_kind)
+        WITH(
+            [&](frontend::Handle<frontend::Exp> initAlt) {
+                if (baseOffset < scalarExprs.size()) {
+                    scalarExprs[baseOffset] = initAlt;
+                }
+            },
+            [&](const typename InitNode::List& initAlt) {
+                if (!initAlt.m_values.empty()) {
+                    assignScalarInitializerFromNode(
+                        ast, initAlt.m_values.front(), baseOffset, scalarExprs);
+                }
+            }, );
     }
 
     template <typename InitNode>
@@ -185,8 +181,7 @@ namespace {
         return stem;
     }
 
-    Type* lowerSemanticType(
-        const frontend::SemanticType& semanticType,
+    Type* lowerSemanticType(const frontend::SemanticType& semanticType,
         bool decayUnsizedArrayToPointer = true)
     {
         switch (semanticType.m_kind) {
@@ -199,7 +194,8 @@ namespace {
             if (semanticType.m_elementType == nullptr) {
                 throw std::runtime_error("array type is missing element type");
             }
-            if (semanticType.m_arrayLength == -1 && decayUnsizedArrayToPointer) {
+            if (semanticType.m_arrayLength == -1
+                && decayUnsizedArrayToPointer) {
                 return PointerType::get(
                     lowerSemanticType(*semanticType.m_elementType, false));
             }
@@ -239,30 +235,31 @@ Program* Generator::generate(const frontend::AST& ast,
     std::unordered_map<int32_t, size_t> symbolUseCount;
     std::unordered_set<int32_t> definedFunctionSymbolIds;
 
-    for (const auto& [identifier_nn, symbol] : semanticInfo.m_symbolByIdentifier) {
+    for (const auto& [identifier_nn, symbol] :
+        semanticInfo.m_symbolByIdentifier) {
         (void)identifier_nn;
         ++symbolUseCount[symbol.m_id];
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        match(topLevelItem.m_topLevelItem,
-            with {
-                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
-                    const auto& funcDef = ast[topLevelAlt];
-                    const auto* functionSymbol
-                        = semanticInfo.findSymbol(funcDef.m_identifier_nn);
-                    if (functionSymbol == nullptr) {
-                        throw std::runtime_error(
-                            "function declaration missing semantic symbol during lowering");
-                    }
-                    definedFunctionSymbolIds.insert(functionSymbol->m_id);
-                },
-                [&](const auto&) { },
-            });
+        MATCH(topLevelItem.m_topLevelItem)
+        WITH(
+            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+                const auto& funcDef = ast[topLevelAlt];
+                const auto* functionSymbol
+                    = semanticInfo.findSymbol(funcDef.m_identifier_nn);
+                if (functionSymbol == nullptr) {
+                    throw std::runtime_error("function declaration missing "
+                                             "semantic symbol during lowering");
+                }
+                definedFunctionSymbolIds.insert(functionSymbol->m_id);
+            },
+            [&](const auto&) { }, );
     }
 
-    for (const auto& [identifier_nn, symbol] : semanticInfo.m_symbolByIdentifier) {
+    for (const auto& [identifier_nn, symbol] :
+        semanticInfo.m_symbolByIdentifier) {
         (void)identifier_nn;
         if (symbol.m_kind != frontend::SemanticSymbolKind::function) {
             continue;
@@ -275,7 +272,8 @@ Program* Generator::generate(const frontend::AST& ast,
             continue;
         }
 
-        auto [it, inserted] = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
+        auto [it, inserted]
+            = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
         if (!inserted) {
             continue;
         }
@@ -287,43 +285,41 @@ Program* Generator::generate(const frontend::AST& ast,
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        match(topLevelItem.m_topLevelItem,
-            with {
-                [&](frontend::Handle<frontend::DeclNode> topLevelAlt) {
-                    generateGlobalDecl(topLevelAlt, *program, ast,
-                        semanticInfo, globalStorageBySymbolId);
-                },
-                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
-                    auto* function = createFunctionDecl(ast, topLevelAlt,
-                        semanticInfo);
-                    const auto& symbol = requireSymbolForIdentifier(
-                        ast[topLevelAlt].m_identifier_nn, semanticInfo,
-                        "function definition is missing a symbol binding");
-                    functionBySymbolId[symbol.m_id] = function;
-                    program->pushFunc(function);
-                },
-            });
+        MATCH(topLevelItem.m_topLevelItem)
+        WITH(
+            [&](frontend::Handle<frontend::DeclNode> topLevelAlt) {
+                generateGlobalDecl(topLevelAlt, *program, ast, semanticInfo,
+                    globalStorageBySymbolId);
+            },
+            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+                auto* function
+                    = createFunctionDecl(ast, topLevelAlt, semanticInfo);
+                const auto& symbol = requireSymbolForIdentifier(
+                    ast[topLevelAlt].m_identifier_nn, semanticInfo,
+                    "function definition is missing a symbol binding");
+                functionBySymbolId[symbol.m_id] = function;
+                program->pushFunc(function);
+            }, );
     }
 
     for (const auto topLevelItem_nn : parsedCompUnit.m_topLevelItems) {
         const auto& topLevelItem = ast[topLevelItem_nn];
-        match(topLevelItem.m_topLevelItem,
-            with {
-                [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
-                    const auto& symbol = requireSymbolForIdentifier(
-                        ast[topLevelAlt].m_identifier_nn, semanticInfo,
-                        "function definition is missing a symbol binding");
-                    const auto functionIt = functionBySymbolId.find(symbol.m_id);
-                    if (functionIt == functionBySymbolId.end()) {
-                        throw std::runtime_error(
-                            "function definition is missing a lowered function declaration");
-                    }
-                    (void)generateFuncDef(ast, topLevelAlt, semanticInfo,
-                        globalStorageBySymbolId, functionBySymbolId,
-                        functionIt->second);
-                },
-                [&](const auto&) { },
-            });
+        MATCH(topLevelItem.m_topLevelItem)
+        WITH(
+            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+                const auto& symbol = requireSymbolForIdentifier(
+                    ast[topLevelAlt].m_identifier_nn, semanticInfo,
+                    "function definition is missing a symbol binding");
+                const auto functionIt = functionBySymbolId.find(symbol.m_id);
+                if (functionIt == functionBySymbolId.end()) {
+                    throw std::runtime_error("function definition is missing a "
+                                             "lowered function declaration");
+                }
+                (void)generateFuncDef(ast, topLevelAlt, semanticInfo,
+                    globalStorageBySymbolId, functionBySymbolId,
+                    functionIt->second);
+            },
+            [&](const auto&) { }, );
     }
 
     return program;
@@ -335,17 +331,18 @@ Function* Generator::createFunctionDecl(const frontend::AST& ast,
 {
     const auto& parsedFuncDef = ast[funcDef];
     const auto& identifier = ast[parsedFuncDef.m_identifier_nn];
-    const auto& symbol = requireSymbolForIdentifier(
-        parsedFuncDef.m_identifier_nn, semanticInfo,
-        "function definition is missing a symbol binding");
+    const auto& symbol
+        = requireSymbolForIdentifier(parsedFuncDef.m_identifier_nn,
+            semanticInfo, "function definition is missing a symbol binding");
     std::vector<Type*> paramTypes;
     paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
     for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
         paramTypes.push_back(lowerSemanticType(paramType));
     }
-    auto* function = Function::create(FunctionType::get(
-                                         lowerSemanticType(symbol.m_functionSignature.m_returnType),
-                                         paramTypes),
+    auto* function = Function::create(
+        FunctionType::get(
+            lowerSemanticType(symbol.m_functionSignature.m_returnType),
+            paramTypes),
         makeFunctionName(identifier.m_name));
     for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
         function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
@@ -361,9 +358,10 @@ Function* Generator::createExternalFunctionDecl(
     for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
         paramTypes.push_back(lowerSemanticType(paramType));
     }
-    auto* function = Function::create(FunctionType::get(
-                                         lowerSemanticType(symbol.m_functionSignature.m_returnType),
-                                         paramTypes),
+    auto* function = Function::create(
+        FunctionType::get(
+            lowerSemanticType(symbol.m_functionSignature.m_returnType),
+            paramTypes),
         makeFunctionName(symbol.m_name));
     for (size_t i = 0; i != paramTypes.size(); ++i) {
         function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
@@ -394,8 +392,9 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
     };
     for (size_t i = 0; i < parsedFuncDef.m_funcFParams.size(); ++i) {
         const auto& funcFParam = ast[parsedFuncDef.m_funcFParams[i]];
-        const auto& symbol = requireSymbolForIdentifier(funcFParam.m_identifier_nn,
-            semanticInfo, "function parameter is missing a symbol binding");
+        const auto& symbol
+            = requireSymbolForIdentifier(funcFParam.m_identifier_nn,
+                semanticInfo, "function parameter is missing a symbol binding");
         auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
             makeUniqueLocalName(symbol, state.m_usedSymbolNames));
         entryBlock->pushInst(alloc);
@@ -417,75 +416,72 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
     return function;
 }
 
-void Generator::generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode,
-    Program& program, const frontend::AST& ast,
-    const frontend::SemanticInfo& semanticInfo,
+void Generator::generateGlobalDecl(
+    frontend::Handle<frontend::DeclNode> declNode, Program& program,
+    const frontend::AST& ast, const frontend::SemanticInfo& semanticInfo,
     std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
 {
     const auto& parsedDeclNode = ast[declNode];
-    match(parsedDeclNode.m_decl,
-        with {
-            [&](frontend::Handle<frontend::ConstDecl> declAlt) {
-                const auto& constDecl = ast[declAlt];
-                for (const auto constDef_nn : constDecl.m_constDefs) {
-                    const auto& constDef = ast[constDef_nn];
-                    const auto& symbol = requireSymbolForIdentifier(
-                        constDef.m_identifier_nn, semanticInfo,
-                        "global const is missing its symbol binding");
-                    if (!symbol.m_type.isArray()) {
-                        continue;
-                    }
+    MATCH(parsedDeclNode.m_decl)
+    WITH(
+        [&](frontend::Handle<frontend::ConstDecl> declAlt) {
+            const auto& constDecl = ast[declAlt];
+            for (const auto constDef_nn : constDecl.m_constDefs) {
+                const auto& constDef = ast[constDef_nn];
+                const auto& symbol = requireSymbolForIdentifier(
+                    constDef.m_identifier_nn, semanticInfo,
+                    "global const is missing its symbol binding");
+                if (!symbol.m_type.isArray()) {
+                    continue;
+                }
+                auto scalarExprs = flattenArrayInitializer(
+                    ast, constDef.m_constInitVal_nn, symbol.m_type);
+                size_t nextScalarIndex = 0;
+                Value* initValue = generateGlobalArrayInitializer(
+                    symbol.m_type, scalarExprs, nextScalarIndex, semanticInfo);
+                auto* globalAlloc = GlobalAllocValue::get(
+                    initValue, makeGlobalName(symbol.m_name));
+                program.pushVal(globalAlloc);
+                globalStorageBySymbolId[symbol.m_id] = globalAlloc;
+            }
+        },
+        [&](frontend::Handle<frontend::VarDecl> declAlt) {
+            const auto& varDecl = ast[declAlt];
+            for (const auto varDef_nn : varDecl.m_varDefs) {
+                const auto& varDef = ast[varDef_nn];
+                const auto& symbol = requireSymbolForIdentifier(
+                    varDef.m_identifier_nn, semanticInfo,
+                    "global variable is missing its symbol binding");
+                Value* initValue = ZeroInitValue::get(
+                    lowerSemanticType(symbol.m_type, false));
+                if (symbol.m_type.isArray() && varDef.m_initVal_nn) {
                     auto scalarExprs = flattenArrayInitializer(
-                        ast, constDef.m_constInitVal_nn, symbol.m_type);
+                        ast, varDef.m_initVal_nn, symbol.m_type);
                     size_t nextScalarIndex = 0;
-                    Value* initValue = generateGlobalArrayInitializer(
-                        symbol.m_type, scalarExprs, nextScalarIndex,
-                        semanticInfo);
-                    auto* globalAlloc = GlobalAllocValue::get(
-                        initValue, makeGlobalName(symbol.m_name));
-                    program.pushVal(globalAlloc);
-                    globalStorageBySymbolId[symbol.m_id] = globalAlloc;
+                    initValue = generateGlobalArrayInitializer(symbol.m_type,
+                        scalarExprs, nextScalarIndex, semanticInfo);
+                } else if (varDef.m_initVal_nn) {
+                    const auto& initVal = ast[varDef.m_initVal_nn];
+                    MATCH(initVal.m_kind)
+                    WITH(
+                        [&](frontend::Handle<frontend::Exp> initAlt) {
+                            const auto constantValue
+                                = semanticInfo.findConstantValue(initAlt);
+                            if (!constantValue.has_value()) {
+                                throw std::runtime_error(
+                                    "global variable initializer must be "
+                                    "constant");
+                            }
+                            initValue = IntegerValue::get(*constantValue);
+                        },
+                        [&](const auto&) { }, );
                 }
-            },
-            [&](frontend::Handle<frontend::VarDecl> declAlt) {
-                const auto& varDecl = ast[declAlt];
-                for (const auto varDef_nn : varDecl.m_varDefs) {
-                    const auto& varDef = ast[varDef_nn];
-                    const auto& symbol = requireSymbolForIdentifier(
-                        varDef.m_identifier_nn, semanticInfo,
-                        "global variable is missing its symbol binding");
-                    Value* initValue
-                        = ZeroInitValue::get(lowerSemanticType(symbol.m_type, false));
-                    if (symbol.m_type.isArray() && varDef.m_initVal_nn) {
-                        auto scalarExprs = flattenArrayInitializer(
-                            ast, varDef.m_initVal_nn, symbol.m_type);
-                        size_t nextScalarIndex = 0;
-                        initValue = generateGlobalArrayInitializer(
-                            symbol.m_type, scalarExprs, nextScalarIndex,
-                            semanticInfo);
-                    } else if (varDef.m_initVal_nn) {
-                        const auto& initVal = ast[varDef.m_initVal_nn];
-                        match(initVal.m_kind,
-                            with {
-                                [&](frontend::Handle<frontend::Exp> initAlt) {
-                                    const auto constantValue
-                                        = semanticInfo.findConstantValue(initAlt);
-                                    if (!constantValue.has_value()) {
-                                        throw std::runtime_error(
-                                            "global variable initializer must be constant");
-                                    }
-                                    initValue = IntegerValue::get(*constantValue);
-                                },
-                                [&](const auto&) { },
-                            });
-                    }
-                    auto* globalAlloc = GlobalAllocValue::get(
-                        initValue, makeGlobalName(symbol.m_name));
-                    program.pushVal(globalAlloc);
-                    globalStorageBySymbolId[symbol.m_id] = globalAlloc;
-                }
-            },
-        });
+                auto* globalAlloc = GlobalAllocValue::get(
+                    initValue, makeGlobalName(symbol.m_name));
+                program.pushVal(globalAlloc);
+                globalStorageBySymbolId[symbol.m_id] = globalAlloc;
+            }
+        }, );
 }
 
 void Generator::generateBlock(frontend::Handle<frontend::Block> block,
@@ -509,134 +505,126 @@ void Generator::generateBlockItem(
     }
 
     const auto& parsedBlockItem = node(blockItem, state, "block item is null");
-    match(parsedBlockItem.m_blockItem,
-        with {
-            [&](frontend::Handle<frontend::DeclNode> blockItemAlt) {
-                generateDecl(blockItemAlt, state);
-            },
-            [&](frontend::Handle<frontend::StmtNode> blockItemAlt) {
-                generateStmt(blockItemAlt, state);
-            },
-        });
+    MATCH(parsedBlockItem.m_blockItem)
+    WITH(
+        [&](frontend::Handle<frontend::DeclNode> blockItemAlt) {
+            generateDecl(blockItemAlt, state);
+        },
+        [&](frontend::Handle<frontend::StmtNode> blockItemAlt) {
+            generateStmt(blockItemAlt, state);
+        }, );
 }
 
 void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedDeclNode = node(declNode, state, "declaration is null");
-    match(parsedDeclNode.m_decl,
-        with {
-            [&](frontend::Handle<frontend::ConstDecl> declAlt) {
-                const auto& constDecl
-                    = node(declAlt, state, "const declaration payload is null");
-                for (const auto constDef : constDecl.m_constDefs) {
-                    const auto& parsedConstDef = node(
-                        constDef, state, "const declarator payload is null");
-                    const auto& symbol = requireSymbolForIdentifier(
-                        parsedConstDef.m_identifier_nn,
-                        *state.m_semanticInfo_nn,
-                        "const declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(
-                        lowerSemanticType(symbol.m_type, false),
+    MATCH(parsedDeclNode.m_decl)
+    WITH(
+        [&](frontend::Handle<frontend::ConstDecl> declAlt) {
+            const auto& constDecl
+                = node(declAlt, state, "const declaration payload is null");
+            for (const auto constDef : constDecl.m_constDefs) {
+                const auto& parsedConstDef
+                    = node(constDef, state, "const declarator payload is null");
+                const auto& symbol = requireSymbolForIdentifier(
+                    parsedConstDef.m_identifier_nn, *state.m_semanticInfo_nn,
+                    "const declarator is missing its symbol binding");
+                auto* alloc
+                    = AllocValue::get(lowerSemanticType(symbol.m_type, false),
                         makeUniqueLocalName(symbol, state.m_usedSymbolNames));
-                    state.m_currentBasicBlock_nn->pushInst(alloc);
-                    state.m_storageBySymbolId[symbol.m_id] = alloc;
-                    const auto& constInitVal
-                        = node(parsedConstDef.m_constInitVal_nn, state,
-                            "const declarator is missing an initializer");
+                state.m_currentBasicBlock_nn->pushInst(alloc);
+                state.m_storageBySymbolId[symbol.m_id] = alloc;
+                const auto& constInitVal
+                    = node(parsedConstDef.m_constInitVal_nn, state,
+                        "const declarator is missing an initializer");
+                if (symbol.m_type.isArray()) {
+                    auto scalarExprs = flattenArrayInitializer(*state.m_ast_nn,
+                        parsedConstDef.m_constInitVal_nn, symbol.m_type);
+                    size_t nextScalarIndex = 0;
+                    generateLocalArrayInitializer(alloc, symbol.m_type,
+                        scalarExprs, nextScalarIndex, state);
+                } else {
+                    MATCH(constInitVal.m_kind)
+                    WITH(
+                        [&](frontend::Handle<frontend::Exp> initAlt) {
+                            auto* initValue = generateExp(initAlt, state);
+                            state.m_currentBasicBlock_nn->pushInst(
+                                StoreValue::get(initValue, alloc));
+                        },
+                        [&](const auto&) { });
+                }
+            }
+        },
+        [&](frontend::Handle<frontend::VarDecl> declAlt) {
+            const auto& varDecl
+                = node(declAlt, state, "var declaration payload is null");
+            for (const auto varDef : varDecl.m_varDefs) {
+                const auto& resolvedVarDef
+                    = node(varDef, state, "var declarator payload is null");
+                const auto& symbol = requireSymbolForIdentifier(
+                    resolvedVarDef.m_identifier_nn, *state.m_semanticInfo_nn,
+                    "var declarator is missing its symbol binding");
+                auto* alloc
+                    = AllocValue::get(lowerSemanticType(symbol.m_type, false),
+                        makeUniqueLocalName(symbol, state.m_usedSymbolNames));
+                state.m_currentBasicBlock_nn->pushInst(alloc);
+                state.m_storageBySymbolId[symbol.m_id] = alloc;
+                if (resolvedVarDef.m_initVal_nn) {
                     if (symbol.m_type.isArray()) {
-                        auto scalarExprs = flattenArrayInitializer(
-                            *state.m_ast_nn, parsedConstDef.m_constInitVal_nn,
-                            symbol.m_type);
+                        auto scalarExprs
+                            = flattenArrayInitializer(*state.m_ast_nn,
+                                resolvedVarDef.m_initVal_nn, symbol.m_type);
                         size_t nextScalarIndex = 0;
                         generateLocalArrayInitializer(alloc, symbol.m_type,
                             scalarExprs, nextScalarIndex, state);
                     } else {
-                        match(constInitVal.m_kind,
-                            with {
-                                [&](frontend::Handle<frontend::Exp> initAlt) {
-                                    auto* initValue = generateExp(initAlt, state);
-                                    state.m_currentBasicBlock_nn->pushInst(
-                                        StoreValue::get(initValue, alloc));
-                                },
-                                [&](const auto&) { },
-                            });
+                        const auto& initVal = node(resolvedVarDef.m_initVal_nn,
+                            state, "var declarator init payload is null");
+                        MATCH(initVal.m_kind)
+                        WITH(
+                            [&](frontend::Handle<frontend::Exp> initAlt) {
+                                auto* initValue = generateExp(initAlt, state);
+                                state.m_currentBasicBlock_nn->pushInst(
+                                    StoreValue::get(initValue, alloc));
+                            },
+                            [&](const auto&) { });
                     }
                 }
-            },
-            [&](frontend::Handle<frontend::VarDecl> declAlt) {
-                const auto& varDecl
-                    = node(declAlt, state, "var declaration payload is null");
-                for (const auto varDef : varDecl.m_varDefs) {
-                    const auto& resolvedVarDef
-                        = node(varDef, state, "var declarator payload is null");
-                    const auto& symbol = requireSymbolForIdentifier(
-                        resolvedVarDef.m_identifier_nn,
-                        *state.m_semanticInfo_nn,
-                        "var declarator is missing its symbol binding");
-                    auto* alloc = AllocValue::get(
-                        lowerSemanticType(symbol.m_type, false),
-                        makeUniqueLocalName(symbol, state.m_usedSymbolNames));
-                    state.m_currentBasicBlock_nn->pushInst(alloc);
-                    state.m_storageBySymbolId[symbol.m_id] = alloc;
-                    if (resolvedVarDef.m_initVal_nn) {
-                        if (symbol.m_type.isArray()) {
-                            auto scalarExprs = flattenArrayInitializer(
-                                *state.m_ast_nn, resolvedVarDef.m_initVal_nn,
-                                symbol.m_type);
-                            size_t nextScalarIndex = 0;
-                            generateLocalArrayInitializer(alloc, symbol.m_type,
-                                scalarExprs, nextScalarIndex, state);
-                        } else {
-                            const auto& initVal = node(resolvedVarDef.m_initVal_nn,
-                                state, "var declarator init payload is null");
-                            match(initVal.m_kind,
-                                with {
-                                    [&](frontend::Handle<frontend::Exp> initAlt) {
-                                        auto* initValue = generateExp(initAlt, state);
-                                        state.m_currentBasicBlock_nn->pushInst(
-                                            StoreValue::get(initValue, alloc));
-                                    },
-                                    [&](const auto&) { },
-                                });
-                        }
-                    }
-                }
-            },
-        });
+            }
+        }, );
 }
 
 void Generator::generateStmt(frontend::Handle<frontend::StmtNode> stmtNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedStmtNode = node(stmtNode, state, "statement is null");
-    match(parsedStmtNode.m_stmt,
-        with {
-            [&](frontend::Handle<frontend::IfStmt> stmtAlt) {
-                generateIfStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::WhileStmt> stmtAlt) {
-                generateWhileStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::BreakStmt> stmtAlt) {
-                generateBreakStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::ContinueStmt> stmtAlt) {
-                generateContinueStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::AssignStmt> stmtAlt) {
-                generateAssignStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::Block> stmtAlt) {
-                generateBlock(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::ReturnStmt> stmtAlt) {
-                (void)generateReturnStmt(stmtAlt, state);
-            },
-            [&](frontend::Handle<frontend::ExpStmt> stmtAlt) {
-                generateExpStmt(stmtAlt, state);
-            },
-        });
+    MATCH(parsedStmtNode.m_stmt)
+    WITH(
+        [&](frontend::Handle<frontend::IfStmt> stmtAlt) {
+            generateIfStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::WhileStmt> stmtAlt) {
+            generateWhileStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::BreakStmt> stmtAlt) {
+            generateBreakStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::ContinueStmt> stmtAlt) {
+            generateContinueStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::AssignStmt> stmtAlt) {
+            generateAssignStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::Block> stmtAlt) {
+            generateBlock(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::ReturnStmt> stmtAlt) {
+            (void)generateReturnStmt(stmtAlt, state);
+        },
+        [&](frontend::Handle<frontend::ExpStmt> stmtAlt) {
+            generateExpStmt(stmtAlt, state);
+        }, );
 }
 
 void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
@@ -659,7 +647,7 @@ void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
     state.m_currentBasicBlock_nn = thenBlock;
     generateStmt(parsedIfStmt.m_thenStmt_nn, state);
     if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
-        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(contBlock, {}));
+        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(contBlock, { }));
     }
 
     if (parsedIfStmt.m_elseStmt_nn) {
@@ -667,7 +655,7 @@ void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
         generateStmt(parsedIfStmt.m_elseStmt_nn, state);
         if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
             state.m_currentBasicBlock_nn->pushInst(
-                JumpValue::get(contBlock, {}));
+                JumpValue::get(contBlock, { }));
         }
     }
 
@@ -684,7 +672,7 @@ void Generator::generateWhileStmt(
     auto* bodyBlock = createBasicBlock("while_body", state);
     auto* endBlock = createBasicBlock("while_end", state);
 
-    state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
+    state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, { }));
 
     state.m_loopBlocksByWhileStmt[whileStmt]
         = FunctionGenerationState::LoopBlocks {
@@ -699,7 +687,7 @@ void Generator::generateWhileStmt(
     state.m_currentBasicBlock_nn = bodyBlock;
     generateStmt(parsedWhileStmt.m_bodyStmt_nn, state);
     if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
-        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, {}));
+        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, { }));
     }
 
     state.m_loopBlocksByWhileStmt.erase(whileStmt);
@@ -720,7 +708,7 @@ void Generator::generateBreakStmt(
             "break statement references unknown loop target");
     }
     state.m_currentBasicBlock_nn->pushInst(
-        JumpValue::get(loopIt->second.m_endBlock_nn, {}));
+        JumpValue::get(loopIt->second.m_endBlock_nn, { }));
 }
 
 void Generator::generateContinueStmt(
@@ -738,7 +726,7 @@ void Generator::generateContinueStmt(
             "continue statement references unknown loop target");
     }
     state.m_currentBasicBlock_nn->pushInst(
-        JumpValue::get(loopIt->second.m_condBlock_nn, {}));
+        JumpValue::get(loopIt->second.m_condBlock_nn, { }));
 }
 
 void Generator::generateAssignStmt(
@@ -749,19 +737,18 @@ void Generator::generateAssignStmt(
         = node(assignStmt, state, "assignment is null");
     const auto& lValExp = node(parsedAssignStmt.m_lVal_nn, state,
         "assignment lvalue expression is null");
-    match(lValExp.m_kind,
-        with {
-            [&](frontend::LVal expAlt) {
-                auto* address = generateLValueAddress(expAlt, state);
-                auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
-                state.m_currentBasicBlock_nn->pushInst(
-                    StoreValue::get(value, address));
-            },
-            [&](const auto&) {
-                throw std::runtime_error(
-                    "assignment lhs is not an lvalue expression");
-            },
-        });
+    MATCH(lValExp.m_kind)
+    WITH(
+        [&](frontend::LVal expAlt) {
+            auto* address = generateLValueAddress(expAlt, state);
+            auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
+            state.m_currentBasicBlock_nn->pushInst(
+                StoreValue::get(value, address));
+        },
+        [&](const auto&) {
+            throw std::runtime_error(
+                "assignment lhs is not an lvalue expression");
+        }, );
 }
 
 void Generator::generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
@@ -796,67 +783,66 @@ Value* Generator::generateExp(
         return IntegerValue::get(*constantValue);
     }
     const auto& parsedExp = node(exp, state, "expression is missing");
-    return match(parsedExp.m_kind,
-        with {
-            [&](frontend::Exp::Binary expAlt) -> Value* {
-                if (expAlt.m_op == frontend::BinaryOpKeyword::orOr
-                    || expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
-                    return generateBooleanAsInt(exp, state);
+    return MATCH(parsedExp.m_kind) WITH(
+        [&](frontend::Exp::Binary expAlt) -> Value* {
+            if (expAlt.m_op == frontend::BinaryOpKeyword::orOr
+                || expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
+                return generateBooleanAsInt(exp, state);
+            }
+            return generateBinaryExpValue(expAlt, state);
+        },
+        [&](frontend::Exp::Unary expAlt) -> Value* {
+            return generateUnaryExpValue(expAlt, state);
+        },
+        [&](frontend::Exp::Call expAlt) -> Value* {
+            const auto& symbol = requireSymbolForIdentifier(expAlt.m_func_nn,
+                *state.m_semanticInfo_nn,
+                "call target is missing a symbol binding");
+            const auto functionIt
+                = state.m_functionBySymbolId.find(symbol.m_id);
+            if (functionIt == state.m_functionBySymbolId.end()) {
+                throw std::runtime_error(
+                    "call target is missing a lowered function binding");
+            }
+            std::vector<Value*> args;
+            args.reserve(expAlt.m_params.size());
+            for (const auto arg_nn : expAlt.m_params) {
+                args.push_back(generateExp(arg_nn, state));
+            }
+            const auto* functionType = dynamic_cast<FunctionType*>(
+                functionIt->second->getFuncType());
+            const std::string callName
+                = functionType->getResultType()->isUnitType()
+                ? std::string { }
+                : makeTempName(state.m_nextTempId);
+            auto* callValue
+                = CallValue::get(functionIt->second, std::move(args), callName);
+            state.m_currentBasicBlock_nn->pushInst(callValue);
+            return callValue;
+        },
+        [&](frontend::LVal expAlt) -> Value* {
+            auto* address = generateLValueAddress(expAlt, state);
+            const auto expType = state.m_semanticInfo_nn->findExpType(exp);
+            if (expType.has_value() && expType->isArray()) {
+                const auto pointeeType
+                    = dynamic_cast<PointerType*>(address->getVType())
+                          ->getPointeeType();
+                if (pointeeType->isArrayType()) {
+                    auto* decayed = GetElemPtrValue::get(address,
+                        IntegerValue::get(0), makeTempName(state.m_nextTempId));
+                    state.m_currentBasicBlock_nn->pushInst(decayed);
+                    return decayed;
                 }
-                return generateBinaryExpValue(expAlt, state);
-            },
-            [&](frontend::Exp::Unary expAlt) -> Value* {
-                return generateUnaryExpValue(expAlt, state);
-            },
-            [&](frontend::Exp::Call expAlt) -> Value* {
-                const auto& symbol = requireSymbolForIdentifier(
-                    expAlt.m_func_nn, *state.m_semanticInfo_nn,
-                    "call target is missing a symbol binding");
-                const auto functionIt = state.m_functionBySymbolId.find(symbol.m_id);
-                if (functionIt == state.m_functionBySymbolId.end()) {
-                    throw std::runtime_error(
-                        "call target is missing a lowered function binding");
-                }
-                std::vector<Value*> args;
-                args.reserve(expAlt.m_params.size());
-                for (const auto arg_nn : expAlt.m_params) {
-                    args.push_back(generateExp(arg_nn, state));
-                }
-                const auto* functionType = dynamic_cast<FunctionType*>(
-                    functionIt->second->getFuncType());
-                const std::string callName
-                    = functionType->getResultType()->isUnitType()
-                    ? std::string {}
-                    : makeTempName(state.m_nextTempId);
-                auto* callValue = CallValue::get(
-                    functionIt->second, std::move(args), callName);
-                state.m_currentBasicBlock_nn->pushInst(callValue);
-                return callValue;
-            },
-            [&](frontend::LVal expAlt) -> Value* {
-                auto* address = generateLValueAddress(expAlt, state);
-                const auto expType = state.m_semanticInfo_nn->findExpType(exp);
-                if (expType.has_value() && expType->isArray()) {
-                    const auto pointeeType = dynamic_cast<PointerType*>(
-                        address->getVType())->getPointeeType();
-                    if (pointeeType->isArrayType()) {
-                        auto* decayed = GetElemPtrValue::get(address,
-                            IntegerValue::get(0),
-                            makeTempName(state.m_nextTempId));
-                        state.m_currentBasicBlock_nn->pushInst(decayed);
-                        return decayed;
-                    }
-                    return address;
-                }
-                auto* loadValue = LoadValue::get(
-                    address, makeTempName(state.m_nextTempId));
-                state.m_currentBasicBlock_nn->pushInst(loadValue);
-                return loadValue;
-            },
-            [&](frontend::Number expAlt) -> Value* {
-                return generateNumber(expAlt);
-            },
-        });
+                return address;
+            }
+            auto* loadValue
+                = LoadValue::get(address, makeTempName(state.m_nextTempId));
+            state.m_currentBasicBlock_nn->pushInst(loadValue);
+            return loadValue;
+        },
+        [&](frontend::Number expAlt) -> Value* {
+            return generateNumber(expAlt);
+        }, );
 }
 
 Value* Generator::generateBinaryExpValue(const frontend::Exp::Binary& binaryExp,
@@ -942,9 +928,9 @@ Value* Generator::generateBooleanAsInt(
     generateBooleanBranch(exp, *trueBlock, *falseBlock, state);
 
     trueBlock->pushInst(StoreValue::get(IntegerValue::get(1), resultStorage));
-    trueBlock->pushInst(JumpValue::get(contBlock, {}));
+    trueBlock->pushInst(JumpValue::get(contBlock, { }));
     falseBlock->pushInst(StoreValue::get(IntegerValue::get(0), resultStorage));
-    falseBlock->pushInst(JumpValue::get(contBlock, {}));
+    falseBlock->pushInst(JumpValue::get(contBlock, { }));
 
     state.m_currentBasicBlock_nn = contBlock;
     auto* loadValue
@@ -961,34 +947,32 @@ void Generator::generateBooleanBranch(frontend::Handle<frontend::Exp> exp,
         = state.m_semanticInfo_nn->findConstantValue(exp);
         constantValue.has_value()) {
         state.m_currentBasicBlock_nn->pushInst(
-            BranchValue::get(IntegerValue::get(*constantValue), &trueBlock, {},
-                &falseBlock, {}));
+            BranchValue::get(IntegerValue::get(*constantValue), &trueBlock, { },
+                &falseBlock, { }));
         return;
     }
 
     const auto& parsedExp = node(exp, state, "expression is missing");
-    match(parsedExp.m_kind,
-        with {
-            [&](frontend::Exp::Binary expAlt) {
-                if (expAlt.m_op == frontend::BinaryOpKeyword::orOr) {
-                    generateLogicalOrBranch(expAlt, trueBlock, falseBlock, state);
-                    return;
-                }
-                if (expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
-                    generateLogicalAndBranch(
-                        expAlt, trueBlock, falseBlock, state);
-                    return;
-                }
+    MATCH(parsedExp.m_kind)
+    WITH(
+        [&](frontend::Exp::Binary expAlt) {
+            if (expAlt.m_op == frontend::BinaryOpKeyword::orOr) {
+                generateLogicalOrBranch(expAlt, trueBlock, falseBlock, state);
+                return;
+            }
+            if (expAlt.m_op == frontend::BinaryOpKeyword::andAnd) {
+                generateLogicalAndBranch(expAlt, trueBlock, falseBlock, state);
+                return;
+            }
 
-                auto* value = generateBinaryExpValue(expAlt, state);
-                state.m_currentBasicBlock_nn->pushInst(
-                    BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
-            },
-            [&](const auto&) {
-                auto* value = generateExp(exp, state);
-                state.m_currentBasicBlock_nn->pushInst(
-                    BranchValue::get(value, &trueBlock, {}, &falseBlock, {}));
-            },
+            auto* value = generateBinaryExpValue(expAlt, state);
+            state.m_currentBasicBlock_nn->pushInst(
+                BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
+        },
+        [&](const auto&) {
+            auto* value = generateExp(exp, state);
+            state.m_currentBasicBlock_nn->pushInst(
+                BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
         });
 }
 
@@ -1035,8 +1019,8 @@ Value* Generator::generateNumber(const frontend::Number& number) const
     return IntegerValue::get(number.m_value);
 }
 
-Type* Generator::lowerSemanticType(const frontend::SemanticType& type,
-    bool decayUnsizedArrayToPointer) const
+Type* Generator::lowerSemanticType(
+    const frontend::SemanticType& type, bool decayUnsizedArrayToPointer) const
 {
     return ::yesod::koopa::lowerSemanticType(type, decayUnsizedArrayToPointer);
 }
@@ -1079,10 +1063,9 @@ Value* Generator::generateGlobalArrayInitializer(
     if (elements.empty()) {
         return ZeroInitValue::get(arrayType);
     }
-    if (std::all_of(elements.begin(), elements.end(),
-            [](const Value* element) {
-                return isZeroInitializerValue(element);
-            })) {
+    if (std::all_of(elements.begin(), elements.end(), [](const Value* element) {
+            return isZeroInitializerValue(element);
+        })) {
         return ZeroInitValue::get(arrayType);
     }
     return AggregateValue::get(std::move(elements), arrayType);
@@ -1114,9 +1097,8 @@ void Generator::generateLocalArrayInitializer(Value* address,
         auto* elementAddress = GetElemPtrValue::get(
             address, IntegerValue::get(i), makeTempName(state.m_nextTempId));
         state.m_currentBasicBlock_nn->pushInst(elementAddress);
-        generateLocalArrayInitializer(
-            elementAddress, *type.m_elementType, scalarExprs, nextScalarIndex,
-            state);
+        generateLocalArrayInitializer(elementAddress, *type.m_elementType,
+            scalarExprs, nextScalarIndex, state);
     }
 }
 
@@ -1149,7 +1131,8 @@ Value* Generator::generateLValueAddress(
                 address, indexValue, makeTempName(state.m_nextTempId));
         } else {
             const auto pointeeType
-                = dynamic_cast<PointerType*>(address->getVType())->getPointeeType();
+                = dynamic_cast<PointerType*>(address->getVType())
+                      ->getPointeeType();
             if (pointeeType->isArrayType()) {
                 nextAddress = GetElemPtrValue::get(
                     address, indexValue, makeTempName(state.m_nextTempId));
@@ -1192,15 +1175,14 @@ void Generator::finalizeBasicBlock(
         return;
     }
 
-    basicBlock.pushInst(JumpValue::get(&endBlock, {}));
+    basicBlock.pushInst(JumpValue::get(&endBlock, { }));
 }
 
 std::string Generator::makeUniqueLocalName(
     const frontend::SemanticSymbol& symbol,
     std::unordered_set<std::string>& usedSymbolNames) const
 {
-    const std::string baseName
-        = "%" + normalizeIdentifierStem(symbol.m_name);
+    const std::string baseName = "%" + normalizeIdentifierStem(symbol.m_name);
     if (usedSymbolNames.insert(baseName).second) {
         return baseName;
     }

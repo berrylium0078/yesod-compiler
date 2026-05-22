@@ -1,25 +1,16 @@
 #include <cstdlib>
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
-#include <memory>
-#include <sstream>
+#include <iterator>
 #include <string>
+#include <string_view>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
-#include "backend/riscv.h"
-#include "koopa_test_support.h"
-
 namespace {
-
-using yesod::backend::RiscvGenerator;
-using yesod::koopa::BasicBlock;
-using yesod::koopa::BranchValue;
-using yesod::koopa::Function;
-using yesod::koopa::FunctionType;
-using yesod::koopa::IntegerValue;
-using yesod::koopa::Program;
-using yesod::koopa::ReturnValue;
-using yesod::test_support::koopa::generateProgram;
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -34,268 +25,229 @@ void require(bool condition, const std::string& message)
     }
 }
 
-std::string generateAssembly(const std::string& source)
+std::string quoteShell(std::string_view text)
 {
-    auto program = generateProgram(source);
-    std::ostringstream output;
-    RiscvGenerator generator;
-    generator.generate(*program, output);
-    return output.str();
+    std::string quoted;
+    quoted.reserve(text.size() + 2);
+    quoted += '\'';
+    for (const char ch : text) {
+        if (ch == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += ch;
+        }
+    }
+    quoted += '\'';
+    return quoted;
 }
 
-std::string generateAssembly(const Program& program)
+std::string readTextFile(const std::string& path)
 {
-    std::ostringstream output;
-    RiscvGenerator generator;
-    generator.generate(program, output);
-    return output.str();
+    std::ifstream input(path);
+    require(input.good(), "failed to open file for reading: " + path);
+    return std::string(std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
 }
 
-void requireContains(const std::string& text, const std::string& needle)
+void writeTextFile(const std::string& path, const std::string& contents)
 {
-    require(text.find(needle) != std::string::npos,
-        "expected generated assembly to contain: " + needle
-            + "\nactual output:\n" + text);
+    std::ofstream output(path);
+    require(output.good(), "failed to open file for writing: " + path);
+    output << contents;
+    require(output.good(), "failed to write file: " + path);
 }
 
-void requireNotContains(const std::string& text, const std::string& needle)
+struct TempFile {
+    explicit TempFile(const std::string& suffix)
+    {
+        std::string pattern = "/tmp/backend_riscv_test_XXXXXX" + suffix;
+        std::vector<char> buffer(pattern.begin(), pattern.end());
+        buffer.push_back('\0');
+
+        const int fileDescriptor
+            = ::mkstemps(buffer.data(), static_cast<int>(suffix.size()));
+        require(
+            fileDescriptor != -1, "failed to create temporary file under /tmp");
+        ::close(fileDescriptor);
+        m_path = buffer.data();
+    }
+
+    TempFile(const TempFile&) = delete;
+    TempFile& operator=(const TempFile&) = delete;
+
+    TempFile(TempFile&& other) noexcept
+        : m_path(std::move(other.m_path))
+    {
+        other.m_path.clear();
+    }
+
+    TempFile& operator=(TempFile&& other) noexcept
+    {
+        if (this == &other) {
+            return *this;
+        }
+
+        cleanup();
+        m_path = std::move(other.m_path);
+        other.m_path.clear();
+        return *this;
+    }
+
+    ~TempFile() { cleanup(); }
+
+    [[nodiscard]] const std::string& path() const { return m_path; }
+
+private:
+    void cleanup()
+    {
+        if (!m_path.empty()) {
+            std::error_code errorCode;
+            std::filesystem::remove(m_path, errorCode);
+        }
+    }
+
+    std::string m_path;
+};
+
+std::string compilerPath()
 {
-    require(text.find(needle) == std::string::npos,
-        "expected generated assembly not to contain: " + needle
-            + "\nactual output:\n" + text);
+    std::vector<char> buffer(4096, '\0');
+    const ssize_t length
+        = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    require(length != -1, "failed to resolve test executable path");
+
+    const std::filesystem::path testPath(
+        std::string(buffer.data(), static_cast<size_t>(length)));
+    const auto compiler = testPath.parent_path() / "compiler";
+    require(std::filesystem::exists(compiler),
+        "expected compiler binary next to backend_riscv_test at "
+            + compiler.string());
+    return compiler.string();
 }
 
-void testLiteralReturn()
+std::string riscvLibraryPath()
 {
-    const std::string assembly = generateAssembly("int main(){return 0;}");
-
-    requireContains(assembly, "  .text\n");
-    requireContains(assembly, "  .globl main\n");
-    requireContains(assembly, "main:\n");
-    requireContains(assembly, "  li a0, 0\n");
-    requireContains(assembly, "  ret\n");
+    const char* cdeLibraryPath = std::getenv("CDE_LIBRARY_PATH");
+    require(cdeLibraryPath != nullptr && cdeLibraryPath[0] != '\0',
+        "CDE_LIBRARY_PATH must be set for RISC-V linking");
+    return std::string(cdeLibraryPath) + "/riscv32";
 }
 
-void testStackAllocatedStraightLineLowering()
+void runCheckedCommand(const std::string& command, const std::string& purpose)
 {
-    const std::string assembly = generateAssembly(
-        "int main(){int value = 4; value = value + 5; return value;}");
-
-    requireContains(assembly, "  addi sp, sp, -16\n");
-    requireContains(assembly, "  li t2, 4\n");
-    requireContains(assembly, "  sw t2, 0(sp)\n");
-    requireContains(assembly, "  lw t1, 0(sp)\n");
-    requireContains(assembly, "  sw t1, 4(sp)\n");
-    requireContains(assembly, "  li t1, 5\n");
-    requireContains(assembly, "  add t2, t0, t1\n");
-    requireContains(assembly, "  sw t2, 8(sp)\n");
-    requireContains(assembly, "  sw t2, 0(sp)\n");
-    requireContains(assembly, "  lw a0, 12(sp)\n");
-    requireContains(assembly, "  addi sp, sp, 16\n");
+    const int status = std::system(command.c_str());
+    require(status != -1, "failed to start command for " + purpose);
+    require(WIFEXITED(status),
+        "command did not exit normally for " + purpose + ": " + command);
+    require(WEXITSTATUS(status) == 0,
+        purpose + " failed with exit code "
+            + std::to_string(WEXITSTATUS(status)) + ": " + command);
 }
 
-void testConditionalBranchLowering()
+void expectProgramOutput(const std::string& source, const std::string& input,
+    const std::string& expectedOutput)
 {
-    const std::string assembly
-        = generateAssembly("int main(){if(1){return 2;} return 3;}");
+    const std::string compiledCompilerPath = compilerPath();
+    const std::string libraryPath = riscvLibraryPath();
 
-    requireContains(assembly, "  bnez t0, main_if_then_1\n");
-    requireContains(assembly, "  j main_if_end_2\n");
-    requireContains(assembly, "main_if_then_1:\n");
-    requireContains(assembly, "  li a0, 2\n");
-    requireContains(assembly, "main_if_end_2:\n");
-    requireContains(assembly, "  li a0, 3\n");
+    TempFile sourceFile(".sy");
+    TempFile assemblyFile(".S");
+    TempFile objectFile(".o");
+    TempFile executableFile(".elf");
+    TempFile inputFile(".txt");
+    TempFile outputFile(".txt");
+
+    writeTextFile(sourceFile.path(), source);
+    writeTextFile(inputFile.path(), input);
+
+    runCheckedCommand("timeout 10s " + quoteShell(compiledCompilerPath)
+            + " -riscv " + quoteShell(sourceFile.path()) + " -o "
+            + quoteShell(assemblyFile.path()),
+        "compiling SysY source to RISC-V assembly");
+
+    runCheckedCommand("clang " + quoteShell(assemblyFile.path()) + " -c -o "
+            + quoteShell(objectFile.path())
+            + " -target riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32",
+        "assembling generated RISC-V code");
+
+    runCheckedCommand("ld.lld " + quoteShell(objectFile.path()) + " -L"
+            + quoteShell(libraryPath) + " -lsysy -o "
+            + quoteShell(executableFile.path()),
+        "linking generated RISC-V executable");
+
+    runCheckedCommand("timeout 10s qemu-riscv32-static "
+            + quoteShell(executableFile.path()) + " < "
+            + quoteShell(inputFile.path()) + " > "
+            + quoteShell(outputFile.path()),
+        "executing generated RISC-V executable under qemu");
+
+    const std::string actualOutput = readTextFile(outputFile.path());
+    require(actualOutput == expectedOutput,
+        "unexpected program output\nexpected: " + expectedOutput
+            + "\nactual: " + actualOutput);
 }
 
-void testSanitizedBlockLabelUniqueness()
+void testLiteralOutput()
 {
-    auto program = std::unique_ptr<Program>(Program::create());
-    auto function = Function::create(
-        FunctionType::get(yesod::koopa::Int32Type::get(), {}), "@main");
-    auto entry = BasicBlock::createEntry("%entry");
-    auto firstTarget = BasicBlock::createNonEntry("%branch-target");
-    auto secondTarget = BasicBlock::createNonEntry("%branch_target");
-
-    entry->pushInst(BranchValue::get(
-        IntegerValue::get(1), firstTarget, {}, secondTarget, {}));
-    firstTarget->pushInst(ReturnValue::get(IntegerValue::get(1)));
-    secondTarget->pushInst(ReturnValue::get(IntegerValue::get(0)));
-
-    function->pushBB(entry);
-    function->pushBB(firstTarget);
-    function->pushBB(secondTarget);
-    function->validate();
-    program->pushFunc(function);
-
-    const std::string assembly = generateAssembly(*program);
-
-    requireContains(assembly, "  bnez t0, main_branch_target\n");
-    requireContains(assembly, "  j main_branch_target_2\n");
-    requireContains(assembly, "main_branch_target:\n");
-    requireContains(assembly, "main_branch_target_2:\n");
+    expectProgramOutput(
+        "int main(){putint(42); putch(10); return 0;}", "", "42\n");
 }
 
-void testFunctionCallLowering()
+void testGlobalLoadStoreAndBranching()
 {
-    const std::string assembly = generateAssembly(
-        "int add(int lhs, int rhs){return lhs + rhs;}"
-        "int main(){return add(4, 5);}");
-
-    requireContains(assembly, "  .globl add\n");
-    requireContains(assembly, "add:\n");
-    requireContains(assembly, "  .globl main\n");
-    requireContains(assembly, "main:\n");
-    requireContains(assembly, "  li a0, 4\n");
-    requireContains(assembly, "  li a1, 5\n");
-    requireContains(assembly, "  call add\n");
+    expectProgramOutput("int global = 1;"
+                        "int main(){"
+                        "  if(global){"
+                        "    global = global + 4;"
+                        "  } else {"
+                        "    global = 99;"
+                        "  }"
+                        "  putint(global);"
+                        "  putch(10);"
+                        "  return 0;"
+                        "}",
+        "", "5\n");
 }
 
-void testNonLeafFunctionSavesReturnAddress()
+void testCallWithMoreThanEightArguments()
 {
-    const std::string assembly = generateAssembly(
-        "int id(int value){return value;}"
-        "int main(){return id(7);}");
-
-    requireContains(assembly, "  sw ra, ");
-    requireContains(assembly, "  lw ra, ");
-    requireContains(assembly, "  call id\n");
+    expectProgramOutput("int sum10(int a0,int a1,int a2,int a3,int a4,int "
+                        "a5,int a6,int a7,int a8,int a9){"
+                        "  return a0+a1+a2+a3+a4+a5+a6+a7+a8+a9;"
+                        "}"
+                        "int main(){"
+                        "  putint(sum10(1,2,3,4,5,6,7,8,9,10));"
+                        "  putch(10);"
+                        "  return 0;"
+                        "}",
+        "", "55\n");
 }
 
-void testGlobalVariableLowering()
+void testInputRedirectionAndArrayAccess()
 {
-    const std::string assembly
-        = generateAssembly("int global = 3; int main(){return global;}");
-
-    requireContains(assembly, "  .data\n");
-    requireContains(assembly, "  .globl global\n");
-    requireContains(assembly, "global:\n");
-    requireContains(assembly, "  .word 3\n");
-    requireContains(assembly, "  .text\n");
-    requireContains(assembly, "  la t0, global\n");
-}
-
-void testGlobalStoreLowering()
-{
-    const std::string assembly = generateAssembly(
-        "int global = 1; int main(){global = global + 4; return global;}");
-
-    requireContains(assembly, "  la t0, global\n");
-    requireContains(assembly, "  lw t1, 0(t0)\n");
-    requireContains(assembly, "  sw t2, 0(t0)\n");
-}
-
-void testExternalLibraryCallLowering()
-{
-    const std::string assembly
-        = generateAssembly("int main(){putint(7); return 0;}");
-
-    requireContains(assembly, "  li a0, 7\n");
-    requireContains(assembly, "  call putint\n");
-    requireContains(assembly, "  sw ra, ");
-    requireContains(assembly, "  lw ra, ");
-    requireNotContains(assembly, "putint:\n");
-}
-
-void testCallWithMoreThanEightArgumentsLowering()
-{
-    const std::string assembly = generateAssembly(
-        "int sum10(int a0,int a1,int a2,int a3,int a4,int a5,int a6,int a7,int a8,int a9){"
-        "return a0+a1+a2+a3+a4+a5+a6+a7+a8+a9;}"
-        "int main(){return sum10(1,2,3,4,5,6,7,8,9,10);}");
-
-    requireContains(assembly, "  li a0, 1\n");
-    requireContains(assembly, "  li a7, 8\n");
-    requireContains(assembly, "  sw t0, 0(sp)\n");
-    requireContains(assembly, "  sw t0, 4(sp)\n");
-    requireContains(assembly, "  call sum10\n");
-}
-
-void testRecursiveFunctionLowering()
-{
-    const std::string assembly = generateAssembly(
-        "int fib(int n){"
-        "if(n <= 1){return n;}"
-        "return fib(n - 1) + fib(n - 2);"
-        "}"
-        "int main(){return fib(4);}");
-
-    requireContains(assembly, "  .globl fib\n");
-    requireContains(assembly, "fib:\n");
-    requireContains(assembly, "  call fib\n");
-    requireContains(assembly, "  sw ra, ");
-    requireContains(assembly, "  lw ra, ");
-}
-
-void testCalleeReadsArgumentsBeyondA7FromStack()
-{
-    const std::string assembly = generateAssembly(
-        "int sum10(int a0,int a1,int a2,int a3,int a4,int a5,int a6,int a7,int a8,int a9){"
-        "return a8 + a9;"
-        "}"
-        "int main(){return sum10(1,2,3,4,5,6,7,8,9,10);}");
-
-    requireContains(assembly, "sum10:\n");
-    requireContains(assembly, "  lw t0, ");
-    requireContains(assembly, "  call sum10\n");
-    requireContains(assembly, "  sw t0, 0(sp)\n");
-    requireContains(assembly, "  sw t0, 4(sp)\n");
-}
-
-void testGlobalArraySectionsAndNames()
-{
-    const std::string assembly = generateAssembly(
-        "const int carr[3] = {1, 2, 3};"
-        "int varr[3] = {4, 5, 6};"
-        "int zeros[3];"
-        "int main(){return carr[1] + varr[1] + zeros[1];}");
-
-    requireContains(assembly, "  .section .rodata\n");
-    requireContains(assembly, "  .globl c_carr\n");
-    requireContains(assembly, "c_carr:\n");
-    requireContains(assembly, "  .word 1\n");
-    requireContains(assembly, "  .word 2\n");
-    requireContains(assembly, "  .word 3\n");
-
-    requireContains(assembly, "  .data\n");
-    requireContains(assembly, "  .globl v_varr\n");
-    requireContains(assembly, "v_varr:\n");
-    requireContains(assembly, "  .word 4\n");
-    requireContains(assembly, "  .word 5\n");
-    requireContains(assembly, "  .word 6\n");
-
-    requireContains(assembly, "  .bss\n");
-    requireContains(assembly, "  .globl v_zeros\n");
-    requireContains(assembly, "v_zeros:\n");
-    requireContains(assembly, "  .zero 12\n");
-}
-
-void testArrayAddressingUsesScaledOffsets()
-{
-    const std::string assembly = generateAssembly(
-        "int main(){int arr[4]; int i = 2; arr[i] = 7; return arr[i];}");
-
-    requireContains(assembly, "  li t2, 4\n");
-    requireContains(assembly, "  mul t1, t1, t2\n");
-    requireContains(assembly, "  add t0, t0, t1\n");
+    expectProgramOutput("int main(){"
+                        "  int values[8];"
+                        "  int length = getarray(values);"
+                        "  int index = 0;"
+                        "  int sum = 0;"
+                        "  while(index < length){"
+                        "    sum = sum + values[index];"
+                        "    index = index + 1;"
+                        "  }"
+                        "  putint(sum);"
+                        "  putch(10);"
+                        "  return 0;"
+                        "}",
+        "4 9 8 7 6\n", "30\n");
 }
 
 } // namespace
 
 int main()
 {
-    testLiteralReturn();
-    testStackAllocatedStraightLineLowering();
-    testConditionalBranchLowering();
-    testSanitizedBlockLabelUniqueness();
-    testFunctionCallLowering();
-    testNonLeafFunctionSavesReturnAddress();
-    testGlobalVariableLowering();
-    testGlobalStoreLowering();
-    testExternalLibraryCallLowering();
-    testCallWithMoreThanEightArgumentsLowering();
-    testRecursiveFunctionLowering();
-    testCalleeReadsArgumentsBeyondA7FromStack();
-    testGlobalArraySectionsAndNames();
-    testArrayAddressingUsesScaledOffsets();
+    testLiteralOutput();
+    testGlobalLoadStoreAndBranching();
+    testCallWithMoreThanEightArguments();
+    testInputRedirectionAndArrayAccess();
     return 0;
 }

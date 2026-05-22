@@ -8,11 +8,11 @@ struct ParserDeclTest : ParserTestBase {
     Handle<Exp> requireScalarConstInitExpHandle(
         const Handle<ConstInitVal>& initVal_nn)
     {
-        const auto exp_nn = match(initVal_nn(ast()).m_kind,
-            with {
+        const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
+            WITH (
                 [](const Handle<Exp>& exp_nn) { return exp_nn; },
                 [](const auto&) { return Handle<Exp> {}; },
-            });
+            );
         require(exp_nn != nullptr,
             "expected scalar const initializer expression");
         return exp_nn;
@@ -20,11 +20,11 @@ struct ParserDeclTest : ParserTestBase {
 
     Handle<Exp> requireScalarInitExpHandle(const Handle<InitVal>& initVal_nn)
     {
-        const auto exp_nn = match(initVal_nn(ast()).m_kind,
-            with {
+        const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
+            WITH (
                 [](const Handle<Exp>& exp_nn) { return exp_nn; },
                 [](const auto&) { return Handle<Exp> {}; },
-            });
+            );
         require(exp_nn != nullptr, "expected scalar initializer expression");
         return exp_nn;
     }
