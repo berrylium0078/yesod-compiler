@@ -74,8 +74,6 @@ enum class BinaryOpKeyword {
 };
 
 struct Exp;
-struct LVal;
-struct Number;
 struct ConstInitVal;
 struct InitVal;
 struct ConstDef;
@@ -96,20 +94,10 @@ struct BlockItemNode;
 struct Block;
 struct TopLevelItemNode;
 
-struct Identifier {    
+struct Identifier {
     SourcePos m_sourcePos;
     std::string m_name;
 };
-
-struct Number {
-    int32_t m_value;
-};
-
-struct LVal {
-    Handle<Identifier> m_identifier_nn;
-    std::vector<Handle<Exp>> m_indices;
-};
-
 struct Exp {
     struct Binary {
         Handle<Exp> m_lhs_nn;
@@ -126,6 +114,13 @@ struct Exp {
         Handle<Identifier> m_func_nn;
         std::vector<Handle<Exp>> m_params;
     };
+    struct Number {
+        int32_t m_value;
+    };
+    struct LVal {
+        Handle<Identifier> m_identifier_nn;
+        std::vector<Handle<Exp>> m_indices;
+    };
 
     using Kind = std::variant<Binary, Unary, Call, LVal, Number>;
 
@@ -134,75 +129,15 @@ struct Exp {
 };
 
 struct ConstInitVal {
-    struct List {
-        std::vector<Handle<ConstInitVal>> m_values;
-    };
-
+    using List = std::vector<Handle<ConstInitVal>>;
     using Kind = std::variant<Handle<Exp>, List>;
-
-    ConstInitVal() = default;
-
-    ConstInitVal(int32_t startOffset, Handle<Exp> exp_nn)
-        : m_sourcePos(startOffset)
-        , m_kind(exp_nn)
-    {
-    }
-
-    ConstInitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
-        : m_sourcePos(sourcePos)
-        , m_kind(exp_nn)
-    {
-    }
-
-    ConstInitVal(int32_t startOffset, List list)
-        : m_sourcePos(startOffset)
-        , m_kind(std::move(list))
-    {
-    }
-
-    ConstInitVal(SourcePos sourcePos, List list)
-        : m_sourcePos(sourcePos)
-        , m_kind(std::move(list))
-    {
-    }
-
     SourcePos m_sourcePos;
     Kind m_kind;
 };
 
 struct InitVal {
-    struct List {
-        std::vector<Handle<InitVal>> m_values;
-    };
-
+    using List = std::vector<Handle<InitVal>>;
     using Kind = std::variant<Handle<Exp>, List>;
-
-    InitVal() = default;
-
-    InitVal(int32_t startOffset, Handle<Exp> exp_nn)
-        : m_sourcePos(startOffset)
-        , m_kind(exp_nn)
-    {
-    }
-
-    InitVal(SourcePos sourcePos, Handle<Exp> exp_nn)
-        : m_sourcePos(sourcePos)
-        , m_kind(exp_nn)
-    {
-    }
-
-    InitVal(int32_t startOffset, List list)
-        : m_sourcePos(startOffset)
-        , m_kind(std::move(list))
-    {
-    }
-
-    InitVal(SourcePos sourcePos, List list)
-        : m_sourcePos(sourcePos)
-        , m_kind(std::move(list))
-    {
-    }
-
     SourcePos m_sourcePos;
     Kind m_kind;
 };

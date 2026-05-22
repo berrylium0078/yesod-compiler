@@ -102,7 +102,7 @@ class Generator {
     [[nodiscard]] BinaryValue* generateBinaryValue(koopa_raw_binary_op op,
         Value* lhs, Value* rhs, BasicBlock& basicBlock,
         int32_t& nextTempId) const;
-    [[nodiscard]] Value* generateNumber(const frontend::Number& number) const;
+    [[nodiscard]] Value* generateNumber(const frontend::Exp::Number& number) const;
     [[nodiscard]] Type* lowerSemanticType(
         const frontend::SemanticType& type,
         bool decayUnsizedArrayToPointer = true) const;
@@ -115,7 +115,7 @@ class Generator {
         const frontend::SemanticType& type,
         const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
         size_t& nextScalarIndex, FunctionGenerationState& state) const;
-    [[nodiscard]] Value* generateLValueAddress(const frontend::LVal& lVal,
+    [[nodiscard]] Value* generateLValueAddress(const frontend::Exp::LVal& lVal,
         FunctionGenerationState& state) const;
     template <typename T>
     [[nodiscard]] const T& node(frontend::Handle<T> handle,

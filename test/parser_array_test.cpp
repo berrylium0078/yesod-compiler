@@ -64,7 +64,7 @@ struct ParserArrayTest : ParserTestBase {
             "local array declaration should preserve one dimension expression");
         const auto& initList = requireInitListHandle(
             varDecl_nn(ast()).m_varDefs[0](ast()).m_initVal_nn);
-        require(initList.m_values.size() == 2,
+        require(initList.size() == 2,
             "brace initializer should preserve both initializer elements");
 
         const auto assignStmt_nn = extractAssignStmt(extractStmtNode(blockItems[1]));

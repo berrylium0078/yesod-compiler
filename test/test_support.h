@@ -13,6 +13,8 @@
 namespace yesod::test_support {
 
 using namespace yesod::frontend;
+using LVal = Exp::LVal;
+using Number = Exp::Number;
 
 [[noreturn]] inline void fail(const std::string& message)
 {

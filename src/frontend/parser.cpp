@@ -913,7 +913,7 @@ ParseResult<Handle<ConstInitVal>> Parser::parseConstInitVal(int32_t offset)
         auto nextOffset = openBrace.m_nextOffset;
         const auto initValList = parseConstInitValList(openBrace.m_nextOffset);
         if (initValList.m_success) {
-            initializerValues.m_values = initValList.m_value;
+            initializerValues = initValList.m_value;
             nextOffset = initValList.m_nextOffset;
         } else {
             recordCommittedFailure(skipTrivia(openBrace.m_nextOffset),
@@ -1099,7 +1099,7 @@ ParseResult<Handle<InitVal>> Parser::parseInitVal(int32_t offset)
         auto nextOffset = openBrace.m_nextOffset;
         const auto initValList = parseInitValList(openBrace.m_nextOffset);
         if (initValList.m_success) {
-            initializerValues.m_values = initValList.m_value;
+            initializerValues = initValList.m_value;
             nextOffset = initValList.m_nextOffset;
         } else {
             recordCommittedFailure(skipTrivia(openBrace.m_nextOffset),
@@ -2554,7 +2554,7 @@ ParseResult<Handle<Exp>> Parser::parseLVal(int32_t offset)
         .m_nextOffset = indices.m_nextOffset,
         .m_value
         = m_ast.alloc<Exp>(identifier.m_value(m_ast).m_sourcePos.m_offset,
-            Exp::Kind { LVal { identifier.m_value, indices.m_value } }),
+            Exp::Kind { Exp::LVal { identifier.m_value, indices.m_value } }),
     };
     m_lValMemo.emplace(offset, result);
     return result;
@@ -2915,7 +2915,7 @@ ParseResult<Handle<Exp>> Parser::parseNumber(int32_t offset)
         .m_success = true,
         .m_nextOffset = intConst.m_nextOffset,
         .m_value = m_ast.alloc<Exp>(
-            normalizedOffset, Exp::Kind { Number { intConst.m_value } }),
+            normalizedOffset, Exp::Kind { Exp::Number { intConst.m_value } }),
     };
     m_numberMemo.emplace(offset, result);
     return result;

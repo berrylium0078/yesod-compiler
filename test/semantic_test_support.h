@@ -30,7 +30,7 @@ static_assert(std::is_same_v<
     decltype(std::declval<yesod::frontend::SemanticSymbol>().m_name),
     std::string>);
 static_assert(
-    std::is_same_v<decltype(std::declval<ast::Number>().m_value), int32_t>);
+    std::is_same_v<decltype(std::declval<Number>().m_value), int32_t>);
 static_assert(std::variant_size_v<ast::Stmt> == 8);
 
 struct SemanticTestBase : OutputAstBase<SemanticOutput>, TestBase {
@@ -116,7 +116,7 @@ inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
     const auto& exp = exp_nn(ast);
     return MATCH (exp.m_kind)
         WITH (
-            [](const ast::LVal& lVal) { return lVal.m_identifier_nn; },
+            [](const LVal& lVal) { return lVal.m_identifier_nn; },
             [](const auto&) {
                 require(false, "expected lvalue expression for symbol lookup");
                 return ast::Handle<ast::Identifier> {};

@@ -100,7 +100,7 @@ namespace {
             },
             [&](const typename InitNode::List& initAlt) {
                 size_t nextValueIndex = 0;
-                fillObjectFromSequence(ast, initAlt.m_values, nextValueIndex,
+                fillObjectFromSequence(ast, initAlt, nextValueIndex,
                     type, baseOffset, scalarExprs);
             }, );
     }
@@ -119,9 +119,9 @@ namespace {
                 }
             },
             [&](const typename InitNode::List& initAlt) {
-                if (!initAlt.m_values.empty()) {
+                if (!initAlt.empty()) {
                     assignScalarInitializerFromNode(
-                        ast, initAlt.m_values.front(), baseOffset, scalarExprs);
+                        ast, initAlt.front(), baseOffset, scalarExprs);
                 }
             }, );
     }
@@ -739,7 +739,7 @@ void Generator::generateAssignStmt(
         "assignment lvalue expression is null");
     MATCH(lValExp.m_kind)
     WITH(
-        [&](frontend::LVal expAlt) {
+        [&](frontend::Exp::LVal expAlt) {
             auto* address = generateLValueAddress(expAlt, state);
             auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
             state.m_currentBasicBlock_nn->pushInst(
@@ -820,7 +820,7 @@ Value* Generator::generateExp(
             state.m_currentBasicBlock_nn->pushInst(callValue);
             return callValue;
         },
-        [&](frontend::LVal expAlt) -> Value* {
+        [&](frontend::Exp::LVal expAlt) -> Value* {
             auto* address = generateLValueAddress(expAlt, state);
             const auto expType = state.m_semanticInfo_nn->findExpType(exp);
             if (expType.has_value() && expType->isArray()) {
@@ -840,7 +840,7 @@ Value* Generator::generateExp(
             state.m_currentBasicBlock_nn->pushInst(loadValue);
             return loadValue;
         },
-        [&](frontend::Number expAlt) -> Value* {
+        [&](frontend::Exp::Number expAlt) -> Value* {
             return generateNumber(expAlt);
         }, );
 }
@@ -1014,7 +1014,7 @@ BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
     return binaryValue;
 }
 
-Value* Generator::generateNumber(const frontend::Number& number) const
+Value* Generator::generateNumber(const frontend::Exp::Number& number) const
 {
     return IntegerValue::get(number.m_value);
 }
@@ -1103,7 +1103,7 @@ void Generator::generateLocalArrayInitializer(Value* address,
 }
 
 Value* Generator::generateLValueAddress(
-    const frontend::LVal& lVal, FunctionGenerationState& state) const
+    const frontend::Exp::LVal& lVal, FunctionGenerationState& state) const
 {
     const auto& symbol = requireSymbolForIdentifier(lVal.m_identifier_nn,
         *state.m_semanticInfo_nn, "lvalue is missing a symbol binding");

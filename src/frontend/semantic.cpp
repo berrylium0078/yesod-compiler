@@ -476,7 +476,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
             }
         },
         [&](const ConstInitVal::List& initList) {
-            auto& initValues = initList.m_values;
+            auto& initValues = initList;
             if (!expectedType.isArray()) {
                 if (!initValues.empty()) {
                     size_t consumed = 0;
@@ -606,20 +606,20 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
         },
         [&](const InitVal::List& initAlt) {
             if (!expectedType.isArray()) {
-                if (!initAlt.m_values.empty()) {
+                if (!initAlt.empty()) {
                     size_t consumed = 0;
                     analyzedInit
-                        = analyzeInitVal(initAlt.m_values.front(), expectedType,
+                        = analyzeInitVal(initAlt.front(), expectedType,
                             isGlobal, false, consumed, hasRemainingWarning);
                     nextIndex += consumed;
                 }
-                if (initAlt.m_values.size() > 1) {
+                if (initAlt.size() > 1) {
                     recordExcessInitializer(init.m_sourcePos.m_offset);
                 }
             } else {
                 size_t nextValueIndex = 0;
                 analyzedInit
-                    = analyzeInitSequence(initAlt.m_values, nextValueIndex,
+                    = analyzeInitSequence(initAlt, nextValueIndex,
                         expectedType, isGlobal, hasRemainingWarning);
                 nextIndex += nextValueIndex;
             }
@@ -756,7 +756,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Handle<AssignStmt> assignStmt_nn)
         = node(assignStmt.m_lVal_nn, "assignment is missing an lvalue");
     MATCH(lValExp.m_kind)
     WITH(
-        [&](LVal expAlt) {
+        [&](Exp::Exp::LVal expAlt) {
             const auto& identifier = node(expAlt.m_identifier_nn,
                 "assignment lvalue is missing an identifier");
             (void)resolveSymbol(expAlt.m_identifier_nn);
@@ -1064,7 +1064,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCallExp(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
-    const Exp& exp, const LVal& lval)
+    const Exp& exp, const Exp::LVal& lval)
 {
     (void)resolveSymbol(lval.m_identifier_nn);
     const auto* symbol = m_info.findSymbol(lval.m_identifier_nn);
@@ -1124,8 +1124,8 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
         },
         [&](const Exp::Unary& unary) { return analyzeUnaryExp(exp, unary); },
         [&](const Exp::Call& call) { return analyzeCallExp(exp, call); },
-        [&](const LVal& lval) { return analyzeLvalExp(exp, lval); },
-        [&](Number number) {
+        [&](const Exp::LVal& lval) { return analyzeLvalExp(exp, lval); },
+        [&](Exp::Number number) {
             return AnalyzedExp {
                 .m_type = SemanticType::makeInteger(),
                 .m_valueKind = ExpType::integer,
