@@ -1,15 +1,13 @@
 #ifndef _YESOD_TEST_KOOPA_TEST_SUPPORT_H_
 #define _YESOD_TEST_KOOPA_TEST_SUPPORT_H_
 
-#include <cstdlib>
+#include <cctype>
 
-#include <iostream>
 #include <memory>
 #include <string>
 #include <type_traits>
 
-#include <cctype>
-
+#include "test_support.h"
 #include "frontend/ast.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
@@ -25,21 +23,20 @@ using yesod::frontend::Parser;
 using yesod::frontend::SemanticAnalyzer;
 using namespace yesod::koopa;
 
+using yesod::test_support::TestBase;
+using yesod::test_support::OutputAstBase;
+using yesod::test_support::fail;
+using yesod::test_support::require;
+
 static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_topLevelItems),
     std::vector<Handle<yesod::frontend::TopLevelItemNode>>>);
 
-[[noreturn]] inline void fail(const std::string& message)
-{
-    std::cerr << "koopa_generator_test failure: " << message << std::endl;
-    std::exit(1);
-}
-
-inline void require(bool condition, const std::string& message)
-{
-    if (!condition) {
-        fail(message);
+struct KoopaTestBase : OutputAstBase<ParseOutput>, TestBase {
+    template <class Self> auto&& ast(this Self& self)
+    {
+        return self.m_output.m_ast;
     }
-}
+};
 
 inline bool matchesExpectedTempName(
     const std::string& actualName, const std::string& expectedName)
@@ -61,56 +58,15 @@ inline bool matchesExpectedTempName(
     return actualName == "%t" + expectedName.substr(1);
 }
 
-struct ParsedOutput {
-    ParsedOutput(const ParsedOutput&) = delete;
-    ParsedOutput& operator=(const ParsedOutput&) = delete;
-    ParsedOutput(ParsedOutput&& other)
-        : m_output(std::move(other.m_output))
-        , m_root(m_output.m_root)
-        , m_diagnostics(m_output.m_diagnostics)
-        , m_scope(std::move(other.m_scope))
-    {
-        m_scope.rebind(m_output.m_ast);
-    }
-
-    ParsedOutput& operator=(ParsedOutput&& other)
-    {
-        m_output = std::move(other.m_output);
-        m_root = m_output.m_root;
-        m_diagnostics = m_output.m_diagnostics;
-        m_scope = std::move(other.m_scope);
-        m_scope.rebind(m_output.m_ast);
-        return *this;
-    }
-
-    explicit ParsedOutput(ParseOutput output)
-        : m_output(std::move(output))
-        , m_root(m_output.m_root)
-        , m_diagnostics(m_output.m_diagnostics)
-        , m_scope(m_output.m_ast.bindCurrent())
-    {
-    }
-
-    [[nodiscard]] bool success() const { return m_output.success(); }
-
-    [[nodiscard]] const CompUnit* operator->() const
-    {
-        return m_root ? &m_output.m_ast.get(m_root) : nullptr;
-    }
-
-    ParseOutput m_output;
-    Handle<CompUnit> m_root;
-    std::vector<yesod::frontend::Diagnostic> m_diagnostics;
-    yesod::frontend::AST::ScopedCurrent m_scope;
-};
-
-inline ParsedOutput parseSource(const std::string& source)
+inline ParseOutput parseSource(const std::string& source)
 {
     Parser parser(source);
-    return ParsedOutput(parser.parse());
+    auto output = parser.parse();
+    bindCurrentAst(output.m_ast);
+    return output;
 }
 
-inline ParsedOutput parseRoot(const std::string& source)
+inline ParseOutput parseRoot(const std::string& source)
 {
     auto output = parseSource(source);
     if (!output.success()) {
@@ -119,34 +75,13 @@ inline ParsedOutput parseRoot(const std::string& source)
     return output;
 }
 
-inline Handle<yesod::frontend::FuncDef> firstFuncDef(
-    const Handle<CompUnit>& compUnit_nn)
-{
-    require(compUnit_nn != nullptr, "expected compilation unit node");
-    for (const auto topLevelItem_nn : compUnit_nn->m_topLevelItems) {
-        Handle<yesod::frontend::FuncDef> funcDef_nn;
-        std::visit(
-            [&](const auto& topLevelAlt) {
-                using AltType = std::decay_t<decltype(topLevelAlt)>;
-                if constexpr (std::is_same_v<AltType,
-                                  Handle<yesod::frontend::FuncDef>>) {
-                    funcDef_nn = topLevelAlt;
-                }
-            },
-            topLevelItem_nn->m_topLevelItem);
-        if (funcDef_nn) {
-            return funcDef_nn;
-        }
-    }
-    fail("expected at least one function definition in compilation unit");
-}
-
 inline std::unique_ptr<Program> generateProgram(const std::string& source)
 {
     auto rootOutput = parseRoot(source);
     SemanticAnalyzer semanticAnalyzer;
     auto semanticOutput = semanticAnalyzer.analyze(
-        std::move(rootOutput.m_output.m_ast), rootOutput.m_root);
+        std::move(rootOutput.m_ast), rootOutput.m_root);
+    bindCurrentAst(semanticOutput.m_ast);
     if (!semanticOutput.success()) {
         fail("expected semantic success before Koopa generation");
     }
