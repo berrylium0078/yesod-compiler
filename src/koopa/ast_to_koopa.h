@@ -14,7 +14,7 @@ namespace yesod::koopa {
 class Generator {
   public:
     [[nodiscard]] Program* generate(const frontend::AST& ast,
-        frontend::Handle<frontend::CompUnit> compUnit,
+        frontend::Ptr<frontend::CompUnit> compUnit,
         const frontend::SemanticInfo& semanticInfo) const;
 
   private:
@@ -33,51 +33,51 @@ class Generator {
         int32_t m_nextBlockId = 1;
         std::unordered_map<int32_t, Value*> m_storageBySymbolId;
         std::unordered_map<int32_t, Function*> m_functionBySymbolId;
-        std::unordered_map<frontend::Handle<frontend::WhileStmt>, LoopBlocks>
+        std::unordered_map<frontend::Ptr<frontend::WhileStmt>, LoopBlocks>
             m_loopBlocksByWhileStmt;
         std::unordered_set<std::string> m_usedSymbolNames;
     };
 
     [[nodiscard]] Function* createFunctionDecl(const frontend::AST& ast,
-        frontend::Handle<frontend::FuncDef> funcDef,
+        frontend::Ptr<frontend::FuncDef> funcDef,
         const frontend::SemanticInfo& semanticInfo) const;
     [[nodiscard]] Function* createExternalFunctionDecl(
         const frontend::SemanticSymbol& symbol) const;
     [[nodiscard]] Function* generateFuncDef(const frontend::AST& ast,
-        frontend::Handle<frontend::FuncDef> funcDef,
+        frontend::Ptr<frontend::FuncDef> funcDef,
         const frontend::SemanticInfo& semanticInfo,
         const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
         const std::unordered_map<int32_t, Function*>& functionBySymbolId,
         Function* function_nn) const;
-    void generateGlobalDecl(frontend::Handle<frontend::DeclNode> declNode,
+    void generateGlobalDecl(frontend::Ptr<frontend::DeclNode> declNode,
         Program& program, const frontend::AST& ast,
         const frontend::SemanticInfo& semanticInfo,
         std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const;
-    void generateBlock(frontend::Handle<frontend::Block> block,
+    void generateBlock(frontend::Ptr<frontend::Block> block,
         FunctionGenerationState& state) const;
-    void generateBlockItem(frontend::Handle<frontend::BlockItemNode> blockItem,
+    void generateBlockItem(frontend::Ptr<frontend::BlockItemNode> blockItem,
         FunctionGenerationState& state) const;
-    void generateDecl(frontend::Handle<frontend::DeclNode> declNode,
+    void generateDecl(frontend::Ptr<frontend::DeclNode> declNode,
         FunctionGenerationState& state) const;
-    void generateStmt(frontend::Handle<frontend::StmtNode> stmtNode,
+    void generateStmt(frontend::Ptr<frontend::StmtNode> stmtNode,
         FunctionGenerationState& state) const;
-    void generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
+    void generateIfStmt(frontend::Ptr<frontend::IfStmt> ifStmt,
         FunctionGenerationState& state) const;
-    void generateWhileStmt(frontend::Handle<frontend::WhileStmt> whileStmt,
+    void generateWhileStmt(frontend::Ptr<frontend::WhileStmt> whileStmt,
         FunctionGenerationState& state) const;
-    void generateBreakStmt(frontend::Handle<frontend::BreakStmt> breakStmt,
+    void generateBreakStmt(frontend::Ptr<frontend::BreakStmt> breakStmt,
         FunctionGenerationState& state) const;
     void generateContinueStmt(
-        frontend::Handle<frontend::ContinueStmt> continueStmt,
+        frontend::Ptr<frontend::ContinueStmt> continueStmt,
         FunctionGenerationState& state) const;
-    void generateAssignStmt(frontend::Handle<frontend::AssignStmt> assignStmt,
+    void generateAssignStmt(frontend::Ptr<frontend::AssignStmt> assignStmt,
         FunctionGenerationState& state) const;
-    void generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
+    void generateExpStmt(frontend::Ptr<frontend::ExpStmt> expStmt,
         FunctionGenerationState& state) const;
     [[nodiscard]] ReturnValue* generateReturnStmt(
-        frontend::Handle<frontend::ReturnStmt> returnStmt,
+        frontend::Ptr<frontend::ReturnStmt> returnStmt,
         FunctionGenerationState& state) const;
-    [[nodiscard]] Value* generateExp(frontend::Handle<frontend::Exp> exp,
+    [[nodiscard]] Value* generateExp(frontend::Ptr<frontend::Exp> exp,
         FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateBinaryExpValue(
         const frontend::Exp::Binary& binaryExp,
@@ -86,9 +86,9 @@ class Generator {
         const frontend::Exp::Unary& unaryExp,
         FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateBooleanAsInt(
-        frontend::Handle<frontend::Exp> exp,
+        frontend::Ptr<frontend::Exp> exp,
         FunctionGenerationState& state) const;
-    void generateBooleanBranch(frontend::Handle<frontend::Exp> exp,
+    void generateBooleanBranch(frontend::Ptr<frontend::Exp> exp,
         BasicBlock& trueBlock, BasicBlock& falseBlock,
         FunctionGenerationState& state) const;
     void generateLogicalOrBranch(const frontend::Exp::Binary& binaryExp,
@@ -108,20 +108,20 @@ class Generator {
         bool decayUnsizedArrayToPointer = true) const;
     [[nodiscard]] Value* generateGlobalArrayInitializer(
         const frontend::SemanticType& type,
-        const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+        const std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs,
         size_t& nextScalarIndex,
         const frontend::SemanticInfo& semanticInfo) const;
     void generateLocalArrayInitializer(Value* address,
         const frontend::SemanticType& type,
-        const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+        const std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs,
         size_t& nextScalarIndex, FunctionGenerationState& state) const;
     [[nodiscard]] Value* generateLValueAddress(const frontend::Exp::LVal& lVal,
         FunctionGenerationState& state) const;
     template <typename T>
-    [[nodiscard]] const T& node(frontend::Handle<T> handle,
+    [[nodiscard]] const T& node(frontend::Ptr<T> handle,
         const FunctionGenerationState& state, const char* message) const;
     [[nodiscard]] const frontend::SemanticSymbol& requireSymbolForIdentifier(
-        frontend::Handle<frontend::Identifier> identifier,
+        frontend::Ptr<frontend::Identifier> identifier,
         const frontend::SemanticInfo& semanticInfo, const char* message) const;
     [[nodiscard]] BasicBlock* createBasicBlock(
         const std::string& stem, FunctionGenerationState& state) const;
@@ -133,7 +133,7 @@ class Generator {
 };
 
 template <typename T>
-const T& Generator::node(frontend::Handle<T> handle,
+const T& Generator::node(frontend::Ptr<T> handle,
     const FunctionGenerationState& state, const char* message) const
 {
     if (!handle) {
@@ -143,7 +143,7 @@ const T& Generator::node(frontend::Handle<T> handle,
 }
 
 inline const frontend::SemanticSymbol& Generator::requireSymbolForIdentifier(
-    frontend::Handle<frontend::Identifier> identifier,
+    frontend::Ptr<frontend::Identifier> identifier,
     const frontend::SemanticInfo& semanticInfo, const char* message) const
 {
     const auto* symbol = semanticInfo.findSymbol(identifier);

@@ -13,16 +13,16 @@
 
 namespace yesod::frontend {
 
-template <typename T> class Handle;
+template <typename T> class Ptr;
 template <typename... Ts> class Arena;
 
-template <typename T> class Handle {
+template <typename T> class Ptr {
     template <typename... Ts> friend class Arena;
     template <typename> friend class std::hash;
 
 public:
-    Handle() = default;
-    Handle(const Handle&) = default;
+    Ptr() = default;
+    Ptr(const Ptr&) = default;
 
     template <typename... Ts> auto&& operator()(Arena<Ts...>& arenas) const
     {
@@ -33,11 +33,11 @@ public:
     {
         return arenas[*this];
     }
-    bool operator==(const Handle<T>& other) const
+    bool operator==(const Ptr<T>& other) const
     {
         return m_index == other.m_index;
     }
-    bool operator!=(const Handle<T>& other) const
+    bool operator!=(const Ptr<T>& other) const
     {
         return m_index != other.m_index;
     }
@@ -48,7 +48,7 @@ public:
     }
 
 private:
-    explicit Handle(int32_t index)
+    explicit Ptr(int32_t index)
         : m_index(index)
     {
     }
@@ -56,17 +56,17 @@ private:
 };
 
 template <typename... Ts> class Arena {
-    template <typename T> friend class Handle;
+    template <typename T> friend class Ptr;
 
 public:
-    template <typename T, typename... Args> Handle<T> alloc(Args... args)
+    template <typename T, typename... Args> Ptr<T> alloc(Args... args)
     {
         std::vector<T>& vec = std::get<std::vector<T>>(m_items);
         vec.emplace_back(std::forward<Args>(args)...);
-        return Handle<T>(vec.size() - 1);
+        return Ptr<T>(vec.size() - 1);
     }
     template <class Self, typename T>
-    auto&& operator[](this Self&& self, Handle<T> handle)
+    auto&& operator[](this Self&& self, Ptr<T> handle)
     {
         auto&& vec = std::get<std::vector<T>>(self.m_items);
 #ifdef NDEBUG
@@ -85,9 +85,9 @@ private:
 
 } // namespace yesod::frontend
 
-template <typename T> class std::hash<yesod::frontend::Handle<T>> {
+template <typename T> class std::hash<yesod::frontend::Ptr<T>> {
 public:
-    std::size_t operator()(const yesod::frontend::Handle<T>& handle) const
+    std::size_t operator()(const yesod::frontend::Ptr<T>& handle) const
     {
         return std::hash<int32_t>()(handle.m_index);
     }

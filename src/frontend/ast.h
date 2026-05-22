@@ -100,26 +100,26 @@ struct Identifier {
 };
 struct Exp {
     struct Binary {
-        Handle<Exp> m_lhs_nn;
-        Handle<Exp> m_rhs_nn;
+        Ptr<Exp> m_lhs_nn;
+        Ptr<Exp> m_rhs_nn;
         BinaryOpKeyword m_op = BinaryOpKeyword::plus;
     };
 
     struct Unary {
-        Handle<Exp> m_lhs_nn;
+        Ptr<Exp> m_lhs_nn;
         UnaryOpKeyword m_op = UnaryOpKeyword::plus;
     };
 
     struct Call {
-        Handle<Identifier> m_func_nn;
-        std::vector<Handle<Exp>> m_params;
+        Ptr<Identifier> m_func_nn;
+        std::vector<Ptr<Exp>> m_params;
     };
     struct Number {
         int32_t m_value;
     };
     struct LVal {
-        Handle<Identifier> m_identifier_nn;
-        std::vector<Handle<Exp>> m_indices;
+        Ptr<Identifier> m_identifier_nn;
+        std::vector<Ptr<Exp>> m_indices;
     };
 
     using Kind = std::variant<Binary, Unary, Call, LVal, Number>;
@@ -129,46 +129,46 @@ struct Exp {
 };
 
 struct ConstInitVal {
-    using List = std::vector<Handle<ConstInitVal>>;
-    using Kind = std::variant<Handle<Exp>, List>;
+    using List = std::vector<Ptr<ConstInitVal>>;
+    using Kind = std::variant<Ptr<Exp>, List>;
     SourcePos m_sourcePos;
     Kind m_kind;
 };
 
 struct InitVal {
-    using List = std::vector<Handle<InitVal>>;
-    using Kind = std::variant<Handle<Exp>, List>;
+    using List = std::vector<Ptr<InitVal>>;
+    using Kind = std::variant<Ptr<Exp>, List>;
     SourcePos m_sourcePos;
     Kind m_kind;
 };
 
 struct ConstDef {
     SourcePos m_sourcePos;
-    Handle<Identifier> m_identifier_nn;
-    std::vector<Handle<Exp>> m_dimensions;
-    Handle<ConstInitVal> m_constInitVal_nn;
+    Ptr<Identifier> m_identifier_nn;
+    std::vector<Ptr<Exp>> m_dimensions;
+    Ptr<ConstInitVal> m_constInitVal_nn;
 };
 
 struct VarDef {
     SourcePos m_sourcePos;
-    Handle<Identifier> m_identifier_nn;
-    std::vector<Handle<Exp>> m_dimensions;
-    Handle<InitVal> m_initVal_nn;
+    Ptr<Identifier> m_identifier_nn;
+    std::vector<Ptr<Exp>> m_dimensions;
+    Ptr<InitVal> m_initVal_nn;
 };
 
 struct ConstDecl {
     SourcePos m_sourcePos;
     BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    std::vector<Handle<ConstDef>> m_constDefs;
+    std::vector<Ptr<ConstDef>> m_constDefs;
 };
 
 struct VarDecl {
     SourcePos m_sourcePos;
     BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    std::vector<Handle<VarDef>> m_varDefs;
+    std::vector<Ptr<VarDef>> m_varDefs;
 };
 
-using Decl = std::variant<Handle<ConstDecl>, Handle<VarDecl>>;
+using Decl = std::variant<Ptr<ConstDecl>, Ptr<VarDecl>>;
 
 struct DeclNode {
     SourcePos m_sourcePos;
@@ -177,15 +177,15 @@ struct DeclNode {
 
 struct IfStmt {
     SourcePos m_sourcePos;
-    Handle<Exp> m_condExp_nn;
-    Handle<StmtNode> m_thenStmt_nn;
-    Handle<StmtNode> m_elseStmt_nn;
+    Ptr<Exp> m_condExp_nn;
+    Ptr<StmtNode> m_thenStmt_nn;
+    Ptr<StmtNode> m_elseStmt_nn;
 };
 
 struct WhileStmt {
     SourcePos m_sourcePos;
-    Handle<Exp> m_condExp_nn;
-    Handle<StmtNode> m_bodyStmt_nn;
+    Ptr<Exp> m_condExp_nn;
+    Ptr<StmtNode> m_bodyStmt_nn;
 };
 
 struct BreakStmt {
@@ -198,30 +198,30 @@ struct ContinueStmt {
 
 struct AssignStmt {
     SourcePos m_sourcePos;
-    Handle<Exp> m_lVal_nn;
-    Handle<Exp> m_exp_nn;
+    Ptr<Exp> m_lVal_nn;
+    Ptr<Exp> m_exp_nn;
 };
 
 struct ExpStmt {
     SourcePos m_sourcePos;
-    Handle<Exp> m_exp_nn;
+    Ptr<Exp> m_exp_nn;
 };
 
 struct ReturnStmt {
     SourcePos m_sourcePos;
-    Handle<Exp> m_exp_nn;
+    Ptr<Exp> m_exp_nn;
 };
 
-using Stmt = std::variant<Handle<IfStmt>, Handle<WhileStmt>, Handle<BreakStmt>,
-    Handle<ContinueStmt>, Handle<AssignStmt>, Handle<Block>, Handle<ReturnStmt>,
-    Handle<ExpStmt>>;
+using Stmt = std::variant<Ptr<IfStmt>, Ptr<WhileStmt>, Ptr<BreakStmt>,
+    Ptr<ContinueStmt>, Ptr<AssignStmt>, Ptr<Block>, Ptr<ReturnStmt>,
+    Ptr<ExpStmt>>;
 
 struct StmtNode {
     SourcePos m_sourcePos;
     Stmt m_stmt;
 };
 
-using BlockItem = std::variant<Handle<DeclNode>, Handle<StmtNode>>;
+using BlockItem = std::variant<Ptr<DeclNode>, Ptr<StmtNode>>;
 
 struct BlockItemNode {
     SourcePos m_sourcePos;
@@ -230,26 +230,26 @@ struct BlockItemNode {
 
 struct Block {
     SourcePos m_sourcePos;
-    std::vector<Handle<BlockItemNode>> m_blockItems;
+    std::vector<Ptr<BlockItemNode>> m_blockItems;
 };
 
 struct FuncFParam {
     SourcePos m_sourcePos;
     BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    Handle<Identifier> m_identifier_nn;
+    Ptr<Identifier> m_identifier_nn;
     bool m_isArray = false;
-    std::vector<Handle<Exp>> m_trailingDimensions;
+    std::vector<Ptr<Exp>> m_trailingDimensions;
 };
 
 struct FuncDef {
     SourcePos m_sourcePos;
     FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
-    Handle<Identifier> m_identifier_nn;
-    std::vector<Handle<FuncFParam>> m_funcFParams;
-    Handle<Block> m_block_nn;
+    Ptr<Identifier> m_identifier_nn;
+    std::vector<Ptr<FuncFParam>> m_funcFParams;
+    Ptr<Block> m_block_nn;
 };
 
-using TopLevelItem = std::variant<Handle<DeclNode>, Handle<FuncDef>>;
+using TopLevelItem = std::variant<Ptr<DeclNode>, Ptr<FuncDef>>;
 
 struct TopLevelItemNode {
     SourcePos m_sourcePos;
@@ -258,7 +258,7 @@ struct TopLevelItemNode {
 
 struct CompUnit {
     SourcePos m_sourcePos;
-    std::vector<Handle<TopLevelItemNode>> m_topLevelItems;
+    std::vector<Ptr<TopLevelItemNode>> m_topLevelItems;
 };
 
 using AST = Arena<Identifier, Exp,

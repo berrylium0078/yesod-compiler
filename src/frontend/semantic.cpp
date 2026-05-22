@@ -126,7 +126,7 @@ namespace {
 
 } // namespace
 
-SemanticOutput SemanticAnalyzer::analyze(AST ast, Handle<CompUnit> compUnit_nn)
+SemanticOutput SemanticAnalyzer::analyze(AST ast, Ptr<CompUnit> compUnit_nn)
 {
     m_ast = std::move(ast);
     m_root_nn = compUnit_nn;
@@ -149,7 +149,7 @@ SemanticOutput SemanticAnalyzer::analyze(AST ast, Handle<CompUnit> compUnit_nn)
     };
 }
 
-void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
+void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
 {
     const auto& compUnit = node(compUnit_nn, "compilation unit is missing");
     pushScope();
@@ -159,20 +159,20 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
         const auto& topLevelItem
             = node(topLevelItem_nn, "top-level item is missing");
         MATCH(topLevelItem.m_topLevelItem)
-        WITH([&](Handle<DeclNode> declNode) { analyzeDeclNode(declNode); },
-            [&](Handle<FuncDef> funcDef) { declareFuncDef(funcDef); });
+        WITH([&](Ptr<DeclNode> declNode) { analyzeDeclNode(declNode); },
+            [&](Ptr<FuncDef> funcDef) { declareFuncDef(funcDef); });
     }
 
     for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
         const auto& topLevelItem
             = node(topLevelItem_nn, "top-level item is missing");
 
-        auto decl = std::get_if<Handle<DeclNode>>(&topLevelItem.m_topLevelItem);
+        auto decl = std::get_if<Ptr<DeclNode>>(&topLevelItem.m_topLevelItem);
         if (!decl)
             continue;
         auto& declNode = node(*decl, "declaration payload is missing");
         MATCH(declNode.m_decl)
-        WITH([&](Handle<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
+        WITH([&](Ptr<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
             [](const auto&) { });
     }
 
@@ -181,7 +181,7 @@ void SemanticAnalyzer::analyzeCompUnit(Handle<CompUnit> compUnit_nn)
             = node(topLevelItem_nn, "top-level item is missing");
 
         MATCH(topLevelItem.m_topLevelItem)
-        WITH([&](Handle<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
+        WITH([&](Ptr<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
             [](const auto&) { });
     }
 }
@@ -220,7 +220,7 @@ void SemanticAnalyzer::declareBuiltinFunctions()
     }
 }
 
-void SemanticAnalyzer::declareFuncDef(Handle<FuncDef> funcDef_nn)
+void SemanticAnalyzer::declareFuncDef(Ptr<FuncDef> funcDef_nn)
 {
     const auto& funcDef
         = node(funcDef_nn, "compilation unit is missing a function");
@@ -248,7 +248,7 @@ void SemanticAnalyzer::declareFuncDef(Handle<FuncDef> funcDef_nn)
     bindSymbol(funcDef.m_identifier_nn, symbol);
 }
 
-void SemanticAnalyzer::analyzeFuncDef(Handle<FuncDef> funcDef_nn)
+void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
 {
     const auto& funcDef
         = node(funcDef_nn, "compilation unit is missing a function");
@@ -287,7 +287,7 @@ void SemanticAnalyzer::analyzeFuncDef(Handle<FuncDef> funcDef_nn)
     m_currentFuncReturnType = previousReturnType;
 }
 
-void SemanticAnalyzer::analyzeBlock(Handle<Block> block_nn)
+void SemanticAnalyzer::analyzeBlock(Ptr<Block> block_nn)
 {
     const auto& block
         = node(block_nn, "function definition is missing a block");
@@ -299,24 +299,24 @@ void SemanticAnalyzer::analyzeBlock(Handle<Block> block_nn)
 }
 
 void SemanticAnalyzer::analyzeBlockItemNode(
-    Handle<BlockItemNode> blockItemNode_nn)
+    Ptr<BlockItemNode> blockItemNode_nn)
 {
     const auto& blockItemNode
         = node(blockItemNode_nn, "block contains a null item");
     MATCH(blockItemNode.m_blockItem)
-    WITH([&](Handle<DeclNode> decl) { analyzeDeclNode(decl); },
-        [&](Handle<StmtNode> stmt) { analyzeStmtNode(stmt); });
+    WITH([&](Ptr<DeclNode> decl) { analyzeDeclNode(decl); },
+        [&](Ptr<StmtNode> stmt) { analyzeStmtNode(stmt); });
 }
 
-void SemanticAnalyzer::analyzeDeclNode(Handle<DeclNode> declNode_nn)
+void SemanticAnalyzer::analyzeDeclNode(Ptr<DeclNode> declNode_nn)
 {
     const auto& declNode = node(declNode_nn, "declaration payload is missing");
     MATCH(declNode.m_decl)
-    WITH([&](Handle<ConstDecl> constDecl) { analyzeConstDecl(constDecl); },
-        [&](Handle<VarDecl> varDecl) { analyzeVarDecl(varDecl); });
+    WITH([&](Ptr<ConstDecl> constDecl) { analyzeConstDecl(constDecl); },
+        [&](Ptr<VarDecl> varDecl) { analyzeVarDecl(varDecl); });
 }
 
-void SemanticAnalyzer::analyzeConstDecl(Handle<ConstDecl> constDecl_nn)
+void SemanticAnalyzer::analyzeConstDecl(Ptr<ConstDecl> constDecl_nn)
 {
     const auto& constDecl
         = node(constDecl_nn, "const declaration payload is missing");
@@ -366,7 +366,7 @@ void SemanticAnalyzer::analyzeConstDecl(Handle<ConstDecl> constDecl_nn)
     }
 }
 
-void SemanticAnalyzer::analyzeVarDecl(Handle<VarDecl> varDecl_nn)
+void SemanticAnalyzer::analyzeVarDecl(Ptr<VarDecl> varDecl_nn)
 {
     const auto& varDecl
         = node(varDecl_nn, "var declaration payload is missing");
@@ -398,7 +398,7 @@ void SemanticAnalyzer::analyzeVarDecl(Handle<VarDecl> varDecl_nn)
     }
 }
 
-void SemanticAnalyzer::declareVarDecl(Handle<VarDecl> varDecl_nn)
+void SemanticAnalyzer::declareVarDecl(Ptr<VarDecl> varDecl_nn)
 {
     const auto& varDecl
         = node(varDecl_nn, "var declaration payload is missing");
@@ -425,7 +425,7 @@ void SemanticAnalyzer::declareVarDecl(Handle<VarDecl> varDecl_nn)
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
-    Handle<ConstInitVal> constInitVal_nn, const SemanticType& expectedType,
+    Ptr<ConstInitVal> constInitVal_nn, const SemanticType& expectedType,
     bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
 {
     const auto& init
@@ -449,7 +449,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
 
     MATCH(init.m_kind)
     WITH(
-        [&](Handle<Exp> expr) {
+        [&](Ptr<Exp> expr) {
             if (!expectedType.isArray()) {
                 analyzedInit = analyzeExp(expr);
                 ++nextIndex;
@@ -466,7 +466,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
                         "const initializer must be a constant expression");
                 }
             } else {
-                const std::vector<Handle<ConstInitVal>> singleton {
+                const std::vector<Ptr<ConstInitVal>> singleton {
                     constInitVal_nn
                 };
                 size_t nextValueIndex = 0;
@@ -503,7 +503,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
-    const std::vector<Handle<ConstInitVal>>& values, size_t& nextValueIndex,
+    const std::vector<Ptr<ConstInitVal>>& values, size_t& nextValueIndex,
     const SemanticType& expectedType, bool& hasRemainingWarning)
 {
     if (!expectedType.isArray()) {
@@ -533,7 +533,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
             values[nextValueIndex], "const initializer element is missing");
         MATCH(child.m_kind)
         WITH(
-            [&](Handle<Exp>) {
+            [&](Ptr<Exp>) {
                 (void)analyzeConstInitSequence(values, nextValueIndex,
                     *expectedType.m_elementType, hasRemainingWarning);
             },
@@ -555,7 +555,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
-    Handle<InitVal> initVal_nn, const SemanticType& expectedType, bool isGlobal,
+    Ptr<InitVal> initVal_nn, const SemanticType& expectedType, bool isGlobal,
     bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
 {
     const auto& init = node(initVal_nn, "initializer element is missing");
@@ -578,7 +578,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
 
     MATCH(init.m_kind)
     WITH(
-        [&](Handle<Exp> initAlt) {
+        [&](Ptr<Exp> initAlt) {
             if (!expectedType.isArray()) {
                 analyzedInit = analyzeExp(initAlt);
                 ++nextIndex;
@@ -597,7 +597,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
                         "expression");
                 }
             } else {
-                const std::vector<Handle<InitVal>> singleton { initVal_nn };
+                const std::vector<Ptr<InitVal>> singleton { initVal_nn };
                 size_t nextValueIndex = 0;
                 analyzedInit = analyzeInitSequence(singleton, nextValueIndex,
                     expectedType, isGlobal, hasRemainingWarning);
@@ -633,7 +633,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
-    const std::vector<Handle<InitVal>>& values, size_t& nextValueIndex,
+    const std::vector<Ptr<InitVal>>& values, size_t& nextValueIndex,
     const SemanticType& expectedType, bool isGlobal, bool& hasRemainingWarning)
 {
     if (!expectedType.isArray()) {
@@ -663,7 +663,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
             = node(values[nextValueIndex], "initializer element is missing");
         MATCH(child.m_kind)
         WITH(
-            [&](Handle<Exp>) {
+            [&](Ptr<Exp>) {
                 (void)analyzeInitSequence(values, nextValueIndex,
                     *expectedType.m_elementType, isGlobal, hasRemainingWarning);
             },
@@ -684,23 +684,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
     };
 }
 
-void SemanticAnalyzer::analyzeStmtNode(Handle<StmtNode> stmtNode_nn)
+void SemanticAnalyzer::analyzeStmtNode(Ptr<StmtNode> stmtNode_nn)
 {
     const auto& stmtNode = node(stmtNode_nn, "statement payload is missing");
     MATCH(stmtNode.m_stmt)
-    WITH([&](Handle<IfStmt> ifStmt) { analyzeIfStmt(ifStmt); },
-        [&](Handle<WhileStmt> whileStmt) { analyzeWhileStmt(whileStmt); },
-        [&](Handle<BreakStmt> breakStmt) { analyzeBreakStmt(breakStmt); },
-        [&](Handle<ContinueStmt> continueStmt) {
+    WITH([&](Ptr<IfStmt> ifStmt) { analyzeIfStmt(ifStmt); },
+        [&](Ptr<WhileStmt> whileStmt) { analyzeWhileStmt(whileStmt); },
+        [&](Ptr<BreakStmt> breakStmt) { analyzeBreakStmt(breakStmt); },
+        [&](Ptr<ContinueStmt> continueStmt) {
             analyzeContinueStmt(continueStmt);
         },
-        [&](Handle<AssignStmt> assignStmt) { analyzeAssignStmt(assignStmt); },
-        [&](Handle<Block> block) { analyzeBlock(block); },
-        [&](Handle<ReturnStmt> returnStmt) { analyzeReturnStmt(returnStmt); },
-        [&](Handle<ExpStmt> expStmt) { analyzeExpStmt(expStmt); });
+        [&](Ptr<AssignStmt> assignStmt) { analyzeAssignStmt(assignStmt); },
+        [&](Ptr<Block> block) { analyzeBlock(block); },
+        [&](Ptr<ReturnStmt> returnStmt) { analyzeReturnStmt(returnStmt); },
+        [&](Ptr<ExpStmt> expStmt) { analyzeExpStmt(expStmt); });
 }
 
-void SemanticAnalyzer::analyzeIfStmt(Handle<IfStmt> ifStmt_nn)
+void SemanticAnalyzer::analyzeIfStmt(Ptr<IfStmt> ifStmt_nn)
 {
     const auto& ifStmt = node(ifStmt_nn, "if statement payload is missing");
     (void)analyzeCondExp(ifStmt.m_condExp_nn);
@@ -710,7 +710,7 @@ void SemanticAnalyzer::analyzeIfStmt(Handle<IfStmt> ifStmt_nn)
     }
 }
 
-void SemanticAnalyzer::analyzeWhileStmt(Handle<WhileStmt> whileStmt_nn)
+void SemanticAnalyzer::analyzeWhileStmt(Ptr<WhileStmt> whileStmt_nn)
 {
     const auto& whileStmt
         = node(whileStmt_nn, "while statement payload is missing");
@@ -720,7 +720,7 @@ void SemanticAnalyzer::analyzeWhileStmt(Handle<WhileStmt> whileStmt_nn)
     m_loopStack.pop_back();
 }
 
-void SemanticAnalyzer::analyzeBreakStmt(Handle<BreakStmt> breakStmt_nn)
+void SemanticAnalyzer::analyzeBreakStmt(Ptr<BreakStmt> breakStmt_nn)
 {
     const auto& breakStmt
         = node(breakStmt_nn, "break statement payload is missing");
@@ -734,7 +734,7 @@ void SemanticAnalyzer::analyzeBreakStmt(Handle<BreakStmt> breakStmt_nn)
     bindLoop(breakStmt_nn, *loop);
 }
 
-void SemanticAnalyzer::analyzeContinueStmt(Handle<ContinueStmt> continueStmt_nn)
+void SemanticAnalyzer::analyzeContinueStmt(Ptr<ContinueStmt> continueStmt_nn)
 {
     const auto& continueStmt
         = node(continueStmt_nn, "continue statement payload is missing");
@@ -748,7 +748,7 @@ void SemanticAnalyzer::analyzeContinueStmt(Handle<ContinueStmt> continueStmt_nn)
     bindLoop(continueStmt_nn, *loop);
 }
 
-void SemanticAnalyzer::analyzeAssignStmt(Handle<AssignStmt> assignStmt_nn)
+void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
 {
     const auto& assignStmt
         = node(assignStmt_nn, "assignment statement payload is missing");
@@ -805,7 +805,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Handle<AssignStmt> assignStmt_nn)
     }
 }
 
-void SemanticAnalyzer::analyzeExpStmt(Handle<ExpStmt> expStmt_nn)
+void SemanticAnalyzer::analyzeExpStmt(Ptr<ExpStmt> expStmt_nn)
 {
     const auto& expStmt
         = node(expStmt_nn, "expression statement payload is missing");
@@ -814,7 +814,7 @@ void SemanticAnalyzer::analyzeExpStmt(Handle<ExpStmt> expStmt_nn)
     }
 }
 
-void SemanticAnalyzer::analyzeReturnStmt(Handle<ReturnStmt> returnStmt_nn)
+void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
 {
     const auto& returnStmt
         = node(returnStmt_nn, "return statement payload is missing");
@@ -1115,7 +1115,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
         .m_constantValue = 0,
     };
 }
-SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Ptr<Exp> exp_nn)
 {
     const auto& exp = node(exp_nn, "expression is missing");
     auto analyzedExp = MATCH(exp.m_kind) WITH(
@@ -1142,7 +1142,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Handle<Exp> exp_nn)
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(
-    Handle<Exp> exp_nn)
+    Ptr<Exp> exp_nn)
 {
     auto analyzedExp = analyzeExp(exp_nn);
     if (analyzedExp.m_valueKind == ExpType::voidType
@@ -1161,7 +1161,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(
     return analyzedExp;
 }
 
-std::optional<Handle<Identifier>> SemanticAnalyzer::lookupSymbol(
+std::optional<Ptr<Identifier>> SemanticAnalyzer::lookupSymbol(
     const std::string& name) const
 {
     for (auto scopeIt = m_scopeStack.rbegin(); scopeIt != m_scopeStack.rend();
@@ -1174,7 +1174,7 @@ std::optional<Handle<Identifier>> SemanticAnalyzer::lookupSymbol(
     return std::nullopt;
 }
 
-int32_t SemanticAnalyzer::resolveSymbol(Handle<Identifier> identifier_nn)
+int32_t SemanticAnalyzer::resolveSymbol(Ptr<Identifier> identifier_nn)
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
     const auto definitionIdentifier = lookupSymbol(identifier.m_name);
@@ -1197,14 +1197,14 @@ int32_t SemanticAnalyzer::resolveSymbol(Handle<Identifier> identifier_nn)
 }
 
 SemanticSymbol SemanticAnalyzer::makePlaceholderSymbol(
-    Handle<Identifier> identifier_nn)
+    Ptr<Identifier> identifier_nn)
 {
     return makeObjectSymbol(
         identifier_nn, false, false, 0, SemanticType::makeInteger());
 }
 
 SemanticType SemanticAnalyzer::analyzeObjectType(
-    const std::vector<Handle<Exp>>& dimensions, int32_t offset,
+    const std::vector<Ptr<Exp>>& dimensions, int32_t offset,
     bool allowUnsizedFirstDimension)
 {
     auto objectType = SemanticType::makeInteger();
@@ -1243,7 +1243,7 @@ bool SemanticAnalyzer::isArrayType(const SemanticType& type) const
 }
 
 SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
-    Handle<Identifier> identifier_nn, bool isConst, bool hasConstantValue,
+    Ptr<Identifier> identifier_nn, bool isConst, bool hasConstantValue,
     int32_t constantValue, const SemanticType& type)
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
@@ -1264,7 +1264,7 @@ SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
 }
 
 SemanticSymbol SemanticAnalyzer::makeFunctionSymbol(
-    Handle<Identifier> identifier_nn, const SemanticType& returnType,
+    Ptr<Identifier> identifier_nn, const SemanticType& returnType,
     const std::vector<SemanticType>& paramTypes)
 {
     const auto& identifier = node(identifier_nn, "identifier is missing");
@@ -1299,7 +1299,7 @@ bool SemanticAnalyzer::isGlobalScope() const
 }
 
 bool SemanticAnalyzer::defineSymbol(
-    const std::string& name, Handle<Identifier> identifier_nn)
+    const std::string& name, Ptr<Identifier> identifier_nn)
 {
     if (m_scopeStack.empty()) {
         pushScope();
@@ -1309,7 +1309,7 @@ bool SemanticAnalyzer::defineSymbol(
     return currentScope.emplace(name, identifier_nn).second;
 }
 
-std::optional<Handle<WhileStmt>> SemanticAnalyzer::currentLoop() const
+std::optional<Ptr<WhileStmt>> SemanticAnalyzer::currentLoop() const
 {
     if (m_loopStack.empty()) {
         return std::nullopt;

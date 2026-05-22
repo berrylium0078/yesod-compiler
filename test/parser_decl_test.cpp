@@ -5,25 +5,25 @@ using namespace yesod::test_support::parser;
 namespace {
 
 struct ParserDeclTest : ParserTestBase {
-    Handle<Exp> requireScalarConstInitExpHandle(
-        const Handle<ConstInitVal>& initVal_nn)
+    Ptr<Exp> requireScalarConstInitExpHandle(
+        const Ptr<ConstInitVal>& initVal_nn)
     {
         const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
             WITH (
-                [](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> {}; },
+                [](const Ptr<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Ptr<Exp> {}; },
             );
         require(exp_nn != nullptr,
             "expected scalar const initializer expression");
         return exp_nn;
     }
 
-    Handle<Exp> requireScalarInitExpHandle(const Handle<InitVal>& initVal_nn)
+    Ptr<Exp> requireScalarInitExpHandle(const Ptr<InitVal>& initVal_nn)
     {
         const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
             WITH (
-                [](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> {}; },
+                [](const Ptr<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Ptr<Exp> {}; },
             );
         require(exp_nn != nullptr, "expected scalar initializer expression");
         return exp_nn;

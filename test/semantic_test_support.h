@@ -12,7 +12,7 @@
 namespace yesod::test_support::semantic {
 
 using yesod::frontend::ExpType;
-using yesod::frontend::Handle;
+using yesod::frontend::Ptr;
 using yesod::frontend::ParseOutput;
 using yesod::frontend::Parser;
 using yesod::frontend::SemanticAnalyzer;
@@ -92,26 +92,26 @@ inline const SemanticDiagnostic& firstDiagnostic(const SemanticOutput& output)
     return output.m_diagnostics.front();
 }
 
-inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
-    const ast::AST&, const ast::Handle<ast::Identifier>& identifier_nn)
+inline ast::Ptr<ast::Identifier> requireSymbolIdentifier(
+    const ast::AST&, const ast::Ptr<ast::Identifier>& identifier_nn)
 {
     return identifier_nn;
 }
 
-inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
-    const ast::AST& ast, const ast::Handle<ast::ConstDef>& constDef_nn)
+inline ast::Ptr<ast::Identifier> requireSymbolIdentifier(
+    const ast::AST& ast, const ast::Ptr<ast::ConstDef>& constDef_nn)
 {
     return constDef_nn(ast).m_identifier_nn;
 }
 
-inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
-    const ast::AST& ast, const ast::Handle<ast::VarDef>& varDef_nn)
+inline ast::Ptr<ast::Identifier> requireSymbolIdentifier(
+    const ast::AST& ast, const ast::Ptr<ast::VarDef>& varDef_nn)
 {
     return varDef_nn(ast).m_identifier_nn;
 }
 
-inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
-    const ast::AST& ast, const ast::Handle<ast::Exp>& exp_nn)
+inline ast::Ptr<ast::Identifier> requireSymbolIdentifier(
+    const ast::AST& ast, const ast::Ptr<ast::Exp>& exp_nn)
 {
     const auto& exp = exp_nn(ast);
     return MATCH (exp.m_kind)
@@ -119,13 +119,13 @@ inline ast::Handle<ast::Identifier> requireSymbolIdentifier(
             [](const LVal& lVal) { return lVal.m_identifier_nn; },
             [](const auto&) {
                 require(false, "expected lvalue expression for symbol lookup");
-                return ast::Handle<ast::Identifier> {};
+                return ast::Ptr<ast::Identifier> {};
             },
         );
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const ast::Handle<ast::Identifier>& node)
+    const SemanticOutput& output, const ast::Ptr<ast::Identifier>& node)
 {
     const auto* symbol
         = output.m_info.findSymbol(requireSymbolIdentifier(output.m_ast, node));
@@ -134,7 +134,7 @@ inline const yesod::frontend::SemanticSymbol& requireSymbol(
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const ast::Handle<ast::ConstDef>& node)
+    const SemanticOutput& output, const ast::Ptr<ast::ConstDef>& node)
 {
     const auto* symbol
         = output.m_info.findSymbol(requireSymbolIdentifier(output.m_ast, node));
@@ -143,7 +143,7 @@ inline const yesod::frontend::SemanticSymbol& requireSymbol(
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const ast::Handle<ast::VarDef>& node)
+    const SemanticOutput& output, const ast::Ptr<ast::VarDef>& node)
 {
     const auto* symbol
         = output.m_info.findSymbol(requireSymbolIdentifier(output.m_ast, node));
@@ -152,7 +152,7 @@ inline const yesod::frontend::SemanticSymbol& requireSymbol(
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const ast::Handle<ast::Exp>& node)
+    const SemanticOutput& output, const ast::Ptr<ast::Exp>& node)
 {
     const auto* symbol
         = output.m_info.findSymbol(requireSymbolIdentifier(output.m_ast, node));
@@ -162,7 +162,7 @@ inline const yesod::frontend::SemanticSymbol& requireSymbol(
 
 template <typename T>
 inline int32_t requireConstantValue(
-    const SemanticOutput& output, ast::Handle<T> node)
+    const SemanticOutput& output, ast::Ptr<T> node)
 {
     const auto constantValue = output.m_info.findConstantValue(node);
     require(constantValue.has_value(), "expected constant value for node");
@@ -171,7 +171,7 @@ inline int32_t requireConstantValue(
 
 template <typename T>
 inline ExpType requireExpValueKind(
-    const SemanticOutput& output, ast::Handle<T> node)
+    const SemanticOutput& output, ast::Ptr<T> node)
 {
     const auto valueKind = output.m_info.findExpValueKind(node);
     require(valueKind.has_value(), "expected expression kind for node");
@@ -179,8 +179,8 @@ inline ExpType requireExpValueKind(
 }
 
 template <typename T>
-inline ast::Handle<ast::WhileStmt> requireLoop(
-    const SemanticOutput& output, ast::Handle<T> node)
+inline ast::Ptr<ast::WhileStmt> requireLoop(
+    const SemanticOutput& output, ast::Ptr<T> node)
 {
     const auto loop = output.m_info.findLoop(node);
     require(loop.has_value(), "expected loop binding for node");

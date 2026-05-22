@@ -29,7 +29,7 @@ constexpr const char* kFunctionArrayParamSource =
     "}";
 
 struct ParserArrayTest : ParserTestBase {
-    const InitVal::List& requireInitListHandle(const Handle<InitVal>& initVal_nn)
+    const InitVal::List& requireInitListHandle(const Ptr<InitVal>& initVal_nn)
     {
         const auto* list = MATCH (initVal_nn(ast()).m_kind)
             WITH (
@@ -94,14 +94,14 @@ struct ParserArrayTest : ParserTestBase {
         require(root()(ast()).m_topLevelItems.size() == 4,
             "function-array-parameter sample should preserve all helper functions and main");
 
-        std::vector<Handle<FuncDef>> funcs;
+        std::vector<Ptr<FuncDef>> funcs;
         for (const auto topLevelItem_nn : root()(ast()).m_topLevelItems) {
             const auto funcDef_nn = MATCH (topLevelItem_nn(ast()).m_topLevelItem)
                 WITH (
-                    [](const Handle<FuncDef>& funcDef_nn) {
+                    [](const Ptr<FuncDef>& funcDef_nn) {
                         return funcDef_nn;
                     },
-                    [](const auto&) { return Handle<FuncDef> {}; },
+                    [](const auto&) { return Ptr<FuncDef> {}; },
                 );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);

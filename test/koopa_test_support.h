@@ -17,7 +17,7 @@
 namespace yesod::test_support::koopa {
 
 using yesod::frontend::CompUnit;
-using yesod::frontend::Handle;
+using yesod::frontend::Ptr;
 using yesod::frontend::ParseOutput;
 using yesod::frontend::Parser;
 using yesod::frontend::SemanticAnalyzer;
@@ -29,7 +29,7 @@ using yesod::test_support::fail;
 using yesod::test_support::require;
 
 static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_topLevelItems),
-    std::vector<Handle<yesod::frontend::TopLevelItemNode>>>);
+    std::vector<Ptr<yesod::frontend::TopLevelItemNode>>>);
 
 struct KoopaTestBase : OutputAstBase<ParseOutput>, TestBase {
     template <class Self> auto&& ast(this Self& self)

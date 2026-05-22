@@ -5,49 +5,49 @@ using namespace yesod::test_support::parser;
 namespace {
 
 struct ParserFunctionTest : ParserTestBase {
-    Handle<Exp> requireScalarConstInitExpHandle(
-        const Handle<ConstInitVal>& initVal_nn)
+    Ptr<Exp> requireScalarConstInitExpHandle(
+        const Ptr<ConstInitVal>& initVal_nn)
     {
         const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
-            WITH([](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> { }; }, );
+            WITH([](const Ptr<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Ptr<Exp> { }; }, );
         require(
             exp_nn != nullptr, "expected scalar const initializer expression");
         return exp_nn;
     }
 
-    Handle<Exp> requireScalarInitExpHandle(const Handle<InitVal>& initVal_nn)
+    Ptr<Exp> requireScalarInitExpHandle(const Ptr<InitVal>& initVal_nn)
     {
         const auto exp_nn = MATCH(initVal_nn(ast()).m_kind)
-            WITH([](const Handle<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Handle<Exp> { }; }, );
+            WITH([](const Ptr<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) { return Ptr<Exp> { }; }, );
         require(exp_nn != nullptr, "expected scalar initializer expression");
         return exp_nn;
     }
 
-    Handle<DeclNode> requireTopLevelDeclNode(
-        const Handle<TopLevelItemNode>& topLevelItemNode_nn)
+    Ptr<DeclNode> requireTopLevelDeclNode(
+        const Ptr<TopLevelItemNode>& topLevelItemNode_nn)
     {
         const auto declNode_nn
             = MATCH(topLevelItemNode_nn(ast()).m_topLevelItem) WITH(
-                [](const Handle<DeclNode>& declNode_nn) { return declNode_nn; },
-                [](const auto&) { return Handle<DeclNode> { }; }, );
+                [](const Ptr<DeclNode>& declNode_nn) { return declNode_nn; },
+                [](const auto&) { return Ptr<DeclNode> { }; }, );
         require(declNode_nn != nullptr, "expected top-level declaration");
         return declNode_nn;
     }
 
-    Handle<FuncDef> requireTopLevelFuncDef(
-        const Handle<TopLevelItemNode>& topLevelItemNode_nn)
+    Ptr<FuncDef> requireTopLevelFuncDef(
+        const Ptr<TopLevelItemNode>& topLevelItemNode_nn)
     {
         const auto funcDef_nn = MATCH(topLevelItemNode_nn(ast()).m_topLevelItem)
-            WITH([](const Handle<FuncDef>& funcDef_nn) { return funcDef_nn; },
-                [](const auto&) { return Handle<FuncDef> { }; }, );
+            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                [](const auto&) { return Ptr<FuncDef> { }; }, );
         require(
             funcDef_nn != nullptr, "expected top-level function definition");
         return funcDef_nn;
     }
 
-    const Exp::Call& requireCallExpHandle(const Handle<Exp>& exp_nn)
+    const Exp::Call& requireCallExpHandle(const Ptr<Exp>& exp_nn)
     {
         const auto callExp = MATCH(exp_nn(ast()).m_kind)
             WITH([](const Exp::Call& callExp) { return &callExp; },

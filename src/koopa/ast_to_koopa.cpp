@@ -28,21 +28,21 @@ namespace {
 
     template <typename InitNode>
     void fillObjectFromNode(const frontend::AST& ast,
-        frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
+        frontend::Ptr<InitNode> init_nn, const frontend::SemanticType& type,
         size_t baseOffset,
-        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs);
+        std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs);
 
     template <typename InitNode>
     void assignScalarInitializerFromNode(const frontend::AST& ast,
-        frontend::Handle<InitNode> init_nn, size_t baseOffset,
-        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs);
+        frontend::Ptr<InitNode> init_nn, size_t baseOffset,
+        std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs);
 
     template <typename InitNode>
     void fillObjectFromSequence(const frontend::AST& ast,
-        const std::vector<frontend::Handle<InitNode>>& values,
+        const std::vector<frontend::Ptr<InitNode>>& values,
         size_t& nextValueIndex, const frontend::SemanticType& type,
         size_t baseOffset,
-        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
+        std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs)
     {
         if (nextValueIndex >= values.size()) {
             return;
@@ -65,7 +65,7 @@ namespace {
             const auto& child = values[nextValueIndex](ast);
             MATCH(child.m_kind)
             WITH(
-                [&](frontend::Handle<frontend::Exp>) {
+                [&](frontend::Ptr<frontend::Exp>) {
                     fillObjectFromSequence(ast, values, nextValueIndex,
                         *type.m_elementType,
                         baseOffset + static_cast<size_t>(i) * elementSlots,
@@ -83,16 +83,16 @@ namespace {
 
     template <typename InitNode>
     void fillObjectFromNode(const frontend::AST& ast,
-        frontend::Handle<InitNode> init_nn, const frontend::SemanticType& type,
+        frontend::Ptr<InitNode> init_nn, const frontend::SemanticType& type,
         size_t baseOffset,
-        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
+        std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
         MATCH(init.m_kind)
         WITH(
-            [&](frontend::Handle<frontend::Exp>) {
+            [&](frontend::Ptr<frontend::Exp>) {
                 size_t nextValueIndex = 0;
-                const std::vector<frontend::Handle<InitNode>> singleton {
+                const std::vector<frontend::Ptr<InitNode>> singleton {
                     init_nn
                 };
                 fillObjectFromSequence(ast, singleton, nextValueIndex, type,
@@ -107,13 +107,13 @@ namespace {
 
     template <typename InitNode>
     void assignScalarInitializerFromNode(const frontend::AST& ast,
-        frontend::Handle<InitNode> init_nn, size_t baseOffset,
-        std::vector<frontend::Handle<frontend::Exp>>& scalarExprs)
+        frontend::Ptr<InitNode> init_nn, size_t baseOffset,
+        std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs)
     {
         const auto& init = ast[init_nn];
         MATCH(init.m_kind)
         WITH(
-            [&](frontend::Handle<frontend::Exp> initAlt) {
+            [&](frontend::Ptr<frontend::Exp> initAlt) {
                 if (baseOffset < scalarExprs.size()) {
                     scalarExprs[baseOffset] = initAlt;
                 }
@@ -127,11 +127,11 @@ namespace {
     }
 
     template <typename InitNode>
-    std::vector<frontend::Handle<frontend::Exp>> flattenArrayInitializer(
-        const frontend::AST& ast, frontend::Handle<InitNode> init_nn,
+    std::vector<frontend::Ptr<frontend::Exp>> flattenArrayInitializer(
+        const frontend::AST& ast, frontend::Ptr<InitNode> init_nn,
         const frontend::SemanticType& type)
     {
-        std::vector<frontend::Handle<frontend::Exp>> scalarExprs(
+        std::vector<frontend::Ptr<frontend::Exp>> scalarExprs(
             countScalarSlots(type));
         fillObjectFromNode(ast, init_nn, type, 0, scalarExprs);
         return scalarExprs;
@@ -225,7 +225,7 @@ namespace {
 } // namespace
 
 Program* Generator::generate(const frontend::AST& ast,
-    frontend::Handle<frontend::CompUnit> compUnit,
+    frontend::Ptr<frontend::CompUnit> compUnit,
     const frontend::SemanticInfo& semanticInfo) const
 {
     auto* program = Program::create();
@@ -245,7 +245,7 @@ Program* Generator::generate(const frontend::AST& ast,
         const auto& topLevelItem = ast[topLevelItem_nn];
         MATCH(topLevelItem.m_topLevelItem)
         WITH(
-            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+            [&](frontend::Ptr<frontend::FuncDef> topLevelAlt) {
                 const auto& funcDef = ast[topLevelAlt];
                 const auto* functionSymbol
                     = semanticInfo.findSymbol(funcDef.m_identifier_nn);
@@ -287,11 +287,11 @@ Program* Generator::generate(const frontend::AST& ast,
         const auto& topLevelItem = ast[topLevelItem_nn];
         MATCH(topLevelItem.m_topLevelItem)
         WITH(
-            [&](frontend::Handle<frontend::DeclNode> topLevelAlt) {
+            [&](frontend::Ptr<frontend::DeclNode> topLevelAlt) {
                 generateGlobalDecl(topLevelAlt, *program, ast, semanticInfo,
                     globalStorageBySymbolId);
             },
-            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+            [&](frontend::Ptr<frontend::FuncDef> topLevelAlt) {
                 auto* function
                     = createFunctionDecl(ast, topLevelAlt, semanticInfo);
                 const auto& symbol = requireSymbolForIdentifier(
@@ -306,7 +306,7 @@ Program* Generator::generate(const frontend::AST& ast,
         const auto& topLevelItem = ast[topLevelItem_nn];
         MATCH(topLevelItem.m_topLevelItem)
         WITH(
-            [&](frontend::Handle<frontend::FuncDef> topLevelAlt) {
+            [&](frontend::Ptr<frontend::FuncDef> topLevelAlt) {
                 const auto& symbol = requireSymbolForIdentifier(
                     ast[topLevelAlt].m_identifier_nn, semanticInfo,
                     "function definition is missing a symbol binding");
@@ -326,7 +326,7 @@ Program* Generator::generate(const frontend::AST& ast,
 }
 
 Function* Generator::createFunctionDecl(const frontend::AST& ast,
-    frontend::Handle<frontend::FuncDef> funcDef,
+    frontend::Ptr<frontend::FuncDef> funcDef,
     const frontend::SemanticInfo& semanticInfo) const
 {
     const auto& parsedFuncDef = ast[funcDef];
@@ -370,7 +370,7 @@ Function* Generator::createExternalFunctionDecl(
 }
 
 Function* Generator::generateFuncDef(const frontend::AST& ast,
-    frontend::Handle<frontend::FuncDef> funcDef,
+    frontend::Ptr<frontend::FuncDef> funcDef,
     const frontend::SemanticInfo& semanticInfo,
     const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
     const std::unordered_map<int32_t, Function*>& functionBySymbolId,
@@ -417,14 +417,14 @@ Function* Generator::generateFuncDef(const frontend::AST& ast,
 }
 
 void Generator::generateGlobalDecl(
-    frontend::Handle<frontend::DeclNode> declNode, Program& program,
+    frontend::Ptr<frontend::DeclNode> declNode, Program& program,
     const frontend::AST& ast, const frontend::SemanticInfo& semanticInfo,
     std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
 {
     const auto& parsedDeclNode = ast[declNode];
     MATCH(parsedDeclNode.m_decl)
     WITH(
-        [&](frontend::Handle<frontend::ConstDecl> declAlt) {
+        [&](frontend::Ptr<frontend::ConstDecl> declAlt) {
             const auto& constDecl = ast[declAlt];
             for (const auto constDef_nn : constDecl.m_constDefs) {
                 const auto& constDef = ast[constDef_nn];
@@ -445,7 +445,7 @@ void Generator::generateGlobalDecl(
                 globalStorageBySymbolId[symbol.m_id] = globalAlloc;
             }
         },
-        [&](frontend::Handle<frontend::VarDecl> declAlt) {
+        [&](frontend::Ptr<frontend::VarDecl> declAlt) {
             const auto& varDecl = ast[declAlt];
             for (const auto varDef_nn : varDecl.m_varDefs) {
                 const auto& varDef = ast[varDef_nn];
@@ -464,7 +464,7 @@ void Generator::generateGlobalDecl(
                     const auto& initVal = ast[varDef.m_initVal_nn];
                     MATCH(initVal.m_kind)
                     WITH(
-                        [&](frontend::Handle<frontend::Exp> initAlt) {
+                        [&](frontend::Ptr<frontend::Exp> initAlt) {
                             const auto constantValue
                                 = semanticInfo.findConstantValue(initAlt);
                             if (!constantValue.has_value()) {
@@ -484,7 +484,7 @@ void Generator::generateGlobalDecl(
         }, );
 }
 
-void Generator::generateBlock(frontend::Handle<frontend::Block> block,
+void Generator::generateBlock(frontend::Ptr<frontend::Block> block,
     FunctionGenerationState& state) const
 {
     const auto& parsedBlock = node(block, state, "block is missing");
@@ -497,7 +497,7 @@ void Generator::generateBlock(frontend::Handle<frontend::Block> block,
 }
 
 void Generator::generateBlockItem(
-    frontend::Handle<frontend::BlockItemNode> blockItem,
+    frontend::Ptr<frontend::BlockItemNode> blockItem,
     FunctionGenerationState& state) const
 {
     if (blockHasTerminator(*state.m_currentBasicBlock_nn)) {
@@ -507,21 +507,21 @@ void Generator::generateBlockItem(
     const auto& parsedBlockItem = node(blockItem, state, "block item is null");
     MATCH(parsedBlockItem.m_blockItem)
     WITH(
-        [&](frontend::Handle<frontend::DeclNode> blockItemAlt) {
+        [&](frontend::Ptr<frontend::DeclNode> blockItemAlt) {
             generateDecl(blockItemAlt, state);
         },
-        [&](frontend::Handle<frontend::StmtNode> blockItemAlt) {
+        [&](frontend::Ptr<frontend::StmtNode> blockItemAlt) {
             generateStmt(blockItemAlt, state);
         }, );
 }
 
-void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
+void Generator::generateDecl(frontend::Ptr<frontend::DeclNode> declNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedDeclNode = node(declNode, state, "declaration is null");
     MATCH(parsedDeclNode.m_decl)
     WITH(
-        [&](frontend::Handle<frontend::ConstDecl> declAlt) {
+        [&](frontend::Ptr<frontend::ConstDecl> declAlt) {
             const auto& constDecl
                 = node(declAlt, state, "const declaration payload is null");
             for (const auto constDef : constDecl.m_constDefs) {
@@ -547,7 +547,7 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                 } else {
                     MATCH(constInitVal.m_kind)
                     WITH(
-                        [&](frontend::Handle<frontend::Exp> initAlt) {
+                        [&](frontend::Ptr<frontend::Exp> initAlt) {
                             auto* initValue = generateExp(initAlt, state);
                             state.m_currentBasicBlock_nn->pushInst(
                                 StoreValue::get(initValue, alloc));
@@ -556,7 +556,7 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                 }
             }
         },
-        [&](frontend::Handle<frontend::VarDecl> declAlt) {
+        [&](frontend::Ptr<frontend::VarDecl> declAlt) {
             const auto& varDecl
                 = node(declAlt, state, "var declaration payload is null");
             for (const auto varDef : varDecl.m_varDefs) {
@@ -583,7 +583,7 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
                             state, "var declarator init payload is null");
                         MATCH(initVal.m_kind)
                         WITH(
-                            [&](frontend::Handle<frontend::Exp> initAlt) {
+                            [&](frontend::Ptr<frontend::Exp> initAlt) {
                                 auto* initValue = generateExp(initAlt, state);
                                 state.m_currentBasicBlock_nn->pushInst(
                                     StoreValue::get(initValue, alloc));
@@ -595,39 +595,39 @@ void Generator::generateDecl(frontend::Handle<frontend::DeclNode> declNode,
         }, );
 }
 
-void Generator::generateStmt(frontend::Handle<frontend::StmtNode> stmtNode,
+void Generator::generateStmt(frontend::Ptr<frontend::StmtNode> stmtNode,
     FunctionGenerationState& state) const
 {
     const auto& parsedStmtNode = node(stmtNode, state, "statement is null");
     MATCH(parsedStmtNode.m_stmt)
     WITH(
-        [&](frontend::Handle<frontend::IfStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::IfStmt> stmtAlt) {
             generateIfStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::WhileStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::WhileStmt> stmtAlt) {
             generateWhileStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::BreakStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::BreakStmt> stmtAlt) {
             generateBreakStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::ContinueStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::ContinueStmt> stmtAlt) {
             generateContinueStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::AssignStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::AssignStmt> stmtAlt) {
             generateAssignStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::Block> stmtAlt) {
+        [&](frontend::Ptr<frontend::Block> stmtAlt) {
             generateBlock(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::ReturnStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::ReturnStmt> stmtAlt) {
             (void)generateReturnStmt(stmtAlt, state);
         },
-        [&](frontend::Handle<frontend::ExpStmt> stmtAlt) {
+        [&](frontend::Ptr<frontend::ExpStmt> stmtAlt) {
             generateExpStmt(stmtAlt, state);
         }, );
 }
 
-void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
+void Generator::generateIfStmt(frontend::Ptr<frontend::IfStmt> ifStmt,
     FunctionGenerationState& state) const
 {
     const auto& parsedIfStmt = node(ifStmt, state, "if statement is null");
@@ -663,7 +663,7 @@ void Generator::generateIfStmt(frontend::Handle<frontend::IfStmt> ifStmt,
 }
 
 void Generator::generateWhileStmt(
-    frontend::Handle<frontend::WhileStmt> whileStmt,
+    frontend::Ptr<frontend::WhileStmt> whileStmt,
     FunctionGenerationState& state) const
 {
     const auto& parsedWhileStmt
@@ -695,7 +695,7 @@ void Generator::generateWhileStmt(
 }
 
 void Generator::generateBreakStmt(
-    frontend::Handle<frontend::BreakStmt> breakStmt,
+    frontend::Ptr<frontend::BreakStmt> breakStmt,
     FunctionGenerationState& state) const
 {
     const auto loop = state.m_semanticInfo_nn->findLoop(breakStmt);
@@ -712,7 +712,7 @@ void Generator::generateBreakStmt(
 }
 
 void Generator::generateContinueStmt(
-    frontend::Handle<frontend::ContinueStmt> continueStmt,
+    frontend::Ptr<frontend::ContinueStmt> continueStmt,
     FunctionGenerationState& state) const
 {
     const auto loop = state.m_semanticInfo_nn->findLoop(continueStmt);
@@ -730,7 +730,7 @@ void Generator::generateContinueStmt(
 }
 
 void Generator::generateAssignStmt(
-    frontend::Handle<frontend::AssignStmt> assignStmt,
+    frontend::Ptr<frontend::AssignStmt> assignStmt,
     FunctionGenerationState& state) const
 {
     const auto& parsedAssignStmt
@@ -751,7 +751,7 @@ void Generator::generateAssignStmt(
         }, );
 }
 
-void Generator::generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
+void Generator::generateExpStmt(frontend::Ptr<frontend::ExpStmt> expStmt,
     FunctionGenerationState& state) const
 {
     const auto& parsedExpStmt
@@ -762,7 +762,7 @@ void Generator::generateExpStmt(frontend::Handle<frontend::ExpStmt> expStmt,
 }
 
 ReturnValue* Generator::generateReturnStmt(
-    frontend::Handle<frontend::ReturnStmt> returnStmt,
+    frontend::Ptr<frontend::ReturnStmt> returnStmt,
     FunctionGenerationState& state) const
 {
     const auto& parsedReturnStmt
@@ -775,7 +775,7 @@ ReturnValue* Generator::generateReturnStmt(
 }
 
 Value* Generator::generateExp(
-    frontend::Handle<frontend::Exp> exp, FunctionGenerationState& state) const
+    frontend::Ptr<frontend::Exp> exp, FunctionGenerationState& state) const
 {
     if (const auto constantValue
         = state.m_semanticInfo_nn->findConstantValue(exp);
@@ -913,7 +913,7 @@ Value* Generator::generateUnaryExpValue(
 }
 
 Value* Generator::generateBooleanAsInt(
-    frontend::Handle<frontend::Exp> exp, FunctionGenerationState& state) const
+    frontend::Ptr<frontend::Exp> exp, FunctionGenerationState& state) const
 {
     auto* resultStorage
         = AllocValue::get(Int32Type::get(), makeTempName(state.m_nextTempId));
@@ -939,7 +939,7 @@ Value* Generator::generateBooleanAsInt(
     return loadValue;
 }
 
-void Generator::generateBooleanBranch(frontend::Handle<frontend::Exp> exp,
+void Generator::generateBooleanBranch(frontend::Ptr<frontend::Exp> exp,
     BasicBlock& trueBlock, BasicBlock& falseBlock,
     FunctionGenerationState& state) const
 {
@@ -1027,7 +1027,7 @@ Type* Generator::lowerSemanticType(
 
 Value* Generator::generateGlobalArrayInitializer(
     const frontend::SemanticType& type,
-    const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+    const std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs,
     size_t& nextScalarIndex, const frontend::SemanticInfo& semanticInfo) const
 {
     if (!type.isArray()) {
@@ -1073,7 +1073,7 @@ Value* Generator::generateGlobalArrayInitializer(
 
 void Generator::generateLocalArrayInitializer(Value* address,
     const frontend::SemanticType& type,
-    const std::vector<frontend::Handle<frontend::Exp>>& scalarExprs,
+    const std::vector<frontend::Ptr<frontend::Exp>>& scalarExprs,
     size_t& nextScalarIndex, FunctionGenerationState& state) const
 {
     if (!type.isArray()) {

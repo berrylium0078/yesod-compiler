@@ -75,16 +75,16 @@ constexpr const char* kStressGeneratedArrayInitializerSource
       "int main(){return 0;}";
 
 struct SemanticArrayTest : SemanticTestBase {
-    std::vector<Handle<ast::FuncDef>> collectFunctions() const
+    std::vector<Ptr<ast::FuncDef>> collectFunctions() const
     {
-        std::vector<Handle<ast::FuncDef>> funcs;
+        std::vector<Ptr<ast::FuncDef>> funcs;
         for (const auto topLevelItem_nn : root()(ast()).m_topLevelItems) {
             const auto funcDef_nn
                 = MATCH(topLevelItem_nn(ast()).m_topLevelItem) WITH(
-                    [](const Handle<ast::FuncDef>& funcDef_nn) {
+                    [](const Ptr<ast::FuncDef>& funcDef_nn) {
                         return funcDef_nn;
                     },
-                    [](const auto&) { return Handle<ast::FuncDef> { }; }, );
+                    [](const auto&) { return Ptr<ast::FuncDef> { }; }, );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);
             }
