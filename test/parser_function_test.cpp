@@ -106,7 +106,7 @@ struct ParserFunctionTest : ParserTestBase {
             "void helper should preserve the void function type");
         const auto noopReturn_nn
             = extractReturnStmt(noopFunc_nn(ast()).body(ast()).items.front());
-        require(noopReturn_nn(ast()).m_exp_nn == nullptr,
+        require(noopReturn_nn(ast()).exp == nullptr,
             "void helper return should parse as a valueless return statement");
 
         const auto mainFunc_nn
@@ -114,7 +114,7 @@ struct ParserFunctionTest : ParserTestBase {
         const auto returnStmt_nn
             = extractReturnStmt(mainFunc_nn(ast()).body(ast()).items.front());
         const auto& callExp
-            = requireCallExpHandle(returnStmt_nn(ast()).m_exp_nn.ref());
+            = requireCallExpHandle(returnStmt_nn(ast()).exp.ref());
         require(callExp.funcName(ast()).name == "add",
             "call expression should preserve the callee identifier");
         require(callExp.params.size() == 2,

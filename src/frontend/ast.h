@@ -163,11 +163,11 @@ struct VarDecl {
     std::vector<Ref<VarDef>> varDef;
 };
 
-using Decl = std::variant<Ptr<ConstDecl>, Ptr<VarDecl>>;
+using Decl = std::variant<Ref<ConstDecl>, Ref<VarDecl>>;
 
-using Stmt = std::variant<Ptr<IfStmt>, Ptr<WhileStmt>, Ptr<BreakStmt>,
-    Ptr<ContinueStmt>, Ptr<AssignStmt>, Ptr<Block>, Ptr<ReturnStmt>,
-    Ptr<ExpStmt>>;
+using Stmt = std::variant<Ref<IfStmt>, Ref<WhileStmt>, Ref<BreakStmt>,
+    Ref<ContinueStmt>, Ref<AssignStmt>, Ref<Block>, Ref<ReturnStmt>,
+    Ref<ExpStmt>>;
 
 struct IfStmt {
     SourcePos sourcePos;
@@ -193,18 +193,18 @@ struct ContinueStmt {
 
 struct AssignStmt {
     SourcePos sourcePos;
-    Ref<Exp> m_lVal_nn;
-    Ref<Exp> m_exp_nn;
+    Ref<Exp> lval;
+    Ref<Exp> exp;
 };
 
 struct ExpStmt {
     SourcePos sourcePos;
-    Ptr<Exp> m_exp_nn;
+    Ptr<Exp> exp;
 };
 
 struct ReturnStmt {
     SourcePos sourcePos;
-    Ptr<Exp> m_exp_nn;
+    Ptr<Exp> exp;
 };
 
 using BlockItem = std::variant<Decl, Stmt>;
@@ -229,7 +229,7 @@ struct FuncDef {
     Ref<Block> body;
 };
 struct CompUnit {
-    using Item = std::variant<Decl, Ptr<FuncDef>>;
+    using Item = std::variant<Decl, Ref<FuncDef>>;
     SourcePos sourcePos;
     std::vector<Item> topLevelItems;
 };

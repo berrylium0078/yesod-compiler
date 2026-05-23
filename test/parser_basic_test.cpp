@@ -27,10 +27,10 @@ public:
         require(returnStmt_nn(ast()).sourcePos.m_offset == 11,
             "statement start offset should point to the return keyword");
         require(
-            returnStmt_nn(ast()).m_exp_nn(ast()).sourcePos.m_offset
+            returnStmt_nn(ast()).exp(ast()).sourcePos.m_offset
                 == 18,
             "expression start offset should match source byte offset");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 42,
             "number literal should parse decimal values");
     }
 
@@ -51,7 +51,7 @@ public:
             "identifier should survive trivia skipping");
         require(returnStmt_nn(ast()).sourcePos.m_offset == 27,
             "statement start offset should point to the return keyword");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 7,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 7,
             "number should parse after trivia");
     }
 
@@ -73,7 +73,7 @@ public:
         require(
             funcDef_nn(ast()).identifier(ast()).name == "main",
             "comments should be skipped instead of entering the AST");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 42,
             "number should parse across comments");
     }
 
@@ -84,7 +84,7 @@ public:
                     extractReturnStmt(firstFuncDef()(ast())
                                 .body(ast())
                                 .items.front())(ast())
-                        .m_exp_nn.ref())
+                        .exp.ref())
                 == 42,
             "decimal literal should parse");
     }
@@ -95,7 +95,7 @@ public:
                     extractReturnStmt(firstFuncDef()(ast())
                                 .body(ast())
                                 .items.front())(ast())
-                        .m_exp_nn.ref())
+                        .exp.ref())
                 == 43,
             "octal literal should parse");
     }
@@ -106,7 +106,7 @@ public:
                     extractReturnStmt(firstFuncDef()(ast())
                                 .body(ast())
                                 .items.front())(ast())
-                        .m_exp_nn.ref())
+                        .exp.ref())
                 == 44,
             "hexadecimal literal should parse");
     }
@@ -126,7 +126,7 @@ public:
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
             funcDef_nn(ast()).body(ast()).items.front());
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 42,
             "0x2a must parse as a hexadecimal literal, not octal zero plus "
             "trailing input");
     }
@@ -186,7 +186,7 @@ public:
             = extractReturnStmt(firstFuncDef()(ast())
                     .body(ast())
                     .items.front());
-        require(emptyReturnStmt(ast()).m_exp_nn == nullptr,
+        require(emptyReturnStmt(ast()).exp == nullptr,
             "empty return should now parse as an optional-expression return");
 
         parseSource("int main(){return 1;} trailing");

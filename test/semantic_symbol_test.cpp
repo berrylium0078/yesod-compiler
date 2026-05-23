@@ -19,13 +19,13 @@ struct SemanticSymbolTest : SemanticTestBase {
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(blockItems[3]));
 
         const auto& defSymbol = requireSymbol(m_output, varDecl_nn(ast()).varDef[0]);
-        require(requireSymbol(m_output, assignStmt_nn(ast()).m_lVal_nn).m_id
+        require(requireSymbol(m_output, assignStmt_nn(ast()).lval).m_id
                 == defSymbol.m_id,
             "assignment lvalue should resolve to the declaration symbol");
-        require(requireSymbol(m_output, expStmt_nn(ast()).m_exp_nn).m_id
+        require(requireSymbol(m_output, expStmt_nn(ast()).exp).m_id
                 == defSymbol.m_id,
             "expression statement use should resolve to the declaration symbol");
-        require(requireSymbol(m_output, returnStmt_nn(ast()).m_exp_nn).m_id
+        require(requireSymbol(m_output, returnStmt_nn(ast()).exp).m_id
                 == defSymbol.m_id,
             "return expression should resolve to the declaration symbol");
     }
@@ -54,13 +54,13 @@ struct SemanticSymbolTest : SemanticTestBase {
         require(innerSymbol.m_id != outerSymbol.m_id,
             "shadowing declarations should create distinct symbol identities");
 
-        require(requireSymbol(m_output, innerExpStmt_nn(ast()).m_exp_nn).m_id
+        require(requireSymbol(m_output, innerExpStmt_nn(ast()).exp).m_id
                 == innerSymbol.m_id,
             "nested scope lookup should prefer the innermost definition");
-        require(requireSymbol(m_output, innerReturn_nn(ast()).m_exp_nn).m_id
+        require(requireSymbol(m_output, innerReturn_nn(ast()).exp).m_id
                 == innerSymbol.m_id,
             "inner return should resolve to the innermost definition");
-        require(requireSymbol(m_output, outerReturn_nn(ast()).m_exp_nn).m_id
+        require(requireSymbol(m_output, outerReturn_nn(ast()).exp).m_id
                 == outerSymbol.m_id,
             "outer return should resolve to the outer definition");
     }

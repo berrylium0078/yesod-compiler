@@ -120,7 +120,7 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(
             mainFunc_nn(ast()).body(ast()).items[2]));
-        require(requireExpValueKind(m_output, returnStmt_nn(ast()).m_exp_nn.ref())
+        require(requireExpValueKind(m_output, returnStmt_nn(ast()).exp.ref())
                 == ExpType::integer,
             "call through an array parameter should still produce an integer "
             "value");
@@ -164,7 +164,7 @@ struct SemanticArrayTest : SemanticTestBase {
             = extractBlockStmt(whileStmt_nn(ast()).body);
         const auto sumAssign_nn = extractAssignStmt(
             extractStmtNode(whileBody_nn(ast()).items[0]));
-        const auto& sumBinary = requireBinaryExp(sumAssign_nn(ast()).m_exp_nn);
+        const auto& sumBinary = requireBinaryExp(sumAssign_nn(ast()).exp);
         require(requireSymbol(m_output, sumBinary.rhs).m_id
                 == globalGarrSymbol.m_id,
             "garr[i] inside the loop should resolve to the global const array");
@@ -172,7 +172,7 @@ struct SemanticArrayTest : SemanticTestBase {
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(
             mainFunc_nn(ast()).body(ast()).items[4]));
         const auto& returnBinary
-            = requireBinaryExp(returnStmt_nn(ast()).m_exp_nn.ref());
+            = requireBinaryExp(returnStmt_nn(ast()).exp.ref());
         require(requireSymbol(m_output, returnBinary.rhs).m_id
                 == localGarrSymbol.m_id,
             "garr[0] after the local declaration should resolve to the "

@@ -169,7 +169,7 @@ ParseResult<Ptr<CompUnit>> Parser::parseCompUnit(int32_t offset)
                 return failure;
             }
 
-            topLevelItems.emplace_back(funcDef.value);
+            topLevelItems.emplace_back(funcDef.value.ref());
             nextOffset = funcDef.nextOffset;
             continue;
         }
@@ -196,7 +196,7 @@ ParseResult<Ptr<CompUnit>> Parser::parseCompUnit(int32_t offset)
                 m_compUnitMemo.emplace(offset, failure);
                 return failure;
             }
-            topLevelItems.emplace_back(funcDef.value);
+            topLevelItems.emplace_back(funcDef.value.ref());
             nextOffset = funcDef.nextOffset;
             continue;
         }
@@ -538,7 +538,7 @@ ParseResult<std::optional<Decl>> Parser::parseDecl(int32_t offset)
         const auto result = ParseResult<std::optional<Decl>> {
             .success = true,
             .nextOffset = constDecl.nextOffset,
-            .value = Decl { constDecl.value },
+            .value = Decl { constDecl.value.ref() },
         };
         m_declMemo.emplace(offset, result);
         return result;
@@ -549,7 +549,7 @@ ParseResult<std::optional<Decl>> Parser::parseDecl(int32_t offset)
         const auto result = ParseResult<std::optional<Decl>> {
             .success = true,
             .nextOffset = varDecl.nextOffset,
-            .value = Decl { varDecl.value },
+            .value = Decl { varDecl.value.ref() },
         };
         m_declMemo.emplace(offset, result);
         return result;
@@ -1030,8 +1030,8 @@ ParseResult<Ptr<VarDef>> Parser::parseVarDef(int32_t offset)
             .success = true,
             .nextOffset = dimensions.nextOffset,
             .value
-            = m_ast.alloc<VarDef>(offset,
-                identifier.value.ref(), dimensions.value)
+            = m_ast.alloc<VarDef>(offset, identifier.value.ref(), dimensions.value,
+                m_ast.alloc<InitVal>(offset, InitVal::List { })),
         };
         m_varDefMemo.emplace(offset, result);
         return result;
@@ -1052,7 +1052,7 @@ ParseResult<Ptr<VarDef>> Parser::parseVarDef(int32_t offset)
         .success = true,
         .nextOffset = initVal.nextOffset,
         .value = m_ast.alloc<VarDef>(identifier.value(m_ast).sourcePos.m_offset,
-            identifier.value.ref(), dimensions.value, initVal.value),
+            identifier.value.ref(), dimensions.value, initVal.value.ref()),
     };
     m_varDefMemo.emplace(offset, result);
     return result;
@@ -1128,8 +1128,8 @@ ParseResult<Ptr<InitVal>> Parser::parseInitVal(int32_t offset)
     const auto result = ParseResult<Ptr<InitVal>> {
         .success = true,
         .nextOffset = exp.nextOffset,
-        .value
-        = m_ast.alloc<InitVal>(exp.value(m_ast).sourcePos.m_offset, exp.value.ref()),
+        .value = m_ast.alloc<InitVal>(
+            exp.value(m_ast).sourcePos.m_offset, exp.value.ref()),
     };
     m_initValMemo.emplace(offset, result);
     return result;
@@ -1202,7 +1202,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = ifStmt.nextOffset,
-                .value = Stmt { ifStmt.value },
+                .value = Stmt { ifStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1224,7 +1224,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = whileStmt.nextOffset,
-                .value = Stmt { whileStmt.value },
+                .value = Stmt { whileStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1246,7 +1246,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = breakStmt.nextOffset,
-                .value = Stmt { breakStmt.value },
+                .value = Stmt { breakStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1268,7 +1268,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = continueStmt.nextOffset,
-                .value = Stmt { continueStmt.value },
+                .value = Stmt { continueStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1290,7 +1290,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = assignStmt.nextOffset,
-                .value = Stmt { assignStmt.value },
+                .value = Stmt { assignStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1303,7 +1303,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = block.nextOffset,
-                .value = Stmt { block.value },
+                .value = Stmt { block.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1317,7 +1317,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
             const auto result = ParseResult<std::optional<Stmt>> {
                 .success = true,
                 .nextOffset = returnStmt.nextOffset,
-                .value = Stmt { returnStmt.value },
+                .value = Stmt { returnStmt.value.ref() },
             };
             m_stmtMemo.emplace(offset, result);
             return result;
@@ -1337,7 +1337,7 @@ ParseResult<std::optional<Stmt>> Parser::parseStmt(int32_t offset)
         const auto result = ParseResult<std::optional<Stmt>> {
             .success = true,
             .nextOffset = expStmt.nextOffset,
-                .value = Stmt { expStmt.value },
+            .value = Stmt { expStmt.value.ref() },
         };
         m_stmtMemo.emplace(offset, result);
         return result;
@@ -1408,8 +1408,8 @@ ParseResult<Ptr<IfStmt>> Parser::parseIfStmt(int32_t offset)
                 DiagnosticKind::malformedIfCond, "malformed if condition");
         }
 
-        condExp_p = m_ast.alloc<Exp>(openParen.m_startOffset,
-            Exp::Kind { Exp::Number { 0 } });
+        condExp_p = m_ast.alloc<Exp>(
+            openParen.m_startOffset, Exp::Kind { Exp::Number { 0 } });
         thenStmtOffset = recoverToIfStmtHead(openParen.nextOffset);
     } else {
         condExp_p = condExp.value;
@@ -1533,8 +1533,8 @@ ParseResult<Ptr<WhileStmt>> Parser::parseWhileStmt(int32_t offset)
                 "malformed while condition");
         }
 
-        condExp_p = m_ast.alloc<Exp>(openParen.m_startOffset,
-            Exp::Kind { Exp::Number { 0 } });
+        condExp_p = m_ast.alloc<Exp>(
+            openParen.m_startOffset, Exp::Kind { Exp::Number { 0 } });
         bodyStmtOffset = recoverToWhileStmtHead(openParen.nextOffset);
     } else {
         condExp_p = condExp.value;
@@ -1750,8 +1750,9 @@ ParseResult<Ptr<AssignStmt>> Parser::parseAssignStmt(int32_t offset)
         const auto recoveredResult = ParseResult<Ptr<AssignStmt>> {
             .success = true,
             .nextOffset = recoveredOffset,
-            .value = m_ast.alloc<AssignStmt>(
-                lVal.value(m_ast).sourcePos.m_offset, lVal.value.ref(), exp.value.ref()),
+            .value
+            = m_ast.alloc<AssignStmt>(lVal.value(m_ast).sourcePos.m_offset,
+                lVal.value.ref(), exp.value.ref()),
         };
         m_assignStmtMemo.emplace(offset, recoveredResult);
         return recoveredResult;
@@ -1760,8 +1761,8 @@ ParseResult<Ptr<AssignStmt>> Parser::parseAssignStmt(int32_t offset)
     const auto result = ParseResult<Ptr<AssignStmt>> {
         .success = true,
         .nextOffset = semicolon.nextOffset,
-        .value = m_ast.alloc<AssignStmt>(
-            lVal.value(m_ast).sourcePos.m_offset, lVal.value.ref(), exp.value.ref()),
+        .value = m_ast.alloc<AssignStmt>(lVal.value(m_ast).sourcePos.m_offset,
+            lVal.value.ref(), exp.value.ref()),
     };
     m_assignStmtMemo.emplace(offset, result);
     return result;
@@ -1847,8 +1848,7 @@ ParseResult<Ptr<ReturnStmt>> Parser::parseReturnStmt(int32_t offset)
         const auto result = ParseResult<Ptr<ReturnStmt>> {
             .success = true,
             .nextOffset = immediateSemicolon.nextOffset,
-            .value
-            = m_ast.alloc<ReturnStmt>(keyword.m_startOffset),
+            .value = m_ast.alloc<ReturnStmt>(keyword.m_startOffset),
         };
         m_returnStmtMemo.emplace(offset, result);
         return result;
@@ -1883,12 +1883,10 @@ ParseResult<Ptr<ReturnStmt>> Parser::parseReturnStmt(int32_t offset)
             recoveredOffset = recoveredSemicolon.nextOffset;
         }
 
-        const auto recoveredResult = ParseResult<Ptr<ReturnStmt>> {
-            .success = true,
-            .nextOffset = recoveredOffset,
-            .value
-            = m_ast.alloc<ReturnStmt>(keyword.m_startOffset)
-        };
+        const auto recoveredResult
+            = ParseResult<Ptr<ReturnStmt>> { .success = true,
+                  .nextOffset = recoveredOffset,
+                  .value = m_ast.alloc<ReturnStmt>(keyword.m_startOffset) };
         m_returnStmtMemo.emplace(offset, recoveredResult);
         return recoveredResult;
     }
@@ -1985,8 +1983,8 @@ ParseResult<Ptr<Exp>> Parser::parseLOrExp(int32_t offset)
             break;
         }
 
-        current = makeBinaryRoot(
-            m_ast, normalizedOffset, BinaryOpKeyword::orOr, current.ref(), rhs.value.ref());
+        current = makeBinaryRoot(m_ast, normalizedOffset, BinaryOpKeyword::orOr,
+            current.ref(), rhs.value.ref());
         nextOffset = rhs.nextOffset;
     }
 

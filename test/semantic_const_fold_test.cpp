@@ -34,7 +34,7 @@ struct SemanticConstFoldTest : SemanticTestBase {
         require(requireConstantValue(m_output, varInitExp) == 44,
             "var initializer should fold const-backed integer");
 
-        require(requireConstantValue(m_output, returnStmt_nn(ast()).m_exp_nn.ref())
+        require(requireConstantValue(m_output, returnStmt_nn(ast()).exp.ref())
                 == 44,
             "return expression should fold const-backed integer");
     }

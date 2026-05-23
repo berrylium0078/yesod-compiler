@@ -25,11 +25,11 @@ static_assert(std::is_same_v<decltype(std::declval<FuncDef>().m_funcType),
 static_assert(
     std::is_same_v<decltype(std::declval<ConstDecl>().bType), BTypeKeyword>);
 static_assert(
-    std::is_same_v<decltype(std::declval<ReturnStmt>().m_exp_nn), Ptr<Exp>>);
+    std::is_same_v<decltype(std::declval<ReturnStmt>().exp), Ptr<Exp>>);
 static_assert(
-    std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn), Ref<Exp>>);
+    std::is_same_v<decltype(std::declval<AssignStmt>().lval), Ref<Exp>>);
 static_assert(
-    std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn), Ptr<Exp>>);
+    std::is_same_v<decltype(std::declval<ExpStmt>().exp), Ptr<Exp>>);
 static_assert(
     std::is_same_v<decltype(std::declval<IfStmt>().condition), Ref<Exp>>);
 static_assert(std::is_same_v<decltype(std::declval<IfStmt>().thenBody), Stmt>);
@@ -94,7 +94,7 @@ public:
         auto compUnit_nn = root();
         require(compUnit_nn, "expected compilation unit node");
         for (const auto topLevelItem : compUnit_nn(ast()).topLevelItems) {
-            auto funcDef = std::get_if<Ptr<FuncDef>>(&topLevelItem);
+            auto funcDef = std::get_if<Ref<FuncDef>>(&topLevelItem);
             if (funcDef)
                 return *funcDef;
         }
@@ -141,9 +141,7 @@ public:
 
     Ref<ReturnStmt> extractReturnStmt(const Stmt& stmt)
     {
-        auto* returnStmt = std::get_if<Ptr<ReturnStmt>>(&stmt);
-        require(returnStmt, "expected return statement variant");
-        return returnStmt->ref();
+        return *std::get_if<Ref<ReturnStmt>>(&stmt);
     }
     Ref<ReturnStmt> extractReturnStmt(const BlockItem& blockItemNode_nn)
     {
@@ -151,9 +149,7 @@ public:
     }
     Ref<IfStmt> extractIfStmt(const Stmt& stmt)
     {
-        auto* ifStmt = std::get_if<Ptr<IfStmt>>(&stmt);
-        require(ifStmt != nullptr, "expected if statement variant");
-        return ifStmt->ref();
+        return *std::get_if<Ref<IfStmt>>(&stmt);
     }
     Ref<IfStmt> extractIfStmt(const BlockItem& blockItem)
     {
@@ -161,9 +157,7 @@ public:
     }
     Ref<WhileStmt> extractWhileStmt(const Stmt& stmt)
     {
-        auto* whileStmt = std::get_if<Ptr<WhileStmt>>(&stmt);
-        require(whileStmt != nullptr, "expected while statement variant");
-        return whileStmt->ref();
+        return *std::get_if<Ref<WhileStmt>>(&stmt);
     }
     Ref<WhileStmt> extractWhileStmt(const BlockItem& blockItem)
     {
@@ -171,21 +165,15 @@ public:
     }
     Ref<BreakStmt> extractBreakStmt(const Stmt& stmt)
     {
-        auto* breakStmt = std::get_if<Ptr<BreakStmt>>(&stmt);
-        require(breakStmt != nullptr, "expected break statement variant");
-        return breakStmt->ref();
+        return *std::get_if<Ref<BreakStmt>>(&stmt);
     }
     Ref<ContinueStmt> extractContinueStmt(const Stmt& stmt)
     {
-        auto* continueStmt = std::get_if<Ptr<ContinueStmt>>(&stmt);
-        require(continueStmt != nullptr, "expected continue statement variant");
-        return continueStmt->ref();
+        return *std::get_if<Ref<ContinueStmt>>(&stmt);
     }
     Ref<AssignStmt> extractAssignStmt(const Stmt& stmt)
     {
-        auto* assignStmt = std::get_if<Ptr<AssignStmt>>(&stmt);
-        require(assignStmt != nullptr, "expected assignment statement variant");
-        return assignStmt->ref();
+        return *std::get_if<Ref<AssignStmt>>(&stmt);
     }
     Ref<AssignStmt> extractAssignStmt(const BlockItem& blockItem)
     {
@@ -193,9 +181,7 @@ public:
     }
     Ref<ExpStmt> extractExpStmt(const Stmt& stmt)
     {
-        auto* expStmt = std::get_if<Ptr<ExpStmt>>(&stmt);
-        require(expStmt != nullptr, "expected expression statement variant");
-        return expStmt->ref();
+        return *std::get_if<Ref<ExpStmt>>(&stmt);
     }
     Ref<ExpStmt> extractExpStmt(const BlockItem& blockItemNode_nn)
     {
@@ -203,9 +189,7 @@ public:
     }
     Ref<Block> extractBlockStmt(const Stmt& stmt)
     {
-        auto* body = std::get_if<Ptr<Block>>(&stmt);
-        require(body != nullptr, "expected body statement variant");
-        return body->ref();
+        return *std::get_if<Ref<Block>>(&stmt);
     }
     Ref<Block> extractBlockStmt(const BlockItem& blockItem)
     {
@@ -214,16 +198,12 @@ public:
 
     Ref<ConstDecl> extractConstDecl(const Decl& decl)
     {
-        auto* constDecl = std::get_if<Ptr<ConstDecl>>(&decl);
-        require(constDecl, "expected const declaration variant");
-        return constDecl->ref();
+        return *std::get_if<Ref<ConstDecl>>(&decl);
     }
 
     Ref<VarDecl> extractVarDecl(const Decl& decl)
     {
-        auto* varDecl = std::get_if<Ptr<VarDecl>>(&decl);
-        require(varDecl, "expected var declaration variant");
-        return varDecl->ref();
+        return *std::get_if<Ref<VarDecl>>(&decl);
     }
 
     int32_t evaluateExp(Ref<Exp> exp)

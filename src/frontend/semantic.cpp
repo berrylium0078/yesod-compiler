@@ -711,7 +711,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
 {
     const auto& assignStmt
         = node(assignStmt_nn, "assignment statement payload is missing");
-    const auto& lValExp = assignStmt.m_lVal_nn(m_ast);
+    const auto& lValExp = assignStmt.lval(m_ast);
     MATCH(lValExp.kind)
     WITH(
         [&](Exp::Exp::LVal expAlt) {
@@ -752,7 +752,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
                 "assignment lhs is not an lvalue expression");
         });
 
-    const auto analyzedExp = analyzeExp(assignStmt.m_exp_nn);
+    const auto analyzedExp = analyzeExp(assignStmt.exp);
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
@@ -765,8 +765,8 @@ void SemanticAnalyzer::analyzeExpStmt(Ptr<ExpStmt> expStmt_nn)
 {
     const auto& expStmt
         = node(expStmt_nn, "expression statement payload is missing");
-    if (expStmt.m_exp_nn) {
-        (void)analyzeExp(expStmt.m_exp_nn.ref());
+    if (expStmt.exp) {
+        (void)analyzeExp(expStmt.exp.ref());
     }
 }
 
@@ -775,13 +775,13 @@ void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
     const auto& returnStmt
         = node(returnStmt_nn, "return statement payload is missing");
     if (!m_currentFuncReturnType.has_value()) {
-        if (returnStmt.m_exp_nn) {
-            (void)analyzeExp(returnStmt.m_exp_nn.ref());
+        if (returnStmt.exp) {
+            (void)analyzeExp(returnStmt.exp.ref());
         }
         return;
     }
 
-    if (!returnStmt.m_exp_nn) {
+    if (!returnStmt.exp) {
         if (m_currentFuncReturnType->kind != SemanticTypeKind::voidType) {
             recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
                 returnStmt.sourcePos.m_offset,
@@ -790,7 +790,7 @@ void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
         return;
     }
 
-    const auto analyzedExp = analyzeExp(returnStmt.m_exp_nn.ref());
+    const auto analyzedExp = analyzeExp(returnStmt.exp.ref());
     if (m_currentFuncReturnType->kind == SemanticTypeKind::voidType) {
         recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
             returnStmt.sourcePos.m_offset,

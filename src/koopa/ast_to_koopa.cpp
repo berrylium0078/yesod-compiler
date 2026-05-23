@@ -688,12 +688,12 @@ void Generator::generateAssignStmt(
 {
     const auto& parsedAssignStmt
         = node(assignStmt, state, "assignment is null");
-    const auto& lValExp = parsedAssignStmt.m_lVal_nn(state.m_ast_nn);
+    const auto& lValExp = parsedAssignStmt.lval(state.m_ast_nn);
     MATCH(lValExp.kind)
     WITH(
         [&](Exp::LVal expAlt) {
             auto* address = generateLValueAddress(expAlt, state);
-            auto* value = generateExp(parsedAssignStmt.m_exp_nn, state);
+            auto* value = generateExp(parsedAssignStmt.exp, state);
             state.m_currentBasicBlock_nn->pushInst(
                 StoreValue::get(value, address));
         },
@@ -708,8 +708,8 @@ void Generator::generateExpStmt(
 {
     const auto& parsedExpStmt
         = node(expStmt, state, "expression statement is null");
-    if (parsedExpStmt.m_exp_nn) {
-        (void)generateExp(parsedExpStmt.m_exp_nn.ref(), state);
+    if (parsedExpStmt.exp) {
+        (void)generateExp(parsedExpStmt.exp.ref(), state);
     }
 }
 
@@ -718,8 +718,8 @@ ReturnValue* Generator::generateReturnStmt(
 {
     const auto& parsedReturnStmt
         = node(returnStmt, state, "return statement is null");
-    auto* returnValue = ReturnValue::get(parsedReturnStmt.m_exp_nn
-            ? generateExp(parsedReturnStmt.m_exp_nn.ref(), state)
+    auto* returnValue = ReturnValue::get(parsedReturnStmt.exp
+            ? generateExp(parsedReturnStmt.exp.ref(), state)
             : nullptr);
     state.m_currentBasicBlock_nn->pushInst(returnValue);
     return returnValue;

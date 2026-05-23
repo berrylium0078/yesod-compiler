@@ -64,13 +64,13 @@ struct ParserArrayTest : ParserTestBase {
             "brace initializer should preserve both initializer elements");
 
         const auto assignStmt_nn = extractAssignStmt(extractStmtNode(blockItems[1]));
-        require(requireLVal(assignStmt_nn(ast()).m_lVal_nn).indices.size() == 1,
+        require(requireLVal(assignStmt_nn(ast()).lval).indices.size() == 1,
             "assignment lhs should preserve its subscript");
-        require(requireLVal(assignStmt_nn(ast()).m_exp_nn).indices.size() == 2,
+        require(requireLVal(assignStmt_nn(ast()).exp).indices.size() == 2,
             "rhs array read should preserve both subscripts");
 
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(blockItems[2]));
-        require(requireLVal(returnStmt_nn(ast()).m_exp_nn.ref()).indices.size() == 1,
+        require(requireLVal(returnStmt_nn(ast()).exp.ref()).indices.size() == 1,
             "return expression should preserve array subscripts");
     }
 

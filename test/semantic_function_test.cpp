@@ -15,14 +15,14 @@ struct SemanticFunctionTest : SemanticTestBase {
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto returnStmt_nn = extractReturnStmt(
             mainFunc_nn(ast()).body(ast()).items[1]);
-        const auto& callExp = requireCallExp(returnStmt_nn(ast()).m_exp_nn.ref());
+        const auto& callExp = requireCallExp(returnStmt_nn(ast()).exp.ref());
 
         require(callExp.params.size() == 2,
             "call expression should preserve both arguments");
         require(requireSymbol(m_output, callExp.funcName).kind
                 == ast::SemanticSymbolKind::function,
             "call callee should bind to a function symbol");
-        require(requireExpValueKind(m_output, returnStmt_nn(ast()).m_exp_nn.ref())
+        require(requireExpValueKind(m_output, returnStmt_nn(ast()).exp.ref())
                 == ExpType::integer,
             "int-returning call should produce an integer expression type");
         require(requireConstantValue(m_output, callExp.params[0]) == 4,
@@ -39,7 +39,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto expStmt_nn = extractExpStmt(
             mainFunc_nn(ast()).body(ast()).items[0]);
-        require(requireExpValueKind(m_output, expStmt_nn(ast()).m_exp_nn.ref())
+        require(requireExpValueKind(m_output, expStmt_nn(ast()).exp.ref())
                 == ExpType::voidType,
             "void-returning calls should preserve a void expression type");
     }

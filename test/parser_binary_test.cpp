@@ -18,9 +18,9 @@ struct ParserBinaryTest : ParserTestBase {
 
         require(root()(ast()).sourcePos.m_offset == 2,
             "leading trivia should be skipped before the first token");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 15,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 15,
             "binary expression should parse across trivia boundaries");
-        require(requireBinaryExp(returnStmt_nn(ast()).m_exp_nn.ref()).op
+        require(requireBinaryExp(returnStmt_nn(ast()).exp.ref()).op
                 == BinaryOpKeyword::plus,
             "binary root should preserve precedence after grouped parsing");
     }
@@ -32,7 +32,7 @@ struct ParserBinaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 1,
             "multiplicative precedence should bind tighter than additive, then "
             "equality, then logical or");
@@ -42,7 +42,7 @@ struct ParserBinaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 3,
             "additive expressions should associate left to right");
 
@@ -51,7 +51,7 @@ struct ParserBinaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 2,
             "multiplicative expressions should associate left to right");
 
@@ -60,7 +60,7 @@ struct ParserBinaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 1,
             "relational expressions should bind tighter than equality");
 
@@ -69,7 +69,7 @@ struct ParserBinaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 1,
             "logical and should bind tighter than logical or");
     }
@@ -81,14 +81,14 @@ struct ParserBinaryTest : ParserTestBase {
         const auto returnStmt_nn = extractReturnStmt(
             funcDef_nn(ast()).body(ast()).items.front());
         const auto& rootBinaryExp = requireBinaryExp(
-            returnStmt_nn(ast()).m_exp_nn.ref());
+            returnStmt_nn(ast()).exp.ref());
         const auto& lhsBinaryExp = requireBinaryExp(rootBinaryExp.lhs);
 
         require(rootBinaryExp.op == BinaryOpKeyword::less,
             "< should remain available after <=");
         require(lhsBinaryExp.op == BinaryOpKeyword::lessEqual,
             "<= must be parsed before <");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 1,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 1,
             "relational chains should stay left-associated under the generic "
             "binary tree");
     }

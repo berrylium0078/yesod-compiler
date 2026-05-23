@@ -10,7 +10,7 @@ struct ParserUnaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 42,
             "unary plus should parse");
     }
@@ -21,7 +21,7 @@ struct ParserUnaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == -42,
             "unary minus should parse");
     }
@@ -32,7 +32,7 @@ struct ParserUnaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 1,
             "logical not should parse");
     }
@@ -43,7 +43,7 @@ struct ParserUnaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == -42,
             "nested unary expressions should parse recursively");
     }
@@ -58,9 +58,9 @@ struct ParserUnaryTest : ParserTestBase {
         const auto returnStmt_nn = extractReturnStmt(
             funcDef_nn(ast()).body(ast()).items.front());
 
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == -42,
+        require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == -42,
             "unary expression should parse across comments and whitespace");
-        require(requireUnaryExp(returnStmt_nn(ast()).m_exp_nn.ref()).op
+        require(requireUnaryExp(returnStmt_nn(ast()).exp.ref()).op
                 == UnaryOpKeyword::minus,
             "unary root should preserve its operator after grouped parsing");
     }
@@ -94,7 +94,7 @@ struct ParserUnaryTest : ParserTestBase {
             evaluateExp(extractReturnStmt(
                 firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn.ref())
+                    .exp.ref())
                 == 1,
             "missing ')' recovery should preserve the inner expression value");
     }

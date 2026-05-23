@@ -16,13 +16,13 @@ void testExpressionAndEmptyStatementsParse()
         "return");
 
     const auto expStmt_nn = test.extractExpStmt(blockItems[0]);
-    require(expStmt_nn(test.ast()).m_exp_nn != nullptr,
+    require(expStmt_nn(test.ast()).exp != nullptr,
         "non-empty expression statement should preserve its expression");
-    require(test.evaluateExp(expStmt_nn(test.ast()).m_exp_nn.ref()) == 3,
+    require(test.evaluateExp(expStmt_nn(test.ast()).exp.ref()) == 3,
         "expression statement should reuse the expression grammar");
 
     const auto emptyStmt_nn = test.extractExpStmt(blockItems[1]);
-    require(emptyStmt_nn(test.ast()).m_exp_nn == nullptr,
+    require(emptyStmt_nn(test.ast()).exp == nullptr,
         "empty statement should not fabricate an expression node");
 }
 
@@ -49,7 +49,7 @@ void testNestedBlockStatementsParse()
         "nested block declaration should preserve identifier payload");
     const auto returnStmt_nn
         = test.extractReturnStmt(nestedBlock_nn(test.ast()).items[1]);
-    require(test.requireLVal(returnStmt_nn(test.ast()).m_exp_nn.ref())
+    require(test.requireLVal(returnStmt_nn(test.ast()).exp.ref())
                 .identifier(test.ast())
                 .name
             == "inner",

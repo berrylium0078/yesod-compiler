@@ -17,19 +17,19 @@ void testAssignmentAndLValueParsing()
         "block should contain a declaration, assignment, and return");
 
     const auto assignStmt_nn = test.extractAssignStmt(blockItems[1]);
-    require(test.requireLVal(assignStmt_nn(test.ast()).m_lVal_nn)
+    require(test.requireLVal(assignStmt_nn(test.ast()).lval)
                 .identifier(test.ast())
                 .name
             == "value",
         "assignment lvalue should preserve identifier text only");
-    require(assignStmt_nn(test.ast()).m_lVal_nn(test.ast()).sourcePos.m_offset
+    require(assignStmt_nn(test.ast()).lval(test.ast()).sourcePos.m_offset
             == 22,
         "assignment lvalue should store its starting byte offset");
-    require(test.evaluateExp(assignStmt_nn(test.ast()).m_exp_nn) == 3,
+    require(test.evaluateExp(assignStmt_nn(test.ast()).exp) == 3,
         "assignment rhs should preserve the expression tree");
 
     const auto returnStmt_nn = test.extractReturnStmt(blockItems[2]);
-    require(test.requireLVal(returnStmt_nn(test.ast()).m_exp_nn.ref())
+    require(test.requireLVal(returnStmt_nn(test.ast()).exp.ref())
                 .identifier(test.ast())
                 .name
             == "value",

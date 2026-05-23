@@ -18,11 +18,11 @@ struct ParserIfTest : ParserTestBase {
         require(evaluateExp(ifStmt_nn(ast()).condition) == 1,
             "if condition should reuse expression parsing");
         require(
-            extractReturnStmt(ifStmt_nn(ast()).thenBody)(ast()).m_exp_nn.ref()
+            extractReturnStmt(ifStmt_nn(ast()).thenBody)(ast()).exp.ref()
                 != nullptr,
             "if then-branch should preserve its statement payload");
         require(evaluateExp(extractReturnStmt(ifStmt_nn(ast()).elseBody)(ast())
-                        .m_exp_nn.ref())
+                        .exp.ref())
                 == 0,
             "else branch should preserve its return expression");
     }
@@ -35,7 +35,7 @@ struct ParserIfTest : ParserTestBase {
             = extractIfStmt(funcDef_nn(ast()).body(ast()).items[0]);
         const auto innerIf_nn = extractIfStmt(outerIf_nn(ast()).thenBody);
         require(evaluateExp(extractReturnStmt(innerIf_nn(ast()).elseBody)(ast())
-                        .m_exp_nn.ref())
+                        .exp.ref())
                 == 4,
             "inner else branch should preserve its expression payload");
     }
