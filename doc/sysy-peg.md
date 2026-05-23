@@ -1,72 +1,88 @@
 # SysY PEG Grammar
 
-## 1. Source Grammar Notes
+This document describes the current PEG-oriented grammar for the SysY frontend in this repository. The source-language reference remains [doc/sysy.md](doc/sysy.md). This file presents the grammar in its final integrated form, including arrays in declarations, lvalues, function parameters, and brace initializers.
 
-This document is the PEG-oriented design for the next SysY extension. The source EBNF remains [doc/sysy.md](doc/sysy.md), and this revision is an incremental extension of the current PEG baseline in order to support arrays in declarations, lvalues, function parameters, and brace initializers.
+## 1. Source Grammar Summary
 
-Source-language delta for this revision:
+The source-language shapes relevant to this frontend are:
 
 ```text
+CompUnit      ::= {Decl | FuncDef};
+
+ConstDecl     ::= "const" BType ConstDef {"," ConstDef} ";";
+VarDecl       ::= BType VarDef {"," VarDef} ";";
+BType         ::= "int";
+
 ConstDef      ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
-ConstInitVal  ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
 VarDef        ::= IDENT {"[" ConstExp "]"}
                 | IDENT {"[" ConstExp "]"} "=" InitVal;
+
+ConstInitVal  ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}";
 InitVal       ::= Exp | "{" [InitVal {"," InitVal}] "}";
 
-LVal          ::= IDENT {"[" Exp "]"};
-
+FuncDef       ::= FuncType IDENT "(" [FuncFParams] ")" Block;
+FuncType      ::= "void" | "int";
+FuncFParams   ::= FuncFParam {"," FuncFParam};
 FuncFParam    ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
+
+Block         ::= "{" {BlockItem} "}";
+BlockItem     ::= Decl | Stmt;
+
+Stmt          ::= IfStmt | WhileStmt | BreakStmt | ContinueStmt
+                | AssignStmt | Block | ReturnStmt | ExpStmt;
+IfStmt        ::= "if" "(" Exp ")" Stmt ["else" Stmt];
+WhileStmt     ::= "while" "(" Exp ")" Stmt;
+BreakStmt     ::= "break" ";";
+ContinueStmt  ::= "continue" ";";
+AssignStmt    ::= LVal "=" Exp ";";
+ReturnStmt    ::= "return" [Exp] ";";
+ExpStmt       ::= [Exp] ";";
+
+Exp           ::= LOrExp;
+ConstExp      ::= Exp;
+LVal          ::= IDENT {"[" Exp "]"};
 ```
 
-Assumptions carried forward from the existing token layer and baseline design unless noted below:
+Assumptions carried by the PEG form:
 
-- top-level sequencing remains `CompUnit ::= [CompUnit] (Decl | FuncDef)` and is still represented in PEG as a non-empty ordered list of top-level items
-- function definitions, optional `return Exp`, and call expressions stay as in the current baseline
-- the expression-precedence ladder is unchanged: `Exp ::= LOrExp`, down through `UnaryExp`, `PrimaryExp`, `LVal`, and `Number`
-- whitespace and comments are still handled entirely by the token layer
-- `break` and `continue` remain syntactically unrestricted and are still rejected semantically outside loops
+- top-level parsing is represented as a non-empty ordered list of top-level items
+- expression precedence remains the standard SysY ladder from `LOrExp` down to `UnaryExp`, `PrimaryExp`, `LVal`, and `Number`
+- whitespace and comments are handled by the token layer through `Spacing`
+- `[` and `]` are first-class tokens because array declarators and subscripts are part of the grammar
 
-Token-layer delta:
+## 2. Runtime AST Mapping
 
-- identifiers, integer literals, keywords, parentheses, braces, separators, and operators are unchanged
-- `[` and `]` must now be exposed explicitly as tokens because the source grammar now uses array declarators and subscripts
+The PEG grammar is not a one-to-one dump of runtime node types. The current AST in [src/frontend/ast.h](src/frontend/ast.h) has these important design choices:
 
-Implementation note:
+- Expressions are flattened into one `Exp` node with payload variants `Binary`, `Unary`, `Call`, `LVal`, and `Number`.
+- `ConstExp` is only a grammar alias. There is no dedicated runtime `ConstExp` node; constantness is determined during semantic analysis.
+- `Exp::LVal` stores a base identifier plus a vector of subscript expressions.
+- `ConstInitVal` and `InitVal` are recursive nodes whose payload is either a scalar expression or a list of nested initializer nodes.
+- `ConstDef` and `VarDef` store array dimensions in `shape` as `std::vector<Ref<Exp>>`.
+- `FuncFParam` stores the base identifier, a boolean `m_isArray` for the unsized first `[]` in array parameters, and trailing dimensions in `shape`.
+- `Decl`, `Stmt`, and `CompUnit::Item` are `std::variant` values whose alternatives are `Ref<...>` handles, not `Ptr<...>` handles.
+- `IfStmt` stores both `thenBody` and `elseBody` as `Stmt`. The parser always synthesizes an `elseBody`; when the source omits `else`, the parser inserts an empty `Block`.
 
-- The grammar continues to use named precedence layers (`LOrExp`, `AddExp`, `MulExp`, `UnaryExp`, and so on) because they are the clearest way to explain precedence and PEG rewrites.
-- The runtime AST is flatter than the grammar. [src/frontend/ast.h](src/frontend/ast.h) already models expressions as one `Exp` node with payload variants such as binary, unary, call, lvalue, and number, so the grammar-level nonterminals remain explanatory rather than one-to-one runtime node types.
-- This array extension implies AST growth outside the current expression payload split. The scalar-only shapes in [src/frontend/ast.h](src/frontend/ast.h) for `LVal`, `ConstInitVal`, `InitVal`, `ConstDef`, `VarDef`, and `FuncFParam` will need array-dimension vectors and recursive initializer forms even though the grammar still presents them with separate nonterminals.
-- `ConstExp` remains a grammar alias, not a distinct runtime AST node. Whether an expression is constant is still a semantic property discovered during analysis and constant folding.
+Those choices drive a few grammar-to-AST mismatches intentionally:
 
-## 2. Baseline Delta
-
-Relative to the previous baseline in this file:
-
-- unchanged: `CompUnit`, `TopLevelItem`, `FuncDef`, `FuncType`, `FuncFParams`, block structure, statement forms, return statements, function calls, the full expression-precedence ladder, and the existing keyword and literal tokenization apart from brackets
-- changed: `ConstDef` now accepts zero or more constant-dimension suffixes before `=`
-- changed: `VarDef` now accepts zero or more constant-dimension suffixes, with the optional initializer preserved after the full declarator
-- changed: `ConstInitVal` and `InitVal` now accept recursive brace initializers in addition to scalar expression forms
-- changed: `LVal` now accepts zero or more subscript suffixes
-- changed: `FuncFParam` now accepts the SysY array-parameter suffix `[]` followed by zero or more constant trailing dimensions
-- added: `ArrayConstDims`, `LValIndices`, `ParamArraySuffix`, `ConstInitValList`, and `InitValList`
-- reordered: no new ordered-choice reordering is required beyond preserving `CallExp` before `PrimaryExp` and `AssignStmt` before `ExpStmt`
-- token layer changes: add `LBRACK` and `RBRACK`; no keyword changes are needed
-- recovery updates: existing block, declaration, statement, and parenthesized-expression recovery remain valid; new recovery is only needed around `[` `]` array suffixes and `{` `}` brace initializers
+- grammar precedence layers such as `AddExp`, `MulExp`, and `UnaryExp` explain parse structure, but all lower to the single `Exp` runtime node type
+- brace initializers are grammar rules with their own list helpers, but runtime storage is recursive through `ConstInitVal::List` and `InitVal::List`
+- function array parameters encode the unsized first dimension separately from the trailing constant dimensions because the AST needs to preserve `int a[]` distinctly from `int a`
 
 ## 3. Left-Recursion Elimination
 
-The existing expression-ladder rewrites from the current baseline remain unchanged. This revision adds PEG-incompatible repetition and optional-list patterns, but it does not introduce any new left-recursive expression rule.
+The expression ladder uses standard PEG-friendly repetition instead of left recursion. Arrays and recursive initializers add list and suffix forms but do not introduce any new left-recursive rule.
 
 | Original shape | Rewritten PEG shape | Why it preserves the parse |
 |---|---|---|
-| `ConstDef ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal` | `ConstDef <- IDENT ArrayConstDims ASSIGN ConstInitVal` with `ArrayConstDims <- (LBRACK ConstExp RBRACK)*` | preserves an identifier followed by zero or more constant dimensions, then the required initializer |
-| `VarDef ::= IDENT {"[" ConstExp "]"} | IDENT {"[" ConstExp "]"} "=" InitVal` | `VarDef <- IDENT ArrayConstDims (ASSIGN InitVal)?` | factors the shared prefix and keeps the initializer optional after the whole declarator |
-| `ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}"` | `ConstInitVal <- ConstExp / LBRACE ConstInitValList? RBRACE` and `ConstInitValList <- ConstInitVal (COMMA ConstInitVal)*` | preserves either a scalar constant expression or a brace-enclosed comma-separated recursive list |
-| `InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}"` | `InitVal <- Exp / LBRACE InitValList? RBRACE` and `InitValList <- InitVal (COMMA InitVal)*` | same factoring as `ConstInitVal`, preserving scalar or recursive brace forms |
+| `ConstDef ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal` | `ConstDef <- IDENT ArrayConstDims ASSIGN ConstInitVal` with `ArrayConstDims <- (LBRACK ConstExp RBRACK)*` | preserves zero or more constant declarator dimensions before the required initializer |
+| `VarDef ::= IDENT {"[" ConstExp "]"} | IDENT {"[" ConstExp "]"} "=" InitVal` | `VarDef <- IDENT ArrayConstDims (ASSIGN InitVal)?` | factors the shared declarator prefix and keeps the initializer optional |
+| `ConstInitVal ::= ConstExp | "{" [ConstInitVal {"," ConstInitVal}] "}"` | `ConstInitVal <- ConstExp / LBRACE ConstInitValList? RBRACE` and `ConstInitValList <- ConstInitVal (COMMA ConstInitVal)*` | preserves scalar constant initializers and recursive brace forms |
+| `InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}"` | `InitVal <- Exp / LBRACE InitValList? RBRACE` and `InitValList <- InitVal (COMMA InitVal)*` | preserves scalar initializers and recursive brace forms |
 | `LVal ::= IDENT {"[" Exp "]"}` | `LVal <- IDENT LValIndices` with `LValIndices <- (LBRACK Exp RBRACK)*` | preserves a base identifier followed by zero or more subscripts |
-| `FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}]` | `FuncFParam <- BType IDENT ParamArraySuffix?` with `ParamArraySuffix <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*` | preserves SysY array-parameter syntax: one unsized first dimension, then zero or more constant trailing dimensions |
+| `FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}]` | `FuncFParam <- BType IDENT ParamArraySuffix?` with `ParamArraySuffix <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*` | preserves the SysY rule that only the first parameter dimension may be unsized |
 
-The earlier rewrites for `CompUnit`, `FuncFParams`, `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, `LOrExp`, and `ConstExp <- Exp` are unchanged from the current baseline and remain valid.
+The existing rewrites for `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, and `LOrExp` are unchanged.
 
 ## 4. Plain PEG Grammar
 
@@ -184,23 +200,6 @@ OctalDigit         <- [0-7]
 HexadecimalDigit   <- [0-9A-Fa-f]
 EOF                <- !.
 ```
-
-Ordered-choice-sensitive rules in the plain grammar:
-
-- `TopLevelItem <- ConstDecl / FuncDef / VarDecl`
-  `ConstDecl` is prefix-distinct because of `const`. `FuncDef` must still precede `VarDecl` so an `int`-headed function definition is not misread as a variable declaration prefix.
-- `Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt`
-  `AssignStmt` must remain before `ExpStmt` because both may begin with `IDENT`, and with arrays the overlap now includes subscripted heads such as `a[i] = 1;`.
-- `UnaryExp <- CallExp / PrimaryExp / UnaryOp UnaryExp`
-  `CallExp` must remain before `PrimaryExp` because both start with `IDENT`; otherwise `foo(1)` would be consumed as an `LVal` and the following `(` would be stranded.
-- `PrimaryExp <- LPAREN Exp RPAREN / LVal / Number`
-  The `LVal` branch now includes postfix subscripts, but it is still safe here because the call form has already been checked at `UnaryExp`.
-- `RelOp <- LE / GE / LT / GT`
-  Longer operators must still precede shorter prefix-sharing ones.
-- `IntegerConst <- HexadecimalConst / OctalConst / DecimalConst`
-  Hexadecimal must still precede octal so `0x...` is not consumed as octal `0`.
-
-The new initializer rules are not branch-order-sensitive because `ConstExp` and `Exp` do not start with `{`, while brace initializers do.
 
 ## 5. Recovery-Annotated PEG Grammar
 
@@ -405,12 +404,6 @@ HexadecimalDigit           <- [0-9A-Fa-f]
 EOF                        <- !.
 ```
 
-Recovery placement stays deliberately narrow:
-
-- `ArrayConstDims`, `LValIndices`, and `ParamArraySuffix` cut immediately after `[` because that prefix already determines an array suffix, and a missing `]` would otherwise cascade into declaration, parameter, or statement recovery
-- `ConstInitVal` and `InitVal` cut after `{` because the parser has already committed to a brace initializer, making missing `}` or malformed elements the only meaningful local failures
-- existing function-header, call, block, declaration, `if`, `while`, assignment, and parenthesized-expression recovery remain valid without broader restructuring
-
 ## 6. Recovery Inventory
 
 | Label | Where it is thrown | Meaning | Recovery |
@@ -458,7 +451,7 @@ Recovery placement stays deliberately narrow:
 TopLevelItem <- ConstDecl / FuncDef / VarDecl
 ```
 
-This rule remains PEG-sensitive for the same reason as the previous baseline. `ConstDecl` is safe first because `const` is unique. `FuncDef` must stay before `VarDecl` so `int f(...) { ... }` is recognized as a function definition before declaration parsing can misclassify it. Arrays do not change that prefix conflict.
+`ConstDecl` is safe first because `const` is prefix-distinct. `FuncDef` must stay before `VarDecl` so `int f(...) { ... }` is recognized as a function definition rather than being consumed as the start of a variable declaration.
 
 2. `Stmt`
 
@@ -466,7 +459,7 @@ This rule remains PEG-sensitive for the same reason as the previous baseline. `C
 Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / ReturnStmt / ExpStmt
 ```
 
-This ordering is still correct, and arrays make the `AssignStmt` versus `ExpStmt` overlap slightly larger. Inputs like `a[i] = x;` and `a[i];` share the same prefix for longer, so `AssignStmt` must stay before `ExpStmt`. The cut after `=` is still the right commitment point because only then is the statement definitely an assignment.
+`AssignStmt` must remain before `ExpStmt` because both may start with an identifier. With arrays, the ambiguous prefix is longer: both `a[i] = 1;` and `a[i];` begin with the same lvalue head.
 
 3. `UnaryExp`
 
@@ -474,7 +467,7 @@ This ordering is still correct, and arrays make the `AssignStmt` versus `ExpStmt
 UnaryExp <- CallExp / PrimaryExp / UnaryOp UnaryExp
 ```
 
-This remains the most important identifier-headed branch order. Arrays enlarge `LVal`, but they do not change the core conflict: `foo(1)` and `foo[1]` both start with `IDENT`, and the call form must still be recognized before the plain primary-expression route. If `PrimaryExp` came first, `foo(1)` would still be consumed as an `LVal` prefix and the call would fail later.
+`CallExp` must remain before `PrimaryExp` because both start with `IDENT`. Otherwise `foo(1)` would be consumed as an `LVal` and leave the call suffix stranded.
 
 4. `PrimaryExp`
 
@@ -482,37 +475,37 @@ This remains the most important identifier-headed branch order. Arrays enlarge `
 PrimaryExp <- LPAREN Exp RPAREN / LVal / Number
 ```
 
-This order is still correct. The `(` branch is distinct and already cut in the recovery grammar. `LVal` now covers `IDENT` plus zero or more bracketed subscripts, which is exactly why the call form must already have been handled one level above.
+This order is safe because call syntax is already handled at `UnaryExp`, and the parenthesized-expression form is prefix-distinct.
 
-5. `ConstInitVal` and `InitVal`
-
-```peg
-ConstInitVal <- ConstExp / LBRACE ConstInitValList? RBRACE
-InitVal      <- Exp / LBRACE InitValList? RBRACE
-```
-
-These rules are not truly branch-order-sensitive because the brace initializer starts with `{`, while expression forms do not. No additional cut is needed in the plain grammar. In the recovery grammar, the cut after `{` is useful only because the parser has already committed to the brace-initializer shape.
-
-6. `RelOp`
+5. `RelOp`
 
 ```peg
 RelOp <- LE / GE / LT / GT
 ```
 
-Longer operators must still precede shorter prefixes.
+Longer operators must precede shorter prefix-sharing operators.
 
-7. `IntegerConst`
+6. `IntegerConst`
 
 ```peg
 IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
 ```
 
-Hexadecimal must still precede octal so `0x...` is not consumed as octal `0`.
+Hexadecimal must precede octal so `0x...` is not consumed as octal `0`.
 
-## 8. Short Design Rationale
+The initializer rules are not branch-order-sensitive because brace initializers start with `{`, while expression forms do not.
 
-This update is the minimal coherent extension of the existing PEG baseline. The function, statement, and expression design stays intact, while array support is introduced only where the source grammar requires it: declaration suffixes, lvalue subscripts, function-parameter array markers, and recursive brace initializers. The grammar still uses straightforward PEG rewrites such as `Head Tail*`, shared-prefix factoring, and explicit list helpers instead of redesigning unrelated rules.
+## 8. Design Notes
 
-Recovery scope also stays narrow. The new labels focus on high-value structural failures introduced by arrays: missing `]`, malformed bounds or subscripts, malformed initializer elements, and missing `}` in brace initializers. Synchronization still relies on existing delimiters and boundaries such as `]`, `}`, `,`, `;`, and enclosing statement or declaration ends, which keeps the recovery strategy small and readable.
+This grammar stays close to the SysY source rules while keeping the parser implementation local and predictable. Arrays are introduced only where the language needs them: declarator suffixes, lvalue subscripts, parameter array markers, and recursive brace initializers. The expression ladder remains unchanged.
 
-At the implementation boundary, the grammar-level additions are larger than the parser surface alone because the current AST remains scalar-oriented in several declaration and initializer nodes. That distinction is intentional: grammar nonterminals explain precedence and syntax, while runtime representation can continue to flatten expressions and attach array-specific metadata only where the AST actually needs it. `ConstExp` remains only a grammar alias, with constantness still established during semantic analysis rather than syntactically.
+The recovery grammar is intentionally narrow. New labels are concentrated around the structural array and initializer boundaries that otherwise cause large cascades: missing `]`, malformed bounds or subscripts, malformed initializer elements, and missing `}` in brace initializers.
+
+The runtime AST is flatter and more normalized than the grammar:
+
+- `ConstExp` is semantic, not syntactic, at runtime
+- expression precedence nodes collapse into `Exp`
+- absent `else` branches are normalized to an empty block in `IfStmt::elseBody`
+- array parameter shape is split between `m_isArray` and trailing `shape`
+
+That split is deliberate: the grammar explains how the source parses, while the AST preserves the information the later semantic and lowering phases actually need.
