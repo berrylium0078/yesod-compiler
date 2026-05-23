@@ -88,7 +88,7 @@ class Parser {
   private:
     struct ParamArraySuffixParse {
         bool m_isArray = false;
-        std::vector<Ref<Exp>> m_trailingDimensions;
+        std::vector<Ref<Exp>> shape;
     };
 
     struct KeywordMatch {

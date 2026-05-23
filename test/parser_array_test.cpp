@@ -48,9 +48,9 @@ struct ParserArrayTest : ParserTestBase {
 
         require(funcDef_nn(ast()).funcFParams.size() == 2,
             "array function should preserve both formal parameters");
-        require(funcDef_nn(ast()).funcFParams[0].m_trailingDimensions.empty(),
+        require(funcDef_nn(ast()).funcFParams[0].shape.empty(),
             "first parameter should have no trailing dimensions");
-        require(funcDef_nn(ast()).funcFParams[1].m_trailingDimensions.size()
+        require(funcDef_nn(ast()).funcFParams[1].shape.size()
                 == 1,
             "second parameter should preserve its trailing constant dimension");
 
@@ -94,8 +94,8 @@ struct ParserArrayTest : ParserTestBase {
         for (const auto topLevelItem : root()(ast()).topLevelItems) {
             const auto funcDef_nn = MATCH(topLevelItem)
                 WITH (
-                    [](const Ptr<FuncDef>& funcDef_nn) {
-                        return funcDef_nn;
+                    [](const Ref<FuncDef>& funcDef_nn) {
+                        return funcDef_nn.ptr();
                     },
                     [](const auto&) { return Ptr<FuncDef> {}; },
                 );
@@ -106,12 +106,12 @@ struct ParserArrayTest : ParserTestBase {
 
         require(funcs.size() == 4,
             "function-array-parameter sample should parse four function definitions");
-        require(funcs[0](ast()).funcFParams[1].m_trailingDimensions.empty(),
+        require(funcs[0](ast()).funcFParams[1].shape.empty(),
             "f1 should preserve zero trailing array dimensions");
-        require(funcs[1](ast()).funcFParams[1].m_trailingDimensions.size()
+        require(funcs[1](ast()).funcFParams[1].shape.size()
                 == 1,
             "f2 should preserve one trailing array dimension");
-        require(funcs[2](ast()).funcFParams[1].m_trailingDimensions.size()
+        require(funcs[2](ast()).funcFParams[1].shape.size()
                 == 2,
             "f3 should preserve two trailing array dimensions");
 

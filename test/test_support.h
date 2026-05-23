@@ -68,7 +68,9 @@ struct AstTestHelperBase {
         const auto& compUnit = compUnit_nn(self.ast());
         for (const auto topLevelItem : compUnit.topLevelItems) {
             const auto funcDef_nn = MATCH(topLevelItem)
-                WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                WITH([](const Ref<FuncDef>& funcDef_nn) {
+                    return funcDef_nn.ptr();
+                },
                     [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn) {
                 return funcDef_nn;
@@ -152,7 +154,9 @@ struct AstTestHelperBase {
         this Self& self, const Stmt& stmt)
     {
         const auto returnStmt = MATCH(stmt)
-            WITH([](const Ptr<ReturnStmt>& returnStmt) { return returnStmt; },
+            WITH([](const Ref<ReturnStmt>& returnStmt) {
+                return returnStmt.ptr();
+            },
                 [](const auto&) { return Ptr<ReturnStmt> { }; }, );
         require(returnStmt, "expected return statement variant");
         return returnStmt;
@@ -169,7 +173,9 @@ struct AstTestHelperBase {
     [[nodiscard]] Ptr<IfStmt> extractIfStmt(this Self& self, const Stmt& stmt)
     {
         const auto ifStmt
-            = MATCH(stmt) WITH([](const Ptr<IfStmt>& ifStmt) { return ifStmt; },
+            = MATCH(stmt) WITH([](const Ref<IfStmt>& ifStmt) {
+                return ifStmt.ptr();
+            },
                 [](const auto&) { return Ptr<IfStmt> { }; }, );
         require(ifStmt != nullptr, "expected if statement variant");
         return ifStmt;
@@ -187,7 +193,9 @@ struct AstTestHelperBase {
         this Self& self, const Stmt& stmt)
     {
         const auto whileStmt = MATCH(stmt)
-            WITH([](const Ptr<WhileStmt>& whileStmt) { return whileStmt; },
+            WITH([](const Ref<WhileStmt>& whileStmt) {
+                return whileStmt.ptr();
+            },
                 [](const auto&) { return Ptr<WhileStmt> { }; }, );
         require(whileStmt != nullptr, "expected while statement variant");
         return whileStmt;
@@ -205,7 +213,9 @@ struct AstTestHelperBase {
         this Self& self, const Stmt& stmt)
     {
         const auto breakStmt = MATCH(stmt)
-            WITH([](const Ptr<BreakStmt>& breakStmt) { return breakStmt; },
+            WITH([](const Ref<BreakStmt>& breakStmt) {
+                return breakStmt.ptr();
+            },
                 [](const auto&) { return Ptr<BreakStmt> { }; }, );
         require(breakStmt != nullptr, "expected break statement variant");
         return breakStmt;
@@ -216,7 +226,9 @@ struct AstTestHelperBase {
         this Self& self, const Stmt& stmt)
     {
         const auto continueStmt = MATCH(stmt) WITH(
-            [](const Ptr<ContinueStmt>& continueStmt) { return continueStmt; },
+            [](const Ref<ContinueStmt>& continueStmt) {
+                return continueStmt.ptr();
+            },
             [](const auto&) { return Ptr<ContinueStmt> { }; }, );
         require(continueStmt != nullptr, "expected continue statement variant");
         return continueStmt;
@@ -227,7 +239,9 @@ struct AstTestHelperBase {
         this Self& self, const Stmt& stmt)
     {
         const auto assignStmt = MATCH(stmt)
-            WITH([](const Ptr<AssignStmt>& assignStmt) { return assignStmt; },
+            WITH([](const Ref<AssignStmt>& assignStmt) {
+                return assignStmt.ptr();
+            },
                 [](const auto&) { return Ptr<AssignStmt> { }; }, );
         require(assignStmt != nullptr, "expected assignment statement variant");
         return assignStmt;
@@ -244,7 +258,9 @@ struct AstTestHelperBase {
     [[nodiscard]] Ptr<ExpStmt> extractExpStmt(this Self& self, const Stmt& stmt)
     {
         const auto expStmt = MATCH(stmt)
-            WITH([](const Ptr<ExpStmt>& expStmt) { return expStmt; },
+            WITH([](const Ref<ExpStmt>& expStmt) {
+                return expStmt.ptr();
+            },
                 [](const auto&) { return Ptr<ExpStmt> { }; }, );
         require(expStmt != nullptr, "expected expression statement variant");
         return expStmt;
@@ -261,7 +277,9 @@ struct AstTestHelperBase {
     [[nodiscard]] Ptr<Block> extractBlockStmt(this Self& self, const Stmt& stmt)
     {
         const auto body
-            = MATCH(stmt) WITH([](const Ptr<Block>& body) { return body; },
+            = MATCH(stmt) WITH([](const Ref<Block>& body) {
+                  return body.ptr();
+              },
                 [](const auto&) { return Ptr<Block> { }; }, );
         require(body != nullptr, "expected body statement variant");
         return body;
@@ -279,7 +297,9 @@ struct AstTestHelperBase {
         this Self& self, const Decl& decl)
     {
         const auto constDecl = MATCH(decl)
-            WITH([](const Ptr<ConstDecl>& constDecl) { return constDecl; },
+            WITH([](const Ref<ConstDecl>& constDecl) {
+                return constDecl.ptr();
+            },
                 [](const auto&) { return Ptr<ConstDecl> { }; }, );
         require(constDecl, "expected const declaration variant");
         return constDecl;
@@ -289,7 +309,9 @@ struct AstTestHelperBase {
     [[nodiscard]] Ptr<VarDecl> extractVarDecl(this Self& self, const Decl& decl)
     {
         const auto varDecl = MATCH(decl)
-            WITH([](const Ptr<VarDecl>& varDecl) { return varDecl; },
+            WITH([](const Ref<VarDecl>& varDecl) {
+                return varDecl.ptr();
+            },
                 [](const auto&) { return Ptr<VarDecl> { }; }, );
         require(varDecl, "expected var declaration variant");
         return varDecl;
@@ -416,7 +438,9 @@ struct AstTestHelperBase {
         this Self& self, const CompUnit::Item& topLevelItem)
     {
         return MATCH(topLevelItem)
-            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+            WITH([](const Ref<FuncDef>& funcDef_nn) {
+                return funcDef_nn.ptr();
+            },
                 [](const auto&) {
                     fail("expected top-level function definition");
                     std::unreachable();
@@ -430,7 +454,9 @@ struct AstTestHelperBase {
         require(compUnit_nn != nullptr, "expected compilation unit node");
         for (const auto topLevelItem : compUnit_nn(self.ast()).topLevelItems) {
             const auto funcDef_nn = MATCH(topLevelItem)
-                WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                WITH([](const Ref<FuncDef>& funcDef_nn) {
+                    return funcDef_nn.ptr();
+                },
                     [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn != nullptr
                 && funcDef_nn(self.ast()).identifier(self.ast()).name
@@ -462,7 +488,9 @@ inline Ref<FuncDef> firstFuncDef(const Ptr<CompUnit>& compUnit_nn)
     require(compUnit_nn != nullptr, "expected compilation unit node");
     for (const auto topLevelItem : compUnit_nn(currentAst()).topLevelItems) {
         const auto funcDef = MATCH(topLevelItem)
-            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+            WITH([](const Ref<FuncDef>& funcDef_nn) {
+                return funcDef_nn.ptr();
+            },
                 [](const auto&) { return Ptr<FuncDef> { }; });
         if (funcDef)
             return funcDef.ref();

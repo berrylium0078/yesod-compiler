@@ -307,7 +307,7 @@ ParseResult<Ptr<FuncDef>> Parser::parseFuncDef(int32_t offset)
                 = parseParamArraySuffix(paramIdentifier.nextOffset);
             if (paramArraySuffix.success) {
                 trailingDimensions
-                    = std::move(paramArraySuffix.value.m_trailingDimensions);
+                    = std::move(paramArraySuffix.value.shape);
                 paramNextOffset = paramArraySuffix.nextOffset;
             }
 
@@ -1029,9 +1029,8 @@ ParseResult<Ptr<VarDef>> Parser::parseVarDef(int32_t offset)
         const auto result = ParseResult<Ptr<VarDef>> {
             .success = true,
             .nextOffset = dimensions.nextOffset,
-            .value
-            = m_ast.alloc<VarDef>(offset, identifier.value.ref(), dimensions.value,
-                m_ast.alloc<InitVal>(offset, InitVal::List { })),
+            .value = m_ast.alloc<VarDef>(offset, identifier.value.ref(),
+                dimensions.value, Ptr<InitVal> { }),
         };
         m_varDefMemo.emplace(offset, result);
         return result;
@@ -1470,7 +1469,7 @@ ParseResult<Ptr<IfStmt>> Parser::parseIfStmt(int32_t offset)
         .success = true,
         .nextOffset = nextOffset,
         .value = m_ast.alloc<IfStmt>(keyword.m_startOffset, condExp_p.ref(),
-            thenStmt.value.value(), elseKeyword.success, elseStmt.value()),
+            thenStmt.value.value(), elseStmt.value()),
     };
     m_ifStmtMemo.emplace(offset, result);
     return result;
@@ -2618,7 +2617,7 @@ ParseResult<Parser::ParamArraySuffixParse> Parser::parseParamArraySuffix(
         .nextOffset = trailingDimensions.nextOffset,
         .value = ParamArraySuffixParse {
             .m_isArray = true,
-            .m_trailingDimensions = trailingDimensions.value,
+            .shape = trailingDimensions.value,
         },
     };
     m_paramArraySuffixMemo.emplace(offset, result);

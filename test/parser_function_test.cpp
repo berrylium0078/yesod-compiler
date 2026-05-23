@@ -38,7 +38,9 @@ struct ParserFunctionTest : ParserTestBase {
     Ptr<FuncDef> requireTopLevelFuncDef(const CompUnit::Item& topLevelItem)
     {
         const auto funcDef_nn = MATCH(topLevelItem)
-            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+            WITH([](const Ref<FuncDef>& funcDef_nn) {
+                return funcDef_nn.ptr();
+            },
                 [](const auto&) { return Ptr<FuncDef> { }; }, );
         require(
             funcDef_nn != nullptr, "expected top-level function definition");

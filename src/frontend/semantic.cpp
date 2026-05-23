@@ -166,15 +166,17 @@ void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
         WITH(
             [&](Decl decl) {
                 MATCH(decl)
-                WITH([&](Ptr<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
+                WITH([&](Ref<VarDecl> vardecl) {
+                    analyzeVarDecl(vardecl.ptr());
+                },
                     [](const auto&) { });
             },
-            [&](Ptr<FuncDef> funcDef) { });
+            [&](Ref<FuncDef>) { });
     }
 
     for (const auto topLevelItem : compUnit.topLevelItems) {
         MATCH(topLevelItem)
-        WITH([&](Ptr<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
+        WITH([&](Ref<FuncDef> funcDef) { analyzeFuncDef(funcDef.ptr()); },
             [](const auto&) { });
     }
 }
@@ -222,8 +224,8 @@ void SemanticAnalyzer::declareFuncDef(Ptr<FuncDef> funcDef_nn)
     paramTypes.reserve(funcDef.funcFParams.size());
     for (const auto& funcFParam : funcDef.funcFParams) {
         auto paramType = analyzeObjectType(
-            funcFParam.m_trailingDimensions, funcFParam.sourcePos.m_offset);
-        if (funcFParam.m_isArray) {
+            funcFParam.shape, funcFParam.sourcePos.m_offset);
+        if (funcFParam.shape.empty()) {
             paramType = SemanticType::makeUnsizedArray(paramType);
         }
         paramTypes.push_back(paramType);

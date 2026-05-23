@@ -81,8 +81,8 @@ struct SemanticArrayTest : SemanticTestBase {
         for (const auto topLevelItem : root()(ast()).topLevelItems) {
             const auto funcDef_nn
                 = MATCH(topLevelItem) WITH(
-                    [](const Ptr<ast::FuncDef>& funcDef_nn) {
-                        return funcDef_nn;
+                    [](const Ref<ast::FuncDef>& funcDef_nn) {
+                        return funcDef_nn.ptr();
                     },
                     [](const auto&) { return Ptr<ast::FuncDef> { }; }, );
             if (funcDef_nn) {

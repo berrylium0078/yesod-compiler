@@ -236,7 +236,7 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
     for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
         MATCH(topLevelItem)
         WITH(
-            [&](Ptr<FuncDef> topLevelAlt) {
+            [&](Ref<FuncDef> topLevelAlt) {
                 const auto& funcDef = topLevelAlt(ast);
                 const auto* functionSymbol
                     = semanticInfo.findSymbol(funcDef.identifier);
@@ -295,7 +295,7 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
     for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
         MATCH(topLevelItem)
         WITH(
-            [&](Ptr<FuncDef> topLevelAlt) {
+            [&](Ref<FuncDef> topLevelAlt) {
                 const auto& symbol = requireSymbolForIdentifier(
                     topLevelAlt(ast).identifier, semanticInfo,
                     "function definition is missing a symbol binding");
@@ -304,7 +304,7 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
                     throw std::runtime_error("function definition is missing a "
                                              "lowered function declaration");
                 }
-                (void)generateFuncDef(ast, topLevelAlt, semanticInfo,
+                (void)generateFuncDef(ast, topLevelAlt.ptr(), semanticInfo,
                     globalStorageBySymbolId, functionBySymbolId,
                     functionIt->second);
             },
@@ -418,7 +418,7 @@ void Generator::generateGlobalDecl(Decl decl, Program& program,
                     continue;
                 }
                 auto scalarExprs = flattenArrayInitializer(
-                    ast, constDef.constInitVal, symbol.m_type);
+                    ast, constDef.constInitVal.ref(), symbol.m_type);
                 size_t nextScalarIndex = 0;
                 Value* initValue = generateGlobalArrayInitializer(
                     symbol.m_type, scalarExprs, nextScalarIndex, semanticInfo);
@@ -512,7 +512,7 @@ void Generator::generateDecl(
                     = parsedConstDef.constInitVal(state.m_ast_nn);
                 if (symbol.m_type.isArray()) {
                     auto scalarExprs = flattenArrayInitializer(state.m_ast_nn,
-                        parsedConstDef.constInitVal, symbol.m_type);
+                        parsedConstDef.constInitVal.ref(), symbol.m_type);
                     size_t nextScalarIndex = 0;
                     generateLocalArrayInitializer(alloc, symbol.m_type,
                         scalarExprs, nextScalarIndex, state);
@@ -590,7 +590,12 @@ void Generator::generateIfStmt(
     auto* thenBlock = createBasicBlock("if_then", state);
     BasicBlock* elseBlock = nullptr;
     BasicBlock* contBlock = nullptr;
-    if (parsedIfStmt.m_hasElse) {
+
+    bool hasElse = MATCH(parsedIfStmt.elseBody) WITH(
+        [&](Ref<Block> block) { return !block(state.m_ast_nn).items.empty(); },
+        [&](const auto&) { return true; },
+    );
+    if (hasElse) {
         elseBlock = createBasicBlock("if_else", state);
         contBlock = createBasicBlock("if_end", state);
     } else {
@@ -607,7 +612,7 @@ void Generator::generateIfStmt(
         state.m_currentBasicBlock_nn->pushInst(JumpValue::get(contBlock, { }));
     }
 
-    if (parsedIfStmt.m_hasElse) {
+    if (hasElse) {
         state.m_currentBasicBlock_nn = elseBlock;
         generateStmt(parsedIfStmt.elseBody, state);
         if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {

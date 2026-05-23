@@ -141,7 +141,7 @@ struct ConstDef {
     SourcePos sourcePos;
     Ref<Identifier> identifier;
     std::vector<Ref<Exp>> shape;
-    Ref<ConstInitVal> constInitVal;
+    Ptr<ConstInitVal> constInitVal;
 };
 
 struct VarDef {
@@ -173,7 +173,6 @@ struct IfStmt {
     SourcePos sourcePos;
     Ref<Exp> condition;
     Stmt thenBody;
-    bool m_hasElse = false;
     Stmt elseBody;
 };
 
@@ -218,7 +217,7 @@ struct FuncFParam {
     BTypeKeyword bType = BTypeKeyword::intKeyword;
     Ref<Identifier> identifier;
     bool m_isArray = false;
-    std::vector<Ref<Exp>> m_trailingDimensions;
+    std::vector<Ref<Exp>> shape;
 };
 
 struct FuncDef {
