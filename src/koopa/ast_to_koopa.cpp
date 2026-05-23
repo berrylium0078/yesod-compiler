@@ -14,6 +14,102 @@ using namespace frontend;
 
 namespace {
 
+    struct FunctionGenerator {
+        struct LoopBlocks {
+            BasicBlock* m_condBlock_nn;
+            BasicBlock* m_endBlock_nn;
+        };
+        const frontend::AST& m_ast;
+        const frontend::SemanticInfo* m_semanticInfo;
+        Function* m_function;
+        BasicBlock* m_currentBasicBlock;
+        BasicBlock* m_endBlock;
+        int32_t m_nextTempId = 1;
+        int32_t m_nextBlockId = 1;
+        std::unordered_map<int32_t, Value*> m_storageBySymbolId;
+        std::unordered_map<int32_t, Function*> m_functionBySymbolId;
+        std::unordered_map<Ptr<frontend::WhileStmt>, LoopBlocks>
+            m_loopBlocksByWhileStmt;
+        std::unordered_set<std::string> m_usedSymbolNames;
+
+        template <typename T>
+        [[nodiscard]] const T& node(Ptr<T> handle, const char* message) const
+        {
+            if (!handle) {
+                throw std::runtime_error(message);
+            }
+            return handle(m_ast);
+        }
+        template <typename T>
+        [[nodiscard]] const T& node(Ptr<T> handle,
+            const FunctionGenerator& state, const char* message) const
+        {
+            if (!handle) {
+                throw std::runtime_error(message);
+            }
+            return handle(state.m_ast);
+        }
+        [[nodiscard]] const frontend::SemanticSymbol&
+        requireSymbolForIdentifier(
+            Ref<frontend::Identifier> identifier, const char* message) const
+        {
+            const auto* symbol = m_semanticInfo->findSymbol(identifier);
+            if (symbol == nullptr) {
+                throw std::runtime_error(message);
+            }
+            return *symbol;
+        }
+        [[nodiscard]] const frontend::SemanticSymbol&
+        requireSymbolForIdentifier(Ref<frontend::Identifier> identifier,
+            const frontend::SemanticInfo& semanticInfo,
+            const char* message) const
+        {
+            const auto* symbol = semanticInfo.findSymbol(identifier);
+            if (symbol == nullptr) {
+                throw std::runtime_error(message);
+            }
+            return *symbol;
+        }
+        [[nodiscard]] BasicBlock* createBasicBlock(const std::string& stem);
+        [[nodiscard]] bool blockHasTerminator(
+            const BasicBlock& basicBlock) const;
+        void finalizeBasicBlock(
+            BasicBlock& basicBlock, BasicBlock& endBlock) const;
+        [[nodiscard]] std::string makeUniqueLocalName(
+            const frontend::SemanticSymbol& symbol);
+
+        void generateBlock(Ptr<frontend::Block> body);
+        void generateBlockItem(const frontend::BlockItem& blockItem);
+        void generateDecl(frontend::Decl declNode);
+        void generateStmt(frontend::Stmt stmtNode);
+        void generateIfStmt(Ptr<frontend::IfStmt> ifStmt);
+        void generateWhileStmt(Ptr<frontend::WhileStmt> whileStmt);
+        void generateBreakStmt(Ptr<frontend::BreakStmt> breakStmt);
+        void generateContinueStmt(Ptr<frontend::ContinueStmt> continueStmt);
+        void generateAssignStmt(Ptr<frontend::AssignStmt> assignStmt);
+        void generateExpStmt(Ptr<frontend::ExpStmt> expStmt);
+        [[nodiscard]] ReturnValue* generateReturnStmt(
+            Ptr<frontend::ReturnStmt> returnStmt);
+        [[nodiscard]] Value* generateExp(Ref<frontend::Exp> exp);
+        [[nodiscard]] Value* generateBinaryExpValue(
+            const frontend::Exp::Binary& binaryExp);
+        [[nodiscard]] Value* generateUnaryExpValue(
+            const frontend::Exp::Unary& unaryExp);
+        [[nodiscard]] Value* generateBooleanAsInt(Ref<frontend::Exp> exp);
+        void generateBooleanBranch(Ref<frontend::Exp> exp,
+            BasicBlock& trueBlock, BasicBlock& falseBlock);
+        void generateLogicalOrBranch(const frontend::Exp::Binary& binaryExp,
+            BasicBlock& trueBlock, BasicBlock& falseBlock);
+        void generateLogicalAndBranch(const frontend::Exp::Binary& binaryExp,
+            BasicBlock& trueBlock, BasicBlock& falseBlock);
+        void generateLocalArrayInitializer(Value* address,
+            const frontend::SemanticType& type,
+            const std::vector<Ptr<frontend::Exp>>& scalarExprs,
+            size_t& nextScalarIndex);
+        [[nodiscard]] Value* generateLValueAddress(
+            const frontend::Exp::LVal& lVal);
+    };
+
     size_t countScalarSlots(const SemanticType& type)
     {
         if (!type.isArray()) {
@@ -215,6 +311,30 @@ namespace {
         return "%t" + std::to_string(nextTempId++);
     }
 
+    BinaryValue* generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
+        Value* rhs, BasicBlock& basicBlock, int32_t& nextTempId)
+    {
+        auto* binaryValue
+            = BinaryValue::get(op, lhs, rhs, makeTempName(nextTempId));
+        basicBlock.pushInst(binaryValue);
+        return binaryValue;
+    }
+
+    Value* generateNumber(const Exp::Number& number)
+    {
+        return IntegerValue::get(number.value);
+    }
+
+    const SemanticSymbol& requireSymbolForIdentifier(Ref<Identifier> identifier,
+        const SemanticInfo& semanticInfo, const char* message)
+    {
+        const auto* symbol = semanticInfo.findSymbol(identifier);
+        if (symbol == nullptr) {
+            throw std::runtime_error(message);
+        }
+        return *symbol;
+    }
+
 } // namespace
 
 Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
@@ -367,12 +487,12 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     auto* entryBlock = BasicBlock::createEntry("%entry");
     auto* endBlock = BasicBlock::createNonEntry("%end");
     function->pushBB(entryBlock);
-    FunctionGenerationState state {
-        .m_ast_nn = ast,
-        .m_semanticInfo_nn = &semanticInfo,
-        .m_function_nn = function,
-        .m_currentBasicBlock_nn = entryBlock,
-        .m_endBlock_nn = endBlock,
+    FunctionGenerator state {
+        .m_ast = ast,
+        .m_semanticInfo = &semanticInfo,
+        .m_function = function,
+        .m_currentBasicBlock = entryBlock,
+        .m_endBlock = endBlock,
         .m_storageBySymbolId = globalStorageBySymbolId,
         .m_functionBySymbolId = functionBySymbolId,
     };
@@ -381,13 +501,13 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         const auto& symbol = requireSymbolForIdentifier(funcFParam.identifier,
             semanticInfo, "function parameter is missing a symbol binding");
         auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
-            makeUniqueLocalName(symbol, state.m_usedSymbolNames));
+            state.makeUniqueLocalName(symbol));
         entryBlock->pushInst(alloc);
         entryBlock->pushInst(StoreValue::get(function->getParam(i), alloc));
         state.m_storageBySymbolId[symbol.m_id] = alloc;
     }
-    generateBlock(parsedFuncDef.body, state);
-    finalizeBasicBlock(*state.m_currentBasicBlock_nn, *endBlock);
+    state.generateBlock(parsedFuncDef.body);
+    state.finalizeBasicBlock(*state.m_currentBasicBlock, *endBlock);
     if (parsedFuncDef.m_funcType == FuncTypeKeyword::voidKeyword) {
         endBlock->pushInst(ReturnValue::get(nullptr));
     } else {
@@ -401,8 +521,8 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     return function;
 }
 
-void Generator::generateGlobalDecl(Decl decl, Program& program,
-    const AST& ast, const SemanticInfo& semanticInfo,
+void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
+    const SemanticInfo& semanticInfo,
     std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
 {
     MATCH(decl)
@@ -467,61 +587,61 @@ void Generator::generateGlobalDecl(Decl decl, Program& program,
         }, );
 }
 
-void Generator::generateBlock(
-    Ptr<Block> body, FunctionGenerationState& state) const
+void FunctionGenerator::generateBlock(Ptr<Block> body)
 {
+    auto& state = *this;
     const auto& parsedBlock = node(body, state, "body is missing");
     for (const auto blockItem : parsedBlock.items) {
-        if (blockHasTerminator(*state.m_currentBasicBlock_nn)) {
+        if (blockHasTerminator(*state.m_currentBasicBlock)) {
             break;
         }
-        generateBlockItem(blockItem, state);
+        generateBlockItem(blockItem);
     }
 }
 
-void Generator::generateBlockItem(
-    const BlockItem& blockItem, FunctionGenerationState& state) const
+void FunctionGenerator::generateBlockItem(const BlockItem& blockItem)
 {
-    if (blockHasTerminator(*state.m_currentBasicBlock_nn)) {
+    auto& state = *this;
+    if (blockHasTerminator(*state.m_currentBasicBlock)) {
         return;
     }
     MATCH(blockItem)
-    WITH([&](Decl decl) { generateDecl(decl, state); },
-        [&](Stmt stmt) { generateStmt(stmt, state); }, );
+    WITH([&](Decl decl) { generateDecl(decl); },
+        [&](Stmt stmt) { generateStmt(stmt); }, );
 }
 
-void Generator::generateDecl(
-    Decl decl, FunctionGenerationState& state) const
+void FunctionGenerator::generateDecl(Decl decl)
 {
+    auto& state = *this;
     MATCH(decl)
     WITH(
         [&](Ptr<ConstDecl> declAlt) {
             const auto& constDecl
                 = node(declAlt, state, "const declaration payload is null");
             for (const auto constDef : constDecl.constDef) {
-                const auto& parsedConstDef = constDef(state.m_ast_nn);
+                const auto& parsedConstDef = constDef(state.m_ast);
                 const auto& symbol = requireSymbolForIdentifier(
-                    parsedConstDef.identifier, *state.m_semanticInfo_nn,
+                    parsedConstDef.identifier, *state.m_semanticInfo,
                     "const declarator is missing its symbol binding");
-                auto* alloc
-                    = AllocValue::get(lowerSemanticType(symbol.m_type, false),
-                        makeUniqueLocalName(symbol, state.m_usedSymbolNames));
-                state.m_currentBasicBlock_nn->pushInst(alloc);
+                auto* alloc = AllocValue::get(
+                    ::yesod::koopa::lowerSemanticType(symbol.m_type, false),
+                    makeUniqueLocalName(symbol));
+                state.m_currentBasicBlock->pushInst(alloc);
                 state.m_storageBySymbolId[symbol.m_id] = alloc;
                 const auto& constInitVal
-                    = parsedConstDef.constInitVal(state.m_ast_nn);
+                    = parsedConstDef.constInitVal(state.m_ast);
                 if (symbol.m_type.isArray()) {
-                    auto scalarExprs = flattenArrayInitializer(state.m_ast_nn,
+                    auto scalarExprs = flattenArrayInitializer(state.m_ast,
                         parsedConstDef.constInitVal.ref(), symbol.m_type);
                     size_t nextScalarIndex = 0;
-                    generateLocalArrayInitializer(alloc, symbol.m_type,
-                        scalarExprs, nextScalarIndex, state);
+                    generateLocalArrayInitializer(
+                        alloc, symbol.m_type, scalarExprs, nextScalarIndex);
                 } else {
                     MATCH(constInitVal.kind)
                     WITH(
                         [&](Ref<Exp> initAlt) {
-                            auto* initValue = generateExp(initAlt, state);
-                            state.m_currentBasicBlock_nn->pushInst(
+                            auto* initValue = generateExp(initAlt);
+                            state.m_currentBasicBlock->pushInst(
                                 StoreValue::get(initValue, alloc));
                         },
                         [&](const auto&) { });
@@ -532,30 +652,30 @@ void Generator::generateDecl(
             const auto& varDecl
                 = node(declAlt, state, "var declaration payload is null");
             for (const auto varDef : varDecl.varDef) {
-                const auto& resolvedVarDef = varDef(state.m_ast_nn);
+                const auto& resolvedVarDef = varDef(state.m_ast);
                 const auto& symbol = requireSymbolForIdentifier(
-                    resolvedVarDef.identifier, *state.m_semanticInfo_nn,
+                    resolvedVarDef.identifier, *state.m_semanticInfo,
                     "var declarator is missing its symbol binding");
-                auto* alloc
-                    = AllocValue::get(lowerSemanticType(symbol.m_type, false),
-                        makeUniqueLocalName(symbol, state.m_usedSymbolNames));
-                state.m_currentBasicBlock_nn->pushInst(alloc);
+                auto* alloc = AllocValue::get(
+                    ::yesod::koopa::lowerSemanticType(symbol.m_type, false),
+                    makeUniqueLocalName(symbol));
+                state.m_currentBasicBlock->pushInst(alloc);
                 state.m_storageBySymbolId[symbol.m_id] = alloc;
                 if (resolvedVarDef.initVal) {
                     if (symbol.m_type.isArray()) {
-                        auto scalarExprs
-                            = flattenArrayInitializer(state.m_ast_nn,
-                                resolvedVarDef.initVal.ref(), symbol.m_type);
+                        auto scalarExprs = flattenArrayInitializer(state.m_ast,
+                            resolvedVarDef.initVal.ref(), symbol.m_type);
                         size_t nextScalarIndex = 0;
-                        generateLocalArrayInitializer(alloc, symbol.m_type,
-                            scalarExprs, nextScalarIndex, state);
+                        generateLocalArrayInitializer(
+                            alloc, symbol.m_type, scalarExprs, nextScalarIndex);
                     } else {
-                        const auto& initVal = resolvedVarDef.initVal(state.m_ast_nn);
+                        const auto& initVal
+                            = resolvedVarDef.initVal(state.m_ast);
                         MATCH(initVal.kind)
                         WITH(
                             [&](Ref<Exp> initAlt) {
-                                auto* initValue = generateExp(initAlt, state);
-                                state.m_currentBasicBlock_nn->pushInst(
+                                auto* initValue = generateExp(initAlt);
+                                state.m_currentBasicBlock->pushInst(
                                     StoreValue::get(initValue, alloc));
                             },
                             [&](const auto&) { });
@@ -565,100 +685,90 @@ void Generator::generateDecl(
         }, );
 }
 
-void Generator::generateStmt(
-    Stmt stmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateStmt(Stmt stmt)
 {
     MATCH(stmt)
-    WITH([&](Ptr<IfStmt> stmtAlt) { generateIfStmt(stmtAlt, state); },
-        [&](Ptr<WhileStmt> stmtAlt) { generateWhileStmt(stmtAlt, state); },
-        [&](Ptr<BreakStmt> stmtAlt) { generateBreakStmt(stmtAlt, state); },
-        [&](Ptr<ContinueStmt> stmtAlt) {
-            generateContinueStmt(stmtAlt, state);
-        },
-        [&](Ptr<AssignStmt> stmtAlt) { generateAssignStmt(stmtAlt, state); },
-        [&](Ptr<Block> stmtAlt) { generateBlock(stmtAlt, state); },
-        [&](Ptr<ReturnStmt> stmtAlt) {
-            (void)generateReturnStmt(stmtAlt, state);
-        },
-        [&](Ptr<ExpStmt> stmtAlt) { generateExpStmt(stmtAlt, state); }, );
+    WITH([&](Ptr<IfStmt> stmtAlt) { generateIfStmt(stmtAlt); },
+        [&](Ptr<WhileStmt> stmtAlt) { generateWhileStmt(stmtAlt); },
+        [&](Ptr<BreakStmt> stmtAlt) { generateBreakStmt(stmtAlt); },
+        [&](Ptr<ContinueStmt> stmtAlt) { generateContinueStmt(stmtAlt); },
+        [&](Ptr<AssignStmt> stmtAlt) { generateAssignStmt(stmtAlt); },
+        [&](Ptr<Block> stmtAlt) { generateBlock(stmtAlt); },
+        [&](Ptr<ReturnStmt> stmtAlt) { (void)generateReturnStmt(stmtAlt); },
+        [&](Ptr<ExpStmt> stmtAlt) { generateExpStmt(stmtAlt); });
 }
 
-void Generator::generateIfStmt(
-    Ptr<IfStmt> ifStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateIfStmt(Ptr<IfStmt> ifStmt)
 {
+    auto& state = *this;
     const auto& parsedIfStmt = node(ifStmt, state, "if statement is null");
-    auto* thenBlock = createBasicBlock("if_then", state);
+    auto* thenBlock = createBasicBlock("if_then");
     BasicBlock* elseBlock = nullptr;
     BasicBlock* contBlock = nullptr;
 
     bool hasElse = MATCH(parsedIfStmt.elseBody) WITH(
-        [&](Ref<Block> block) { return !block(state.m_ast_nn).items.empty(); },
-        [&](const auto&) { return true; },
-    );
+        [&](Ref<Block> block) { return !block(state.m_ast).items.empty(); },
+        [&](const auto&) { return true; }, );
     if (hasElse) {
-        elseBlock = createBasicBlock("if_else", state);
-        contBlock = createBasicBlock("if_end", state);
+        elseBlock = createBasicBlock("if_else");
+        contBlock = createBasicBlock("if_end");
     } else {
-        contBlock = createBasicBlock("if_end", state);
+        contBlock = createBasicBlock("if_end");
         elseBlock = contBlock;
     }
 
-    generateBooleanBranch(
-        parsedIfStmt.condition, *thenBlock, *elseBlock, state);
+    generateBooleanBranch(parsedIfStmt.condition, *thenBlock, *elseBlock);
 
-    state.m_currentBasicBlock_nn = thenBlock;
-    generateStmt(parsedIfStmt.thenBody, state);
-    if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
-        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(contBlock, { }));
+    state.m_currentBasicBlock = thenBlock;
+    generateStmt(parsedIfStmt.thenBody);
+    if (!blockHasTerminator(*state.m_currentBasicBlock)) {
+        state.m_currentBasicBlock->pushInst(JumpValue::get(contBlock, { }));
     }
 
     if (hasElse) {
-        state.m_currentBasicBlock_nn = elseBlock;
-        generateStmt(parsedIfStmt.elseBody, state);
-        if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
-            state.m_currentBasicBlock_nn->pushInst(
-                JumpValue::get(contBlock, { }));
+        state.m_currentBasicBlock = elseBlock;
+        generateStmt(parsedIfStmt.elseBody);
+        if (!blockHasTerminator(*state.m_currentBasicBlock)) {
+            state.m_currentBasicBlock->pushInst(JumpValue::get(contBlock, { }));
         }
     }
 
-    state.m_currentBasicBlock_nn = contBlock;
+    state.m_currentBasicBlock = contBlock;
 }
 
-void Generator::generateWhileStmt(
-    Ptr<WhileStmt> whileStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateWhileStmt(Ptr<WhileStmt> whileStmt)
 {
+    auto& state = *this;
     const auto& parsedWhileStmt
         = node(whileStmt, state, "while statement is null");
-    auto* condBlock = createBasicBlock("while_cond", state);
-    auto* bodyBlock = createBasicBlock("while_body", state);
-    auto* endBlock = createBasicBlock("while_end", state);
+    auto* condBlock = createBasicBlock("while_cond");
+    auto* bodyBlock = createBasicBlock("while_body");
+    auto* endBlock = createBasicBlock("while_end");
 
-    state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, { }));
+    state.m_currentBasicBlock->pushInst(JumpValue::get(condBlock, { }));
 
-    state.m_loopBlocksByWhileStmt[whileStmt]
-        = FunctionGenerationState::LoopBlocks {
-              .m_condBlock_nn = condBlock,
-              .m_endBlock_nn = endBlock,
-          };
+    state.m_loopBlocksByWhileStmt[whileStmt] = FunctionGenerator::LoopBlocks {
+        .m_condBlock_nn = condBlock,
+        .m_endBlock_nn = endBlock,
+    };
 
-    state.m_currentBasicBlock_nn = condBlock;
-    generateBooleanBranch(
-        parsedWhileStmt.condition, *bodyBlock, *endBlock, state);
+    state.m_currentBasicBlock = condBlock;
+    generateBooleanBranch(parsedWhileStmt.condition, *bodyBlock, *endBlock);
 
-    state.m_currentBasicBlock_nn = bodyBlock;
-    generateStmt(parsedWhileStmt.body, state);
-    if (!blockHasTerminator(*state.m_currentBasicBlock_nn)) {
-        state.m_currentBasicBlock_nn->pushInst(JumpValue::get(condBlock, { }));
+    state.m_currentBasicBlock = bodyBlock;
+    generateStmt(parsedWhileStmt.body);
+    if (!blockHasTerminator(*state.m_currentBasicBlock)) {
+        state.m_currentBasicBlock->pushInst(JumpValue::get(condBlock, { }));
     }
 
     state.m_loopBlocksByWhileStmt.erase(whileStmt);
-    state.m_currentBasicBlock_nn = endBlock;
+    state.m_currentBasicBlock = endBlock;
 }
 
-void Generator::generateBreakStmt(
-    Ptr<BreakStmt> breakStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateBreakStmt(Ptr<BreakStmt> breakStmt)
 {
-    const auto loop = state.m_semanticInfo_nn->findLoop(breakStmt);
+    auto& state = *this;
+    const auto loop = state.m_semanticInfo->findLoop(breakStmt);
     if (!loop.has_value()) {
         throw std::runtime_error("break statement references no loop binding");
     }
@@ -667,14 +777,14 @@ void Generator::generateBreakStmt(
         throw std::runtime_error(
             "break statement references unknown loop target");
     }
-    state.m_currentBasicBlock_nn->pushInst(
+    state.m_currentBasicBlock->pushInst(
         JumpValue::get(loopIt->second.m_endBlock_nn, { }));
 }
 
-void Generator::generateContinueStmt(
-    Ptr<ContinueStmt> continueStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateContinueStmt(Ptr<ContinueStmt> continueStmt)
 {
-    const auto loop = state.m_semanticInfo_nn->findLoop(continueStmt);
+    auto& state = *this;
+    const auto loop = state.m_semanticInfo->findLoop(continueStmt);
     if (!loop.has_value()) {
         throw std::runtime_error(
             "continue statement references no loop binding");
@@ -684,22 +794,22 @@ void Generator::generateContinueStmt(
         throw std::runtime_error(
             "continue statement references unknown loop target");
     }
-    state.m_currentBasicBlock_nn->pushInst(
+    state.m_currentBasicBlock->pushInst(
         JumpValue::get(loopIt->second.m_condBlock_nn, { }));
 }
 
-void Generator::generateAssignStmt(
-    Ptr<AssignStmt> assignStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateAssignStmt(Ptr<AssignStmt> assignStmt)
 {
+    auto& state = *this;
     const auto& parsedAssignStmt
         = node(assignStmt, state, "assignment is null");
-    const auto& lValExp = parsedAssignStmt.lval(state.m_ast_nn);
+    const auto& lValExp = parsedAssignStmt.lval(state.m_ast);
     MATCH(lValExp.kind)
     WITH(
         [&](Exp::LVal expAlt) {
-            auto* address = generateLValueAddress(expAlt, state);
-            auto* value = generateExp(parsedAssignStmt.exp, state);
-            state.m_currentBasicBlock_nn->pushInst(
+            auto* address = generateLValueAddress(expAlt);
+            auto* value = generateExp(parsedAssignStmt.exp);
+            state.m_currentBasicBlock->pushInst(
                 StoreValue::get(value, address));
         },
         [&](const auto&) {
@@ -708,51 +818,50 @@ void Generator::generateAssignStmt(
         }, );
 }
 
-void Generator::generateExpStmt(
-    Ptr<ExpStmt> expStmt, FunctionGenerationState& state) const
+void FunctionGenerator::generateExpStmt(Ptr<ExpStmt> expStmt)
 {
+    auto& state = *this;
     const auto& parsedExpStmt
         = node(expStmt, state, "expression statement is null");
     if (parsedExpStmt.exp) {
-        (void)generateExp(parsedExpStmt.exp.ref(), state);
+        (void)generateExp(parsedExpStmt.exp.ref());
     }
 }
 
-ReturnValue* Generator::generateReturnStmt(
-    Ptr<ReturnStmt> returnStmt, FunctionGenerationState& state) const
+ReturnValue* FunctionGenerator::generateReturnStmt(Ptr<ReturnStmt> returnStmt)
 {
+    auto& state = *this;
     const auto& parsedReturnStmt
         = node(returnStmt, state, "return statement is null");
     auto* returnValue = ReturnValue::get(parsedReturnStmt.exp
-            ? generateExp(parsedReturnStmt.exp.ref(), state)
+            ? generateExp(parsedReturnStmt.exp.ref())
             : nullptr);
-    state.m_currentBasicBlock_nn->pushInst(returnValue);
+    state.m_currentBasicBlock->pushInst(returnValue);
     return returnValue;
 }
 
-Value* Generator::generateExp(
-    Ref<Exp> exp, FunctionGenerationState& state) const
+Value* FunctionGenerator::generateExp(Ref<Exp> exp)
 {
-    if (const auto constantValue
-        = state.m_semanticInfo_nn->findConstantValue(exp);
+    auto& state = *this;
+    if (const auto constantValue = state.m_semanticInfo->findConstantValue(exp);
         constantValue.has_value()) {
         return IntegerValue::get(*constantValue);
     }
-    const auto& parsedExp = exp(state.m_ast_nn);
+    const auto& parsedExp = exp(state.m_ast);
     return MATCH(parsedExp.kind) WITH(
         [&](Exp::Binary expAlt) -> Value* {
             if (expAlt.op == BinaryOpKeyword::orOr
                 || expAlt.op == BinaryOpKeyword::andAnd) {
-                return generateBooleanAsInt(exp, state);
+                return generateBooleanAsInt(exp);
             }
-            return generateBinaryExpValue(expAlt, state);
+            return generateBinaryExpValue(expAlt);
         },
         [&](Exp::Unary expAlt) -> Value* {
-            return generateUnaryExpValue(expAlt, state);
+            return generateUnaryExpValue(expAlt);
         },
         [&](Exp::Call expAlt) -> Value* {
             const auto& symbol = requireSymbolForIdentifier(expAlt.funcName,
-                *state.m_semanticInfo_nn,
+                *state.m_semanticInfo,
                 "call target is missing a symbol binding");
             const auto functionIt
                 = state.m_functionBySymbolId.find(symbol.m_id);
@@ -763,7 +872,7 @@ Value* Generator::generateExp(
             std::vector<Value*> args;
             args.reserve(expAlt.params.size());
             for (const auto arg_nn : expAlt.params) {
-                args.push_back(generateExp(arg_nn, state));
+                args.push_back(generateExp(arg_nn));
             }
             const auto* functionType = dynamic_cast<FunctionType*>(
                 functionIt->second->getFuncType());
@@ -773,12 +882,12 @@ Value* Generator::generateExp(
                 : makeTempName(state.m_nextTempId);
             auto* callValue
                 = CallValue::get(functionIt->second, std::move(args), callName);
-            state.m_currentBasicBlock_nn->pushInst(callValue);
+            state.m_currentBasicBlock->pushInst(callValue);
             return callValue;
         },
         [&](Exp::LVal expAlt) -> Value* {
-            auto* address = generateLValueAddress(expAlt, state);
-            const auto expType = state.m_semanticInfo_nn->findExpType(exp);
+            auto* address = generateLValueAddress(expAlt);
+            const auto expType = state.m_semanticInfo->findExpType(exp);
             if (expType.has_value() && expType->isArray()) {
                 const auto pointeeType
                     = dynamic_cast<PointerType*>(address->getVType())
@@ -786,24 +895,24 @@ Value* Generator::generateExp(
                 if (pointeeType->isArrayType()) {
                     auto* decayed = GetElemPtrValue::get(address,
                         IntegerValue::get(0), makeTempName(state.m_nextTempId));
-                    state.m_currentBasicBlock_nn->pushInst(decayed);
+                    state.m_currentBasicBlock->pushInst(decayed);
                     return decayed;
                 }
                 return address;
             }
             auto* loadValue
                 = LoadValue::get(address, makeTempName(state.m_nextTempId));
-            state.m_currentBasicBlock_nn->pushInst(loadValue);
+            state.m_currentBasicBlock->pushInst(loadValue);
             return loadValue;
         },
         [&](Exp::Number expAlt) -> Value* { return generateNumber(expAlt); });
 }
 
-Value* Generator::generateBinaryExpValue(
-    const Exp::Binary& binaryExp, FunctionGenerationState& state) const
+Value* FunctionGenerator::generateBinaryExpValue(const Exp::Binary& binaryExp)
 {
-    auto* lhs = generateExp(binaryExp.lhs, state);
-    auto* rhs = generateExp(binaryExp.rhs, state);
+    auto& state = *this;
+    auto* lhs = generateExp(binaryExp.lhs);
+    auto* rhs = generateExp(binaryExp.rhs);
     koopa_raw_binary_op op = KOOPA_RBO_ADD;
     switch (binaryExp.op) {
     case BinaryOpKeyword::star:
@@ -845,129 +954,108 @@ Value* Generator::generateBinaryExpValue(
                                  "through boolean branching");
     }
     return generateBinaryValue(
-        op, lhs, rhs, *state.m_currentBasicBlock_nn, state.m_nextTempId);
+        op, lhs, rhs, *state.m_currentBasicBlock, state.m_nextTempId);
 }
 
-Value* Generator::generateUnaryExpValue(
-    const Exp::Unary& unaryExp, FunctionGenerationState& state) const
+Value* FunctionGenerator::generateUnaryExpValue(const Exp::Unary& unaryExp)
 {
-    auto* operand = generateExp(unaryExp.lhs, state);
+    auto& state = *this;
+    auto* operand = generateExp(unaryExp.lhs);
     switch (unaryExp.op) {
     case UnaryOpKeyword::plus:
         return generateBinaryValue(KOOPA_RBO_ADD, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+            *state.m_currentBasicBlock, state.m_nextTempId);
     case UnaryOpKeyword::minus:
         return generateBinaryValue(KOOPA_RBO_SUB, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+            *state.m_currentBasicBlock, state.m_nextTempId);
     case UnaryOpKeyword::bang:
         return generateBinaryValue(KOOPA_RBO_EQ, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock_nn, state.m_nextTempId);
+            *state.m_currentBasicBlock, state.m_nextTempId);
     }
     throw std::runtime_error("unsupported unary operator");
 }
 
-Value* Generator::generateBooleanAsInt(
-    Ref<Exp> exp, FunctionGenerationState& state) const
+Value* FunctionGenerator::generateBooleanAsInt(Ref<Exp> exp)
 {
+    auto& state = *this;
     auto* resultStorage
         = AllocValue::get(Int32Type::get(), makeTempName(state.m_nextTempId));
-    state.m_currentBasicBlock_nn->pushInst(resultStorage);
-    state.m_currentBasicBlock_nn->pushInst(
+    state.m_currentBasicBlock->pushInst(resultStorage);
+    state.m_currentBasicBlock->pushInst(
         StoreValue::get(IntegerValue::get(0), resultStorage));
 
-    auto* trueBlock = createBasicBlock("bool_true", state);
-    auto* falseBlock = createBasicBlock("bool_false", state);
-    auto* contBlock = createBasicBlock("bool_end", state);
+    auto* trueBlock = createBasicBlock("bool_true");
+    auto* falseBlock = createBasicBlock("bool_false");
+    auto* contBlock = createBasicBlock("bool_end");
 
-    generateBooleanBranch(exp, *trueBlock, *falseBlock, state);
+    generateBooleanBranch(exp, *trueBlock, *falseBlock);
 
     trueBlock->pushInst(StoreValue::get(IntegerValue::get(1), resultStorage));
     trueBlock->pushInst(JumpValue::get(contBlock, { }));
     falseBlock->pushInst(StoreValue::get(IntegerValue::get(0), resultStorage));
     falseBlock->pushInst(JumpValue::get(contBlock, { }));
 
-    state.m_currentBasicBlock_nn = contBlock;
+    state.m_currentBasicBlock = contBlock;
     auto* loadValue
         = LoadValue::get(resultStorage, makeTempName(state.m_nextTempId));
     contBlock->pushInst(loadValue);
     return loadValue;
 }
 
-void Generator::generateBooleanBranch(Ref<Exp> exp, BasicBlock& trueBlock,
-    BasicBlock& falseBlock, FunctionGenerationState& state) const
+void FunctionGenerator::generateBooleanBranch(
+    Ref<Exp> exp, BasicBlock& trueBlock, BasicBlock& falseBlock)
 {
-    if (const auto constantValue
-        = state.m_semanticInfo_nn->findConstantValue(exp);
+    auto& state = *this;
+    if (const auto constantValue = state.m_semanticInfo->findConstantValue(exp);
         constantValue.has_value()) {
-        state.m_currentBasicBlock_nn->pushInst(
+        state.m_currentBasicBlock->pushInst(
             BranchValue::get(IntegerValue::get(*constantValue), &trueBlock, { },
                 &falseBlock, { }));
         return;
     }
 
-    const auto& parsedExp = exp(state.m_ast_nn);
+    const auto& parsedExp = exp(state.m_ast);
     MATCH(parsedExp.kind)
     WITH(
         [&](Exp::Binary expAlt) {
             if (expAlt.op == BinaryOpKeyword::orOr) {
-                generateLogicalOrBranch(expAlt, trueBlock, falseBlock, state);
+                generateLogicalOrBranch(expAlt, trueBlock, falseBlock);
                 return;
             }
             if (expAlt.op == BinaryOpKeyword::andAnd) {
-                generateLogicalAndBranch(expAlt, trueBlock, falseBlock, state);
+                generateLogicalAndBranch(expAlt, trueBlock, falseBlock);
                 return;
             }
 
-            auto* value = generateBinaryExpValue(expAlt, state);
-            state.m_currentBasicBlock_nn->pushInst(
+            auto* value = generateBinaryExpValue(expAlt);
+            state.m_currentBasicBlock->pushInst(
                 BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
         },
         [&](const auto&) {
-            auto* value = generateExp(exp, state);
-            state.m_currentBasicBlock_nn->pushInst(
+            auto* value = generateExp(exp);
+            state.m_currentBasicBlock->pushInst(
                 BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
         });
 }
 
-void Generator::generateLogicalOrBranch(const Exp::Binary& binaryExp,
-    BasicBlock& trueBlock, BasicBlock& falseBlock,
-    FunctionGenerationState& state) const
+void FunctionGenerator::generateLogicalOrBranch(
+    const Exp::Binary& binaryExp, BasicBlock& trueBlock, BasicBlock& falseBlock)
 {
-    auto* nextOperandBlock = createBasicBlock("lor_rhs", state);
-    generateBooleanBranch(binaryExp.lhs, trueBlock, *nextOperandBlock, state);
-    state.m_currentBasicBlock_nn = nextOperandBlock;
-    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock, state);
+    auto& state = *this;
+    auto* nextOperandBlock = createBasicBlock("lor_rhs");
+    generateBooleanBranch(binaryExp.lhs, trueBlock, *nextOperandBlock);
+    state.m_currentBasicBlock = nextOperandBlock;
+    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
 }
 
-void Generator::generateLogicalAndBranch(const Exp::Binary& binaryExp,
-    BasicBlock& trueBlock, BasicBlock& falseBlock,
-    FunctionGenerationState& state) const
+void FunctionGenerator::generateLogicalAndBranch(
+    const Exp::Binary& binaryExp, BasicBlock& trueBlock, BasicBlock& falseBlock)
 {
-    auto* nextOperandBlock = createBasicBlock("land_rhs", state);
-    generateBooleanBranch(binaryExp.lhs, *nextOperandBlock, falseBlock, state);
-    state.m_currentBasicBlock_nn = nextOperandBlock;
-    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock, state);
-}
-
-Value* Generator::generateBooleanizedValue(
-    Value* value, BasicBlock& basicBlock, int32_t& nextTempId) const
-{
-    return generateBinaryValue(
-        KOOPA_RBO_NOT_EQ, IntegerValue::get(0), value, basicBlock, nextTempId);
-}
-
-BinaryValue* Generator::generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
-    Value* rhs, BasicBlock& basicBlock, int32_t& nextTempId) const
-{
-    auto* binaryValue
-        = BinaryValue::get(op, lhs, rhs, makeTempName(nextTempId));
-    basicBlock.pushInst(binaryValue);
-    return binaryValue;
-}
-
-Value* Generator::generateNumber(const Exp::Number& number) const
-{
-    return IntegerValue::get(number.value);
+    auto& state = *this;
+    auto* nextOperandBlock = createBasicBlock("land_rhs");
+    generateBooleanBranch(binaryExp.lhs, *nextOperandBlock, falseBlock);
+    state.m_currentBasicBlock = nextOperandBlock;
+    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
 }
 
 Type* Generator::lowerSemanticType(
@@ -1021,19 +1109,20 @@ Value* Generator::generateGlobalArrayInitializer(const SemanticType& type,
     return AggregateValue::get(std::move(elements), arrayType);
 }
 
-void Generator::generateLocalArrayInitializer(Value* address,
+void FunctionGenerator::generateLocalArrayInitializer(Value* address,
     const SemanticType& type, const std::vector<Ptr<Exp>>& scalarExprs,
-    size_t& nextScalarIndex, FunctionGenerationState& state) const
+    size_t& nextScalarIndex)
 {
+    auto& state = *this;
     if (!type.isArray()) {
         Value* initValue = IntegerValue::get(0);
         if (nextScalarIndex < scalarExprs.size()) {
             const auto exp_nn = scalarExprs[nextScalarIndex++];
             if (exp_nn) {
-                initValue = generateExp(exp_nn.ref(), state);
+                initValue = generateExp(exp_nn.ref());
             }
         }
-        state.m_currentBasicBlock_nn->pushInst(
+        state.m_currentBasicBlock->pushInst(
             StoreValue::get(initValue, address));
         return;
     }
@@ -1045,17 +1134,17 @@ void Generator::generateLocalArrayInitializer(Value* address,
     for (int32_t i = 0; i < type.m_arrayLength; ++i) {
         auto* elementAddress = GetElemPtrValue::get(
             address, IntegerValue::get(i), makeTempName(state.m_nextTempId));
-        state.m_currentBasicBlock_nn->pushInst(elementAddress);
-        generateLocalArrayInitializer(elementAddress, *type.m_elementType,
-            scalarExprs, nextScalarIndex, state);
+        state.m_currentBasicBlock->pushInst(elementAddress);
+        generateLocalArrayInitializer(
+            elementAddress, *type.m_elementType, scalarExprs, nextScalarIndex);
     }
 }
 
-Value* Generator::generateLValueAddress(
-    const Exp::LVal& lVal, FunctionGenerationState& state) const
+Value* FunctionGenerator::generateLValueAddress(const Exp::LVal& lVal)
 {
+    auto& state = *this;
     const auto& symbol = requireSymbolForIdentifier(lVal.identifier,
-        *state.m_semanticInfo_nn, "lvalue is missing a symbol binding");
+        *state.m_semanticInfo, "lvalue is missing a symbol binding");
     const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
     if (storageIt == state.m_storageBySymbolId.end()) {
         throw std::runtime_error("lvalue references undefined storage");
@@ -1067,13 +1156,13 @@ Value* Generator::generateLValueAddress(
     if (currentType.isArray() && currentType.m_arrayLength == -1) {
         auto* loadedPointer
             = LoadValue::get(address, makeTempName(state.m_nextTempId));
-        state.m_currentBasicBlock_nn->pushInst(loadedPointer);
+        state.m_currentBasicBlock->pushInst(loadedPointer);
         address = loadedPointer;
         indexesDecayedArrayParameter = true;
     }
 
     for (const auto index_nn : lVal.indices) {
-        auto* indexValue = generateExp(index_nn, state);
+        auto* indexValue = generateExp(index_nn);
         Value* nextAddress = nullptr;
         if (indexesDecayedArrayParameter) {
             nextAddress = GetPtrValue::get(
@@ -1090,7 +1179,7 @@ Value* Generator::generateLValueAddress(
                     address, indexValue, makeTempName(state.m_nextTempId));
             }
         }
-        state.m_currentBasicBlock_nn->pushInst(nextAddress);
+        state.m_currentBasicBlock->pushInst(nextAddress);
         address = nextAddress;
         if (currentType.isArray() && currentType.m_elementType != nullptr) {
             currentType = *currentType.m_elementType;
@@ -1101,23 +1190,23 @@ Value* Generator::generateLValueAddress(
     return address;
 }
 
-BasicBlock* Generator::createBasicBlock(
-    const std::string& stem, FunctionGenerationState& state) const
+BasicBlock* FunctionGenerator::createBasicBlock(const std::string& stem)
 {
+    auto& state = *this;
     auto* basicBlock = BasicBlock::createNonEntry(
         "%" + stem + "_" + std::to_string(state.m_nextBlockId++));
-    state.m_function_nn->pushBB(basicBlock);
+    state.m_function->pushBB(basicBlock);
     return basicBlock;
 }
 
-bool Generator::blockHasTerminator(const BasicBlock& basicBlock) const
+bool FunctionGenerator::blockHasTerminator(const BasicBlock& basicBlock) const
 {
     return basicBlock.getNumInsts() > 0
         && basicBlock.getInst(basicBlock.getNumInsts() - 1)
                ->canTerminateBlock();
 }
 
-void Generator::finalizeBasicBlock(
+void FunctionGenerator::finalizeBasicBlock(
     BasicBlock& basicBlock, BasicBlock& endBlock) const
 {
     if (blockHasTerminator(basicBlock)) {
@@ -1127,18 +1216,18 @@ void Generator::finalizeBasicBlock(
     basicBlock.pushInst(JumpValue::get(&endBlock, { }));
 }
 
-std::string Generator::makeUniqueLocalName(const SemanticSymbol& symbol,
-    std::unordered_set<std::string>& usedSymbolNames) const
+std::string FunctionGenerator::makeUniqueLocalName(const SemanticSymbol& symbol)
 {
+    auto& state = *this;
     const std::string baseName = "%" + normalizeIdentifierStem(symbol.name);
-    if (usedSymbolNames.insert(baseName).second) {
+    if (state.m_usedSymbolNames.insert(baseName).second) {
         return baseName;
     }
 
     int32_t suffix = 1;
     while (true) {
         const std::string candidate = baseName + "_" + std::to_string(suffix++);
-        if (usedSymbolNames.insert(candidate).second) {
+        if (state.m_usedSymbolNames.insert(candidate).second) {
             return candidate;
         }
     }

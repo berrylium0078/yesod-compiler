@@ -225,7 +225,7 @@ void SemanticAnalyzer::declareFuncDef(Ptr<FuncDef> funcDef_nn)
     for (const auto& funcFParam : funcDef.funcFParams) {
         auto paramType = analyzeObjectType(
             funcFParam.shape, funcFParam.sourcePos.m_offset);
-        if (funcFParam.shape.empty()) {
+        if (funcFParam.m_isArray) {
             paramType = SemanticType::makeUnsizedArray(paramType);
         }
         paramTypes.push_back(paramType);
