@@ -138,7 +138,8 @@ int main(int argc, const char* argv[])
 
     try {
         const std::string source = readTextFile(inputPath);
-        yesod::frontend::Parser parser(source);
+        yesod::frontend::Parser parser(
+            yesod::frontend::prependBuiltinFunctionDeclarations(source));
         auto parseOutput = parser.parse();
         if (!parseOutput.success()) {
             std::vector<DiagInfo> diags;

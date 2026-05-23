@@ -10,6 +10,16 @@ namespace yesod::frontend {
 
 namespace {
 
+    constexpr std::string_view kBuiltinFunctionDeclarations
+        = "int getint();\n"
+          "int getch();\n"
+          "int getarray(int a[]);\n"
+          "void putint(int x);\n"
+          "void putch(int x);\n"
+          "void putarray(int n, int a[]);\n"
+          "void starttime();\n"
+          "void stoptime();\n";
+
     bool isOctalDigit(char ch) { return ch >= '0' && ch <= '7'; }
 
     bool isDecimalDigit(char ch) { return ch >= '0' && ch <= '9'; }
@@ -41,6 +51,15 @@ namespace {
     }
 
 } // namespace
+
+std::string prependBuiltinFunctionDeclarations(const std::string& source)
+{
+    std::string prefixedSource;
+    prefixedSource.reserve(kBuiltinFunctionDeclarations.size() + source.size());
+    prefixedSource.append(kBuiltinFunctionDeclarations);
+    prefixedSource.append(source);
+    return prefixedSource;
+}
 
 Parser::Parser(std::string source)
     : m_source(std::move(source))
@@ -337,6 +356,19 @@ ParseResult<Ptr<FuncDef>> Parser::parseFuncDef(int32_t offset)
             blockOffset = recoveredParen.nextOffset;
         }
 
+        const auto recoveredSemicolon = matchSymbol(blockOffset, ';');
+        if (recoveredSemicolon.success) {
+            const auto recoveredResult = ParseResult<Ptr<FuncDef>> {
+                .success = true,
+                .nextOffset = recoveredSemicolon.nextOffset,
+                .value = m_ast.alloc<FuncDef>(normalizedOffset, funcType.value,
+                    identifier.value.ref(), std::move(funcFParams),
+                    Ptr<Block> {}),
+            };
+            m_funcDefMemo.emplace(offset, recoveredResult);
+            return recoveredResult;
+        }
+
         const auto block = parseBlock(blockOffset);
         if (!block.success) {
             const auto failure = ParseResult<Ptr<FuncDef>> {
@@ -357,6 +389,18 @@ ParseResult<Ptr<FuncDef>> Parser::parseFuncDef(int32_t offset)
         };
         m_funcDefMemo.emplace(offset, recoveredResult);
         return recoveredResult;
+    }
+
+    const auto semicolon = matchSymbol(closeParen.nextOffset, ';');
+    if (semicolon.success) {
+        const auto result = ParseResult<Ptr<FuncDef>> {
+            .success = true,
+            .nextOffset = semicolon.nextOffset,
+            .value = m_ast.alloc<FuncDef>(normalizedOffset, funcType.value,
+                identifier.value.ref(), std::move(funcFParams), Ptr<Block> {}),
+        };
+        m_funcDefMemo.emplace(offset, result);
+        return result;
     }
 
     const auto block = parseBlock(closeParen.nextOffset);

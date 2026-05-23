@@ -12,6 +12,9 @@
 
 namespace yesod::frontend {
 
+[[nodiscard]] std::string prependBuiltinFunctionDeclarations(
+    const std::string& source);
+
 enum class DiagnosticKind {
     unexpectedToken,
     expectedIdentifier,

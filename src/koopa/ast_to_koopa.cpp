@@ -358,6 +358,9 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
         WITH(
             [&](Ref<FuncDef> topLevelAlt) {
                 const auto& funcDef = topLevelAlt(ast);
+                if (funcDef.body == nullptr) {
+                    return;
+                }
                 const auto* functionSymbol
                     = semanticInfo.findSymbol(funcDef.identifier);
                 if (functionSymbol == nullptr) {
@@ -402,12 +405,19 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
                     globalStorageBySymbolId);
             },
             [&](Ptr<FuncDef> topLevelAlt) {
-                auto* function
-                    = createFunctionDecl(ast, topLevelAlt, semanticInfo);
                 const auto& symbol = requireSymbolForIdentifier(
                     topLevelAlt(ast).identifier, semanticInfo,
-                    "function definition is missing a symbol binding");
-                functionBySymbolId[symbol.m_id] = function;
+                    "function declaration is missing a symbol binding");
+                auto [functionIt, inserted]
+                    = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
+                if (!inserted) {
+                    return;
+                }
+
+                auto* function = topLevelAlt(ast).body != nullptr
+                    ? createFunctionDecl(ast, topLevelAlt, semanticInfo)
+                    : createExternalFunctionDecl(symbol);
+                functionIt->second = function;
                 program->pushFunc(function);
             }, );
     }
@@ -416,6 +426,9 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
         MATCH(topLevelItem)
         WITH(
             [&](Ref<FuncDef> topLevelAlt) {
+                if (topLevelAlt(ast).body == nullptr) {
+                    return;
+                }
                 const auto& symbol = requireSymbolForIdentifier(
                     topLevelAlt(ast).identifier, semanticInfo,
                     "function definition is missing a symbol binding");

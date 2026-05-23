@@ -225,7 +225,7 @@ struct FuncDef {
     FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
     Ref<Identifier> identifier;
     std::vector<FuncFParam> funcFParams;
-    Ref<Block> body;
+    Ptr<Block> body;
 };
 struct CompUnit {
     using Item = std::variant<Decl, Ref<FuncDef>>;

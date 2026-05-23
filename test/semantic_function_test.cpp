@@ -13,8 +13,8 @@ struct SemanticFunctionTest : SemanticTestBase {
             "add(seed, counter);}");
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
-        const auto returnStmt_nn = extractReturnStmt(
-            mainFunc_nn(ast()).body(ast()).items[1]);
+        const auto returnStmt_nn
+            = extractReturnStmt(mainFunc_nn(ast()).body(ast()).items[1]);
         const auto& callExp = requireCallExp(returnStmt_nn(ast()).exp.ref());
 
         require(callExp.params.size() == 2,
@@ -26,19 +26,20 @@ struct SemanticFunctionTest : SemanticTestBase {
                 == ExpType::integer,
             "int-returning call should produce an integer expression type");
         require(requireConstantValue(m_output, callExp.params[0]) == 4,
-            "global const arguments should preserve their folded constant value");
+            "global const arguments should preserve their folded constant "
+            "value");
         require(requireSymbol(m_output, callExp.params[1]).name == "counter",
             "global variable arguments should resolve through global scope");
     }
 
     void testVoidFunctionCallExpressionStatementAnalyzes()
     {
-        m_output = analyzeRoot(
-            "void noop(){return;} int main(){noop(); return 0;}");
+        m_output
+            = analyzeRoot("void noop(){return;} int main(){noop(); return 0;}");
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
-        const auto expStmt_nn = extractExpStmt(
-            mainFunc_nn(ast()).body(ast()).items[0]);
+        const auto expStmt_nn
+            = extractExpStmt(mainFunc_nn(ast()).body(ast()).items[0]);
         require(requireExpValueKind(m_output, expStmt_nn(ast()).exp.ref())
                 == ExpType::voidType,
             "void-returning calls should preserve a void expression type");
@@ -49,8 +50,8 @@ struct SemanticFunctionTest : SemanticTestBase {
         m_output = analyzeSource(
             "int add(int lhs){return lhs;} int main(){return add(1, 2);}");
         require(!success(), "wrong-arity call should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::callArityMismatch,
+        require(
+            firstDiagnostic().kind == SemanticDiagnosticKind::callArityMismatch,
             "wrong-arity call should report the expected semantic label");
     }
 
@@ -58,30 +59,34 @@ struct SemanticFunctionTest : SemanticTestBase {
     {
         m_output = analyzeSource("int value = 1; int main(){return value();}");
         require(!success(), "calling a variable should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::invalidCallTarget,
-            "calling a variable should report an invalid-call-target diagnostic");
+        require(
+            firstDiagnostic().kind == SemanticDiagnosticKind::invalidCallTarget,
+            "calling a variable should report an invalid-call-target "
+            "diagnostic");
     }
 
     void testNonConstantGlobalInitializerDiagnostic()
     {
-        m_output = analyzeSource(
-            "int add(int lhs){return lhs;} int value = add(1); int main(){return value;}");
+        m_output = analyzeSource("int add(int lhs){return lhs;} int value = "
+                                 "add(1); int main(){return value;}");
         require(!success(),
             "non-constant global initializer should fail semantic analysis");
         require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::nonConstantGlobalInitializer,
-            "non-constant global initializer should report the expected semantic label");
+            "non-constant global initializer should report the expected "
+            "semantic label");
     }
 
     void testReturnTypeMismatchDiagnostics()
     {
-        m_output = analyzeSource("void noop(){return 1;} int main(){return 0;}");
+        m_output
+            = analyzeSource("void noop(){return 1;} int main(){return 0;}");
         require(!success(),
             "void function returning a value should fail semantic analysis");
         require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::returnTypeMismatch,
-            "void function returning a value should report return type mismatch");
+            "void function returning a value should report return type "
+            "mismatch");
 
         m_output = analyzeSource("int main(){return;}\n");
         require(!success(),
@@ -89,6 +94,47 @@ struct SemanticFunctionTest : SemanticTestBase {
         require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::returnTypeMismatch,
             "missing int return value should report return type mismatch");
+    }
+
+    void testCompatibleFunctionRedeclarationsAnalyze()
+    {
+        m_output = analyzeRoot(
+            "int add(int lhs, int rhs); int add(int lhs, int rhs); int add(int "
+            "lhs, int rhs){return lhs + rhs;} int main(){return add(1, 2);}");
+
+        const auto mainFunc_nn = requireFuncDefByName(root(), "main");
+        const auto returnStmt_nn
+            = extractReturnStmt(mainFunc_nn(ast()).body(ast()).items.front());
+        const auto& callExp = requireCallExp(returnStmt_nn(ast()).exp.ref());
+
+        require(requireSymbol(m_output, callExp.funcName).kind
+                == ast::SemanticSymbolKind::function,
+            "compatible redeclarations should still bind calls to the shared "
+            "function symbol");
+    }
+
+    void testConflictingFunctionRedeclarationDiagnostic()
+    {
+        m_output = analyzeSource("int add(int lhs); int add(int lhs, int rhs); "
+                                 "int main(){return 0;}");
+        require(!success(),
+            "conflicting function declarations should fail semantic analysis");
+        require(
+            firstDiagnostic().kind == SemanticDiagnosticKind::doubleDefinition,
+            "conflicting function declarations should report a "
+            "double-definition diagnostic");
+    }
+
+    void testMultipleFunctionDefinitionsDiagnostic()
+    {
+        m_output = analyzeSource("int add(){return 1;} int add(){return 2;} "
+                                 "int main(){return add();}");
+        require(!success(),
+            "multiple function definitions should fail semantic analysis");
+        require(
+            firstDiagnostic().kind == SemanticDiagnosticKind::doubleDefinition,
+            "multiple function definitions should report a double-definition "
+            "diagnostic");
     }
 };
 
@@ -103,5 +149,8 @@ int main()
     test.testInvalidCallTargetDiagnostic();
     test.testNonConstantGlobalInitializerDiagnostic();
     test.testReturnTypeMismatchDiagnostics();
+    test.testCompatibleFunctionRedeclarationsAnalyze();
+    test.testConflictingFunctionRedeclarationDiagnostic();
+    test.testMultipleFunctionDefinitionsDiagnostic();
     return 0;
 }

@@ -388,6 +388,32 @@ void testRecursiveFunctionCallsLowerAgainstOwnDeclaration()
     requireInteger(requireReturn(mainEnd->getInst(0))->getVal(), 0);
 }
 
+void testFunctionDeclarationLowersToExternalFunction()
+{
+    auto program = generateProgram(
+        "int add(int lhs, int rhs); int main(){return add(1, 2);}");
+
+    require(program->getNumVals() == 0,
+        "declaration-only program should not emit globals");
+    require(program->getNumFuncs() == 2,
+        "declaration-only program should emit the external declaration plus main");
+
+    const auto* addFunction = requireFunctionByName(*program, "@add");
+    const auto* mainFunction = requireFunctionByName(*program, "@main");
+
+    require(addFunction->getNumBBs() == 0,
+        "body-less function declaration should lower as an external function");
+    require(addFunction->getNumParams() == 2,
+        "external declaration should preserve parameter arity");
+
+    const auto* mainEntry = requireEntryBlock(*mainFunction);
+    const auto* addCall = requireCall(mainEntry->getInst(0), addFunction);
+    require(addCall->getNumArgs() == 2,
+        "call through declaration should preserve both arguments");
+    requireInteger(addCall->getArg(0), 1);
+    requireInteger(addCall->getArg(1), 2);
+}
+
 } // namespace
 
 int main()
@@ -399,5 +425,6 @@ int main()
     testWideArityCallsLowerAllArguments();
     testNestedCallsAndBooleanShortCircuitLowerCorrectly();
     testRecursiveFunctionCallsLowerAgainstOwnDeclaration();
+    testFunctionDeclarationLowersToExternalFunction();
     return 0;
 }

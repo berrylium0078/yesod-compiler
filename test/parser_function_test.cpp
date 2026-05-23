@@ -47,6 +47,17 @@ struct ParserFunctionTest : ParserTestBase {
         return funcDef_nn;
     }
 
+    Ptr<FuncDef> requireTopLevelFuncItem(const CompUnit::Item& topLevelItem)
+    {
+        const auto funcDef_nn = MATCH(topLevelItem)
+            WITH([](const Ref<FuncDef>& funcDef_nn) {
+                return funcDef_nn.ptr();
+            },
+                [](const auto&) { return Ptr<FuncDef> { }; }, );
+        require(funcDef_nn != nullptr, "expected top-level function item");
+        return funcDef_nn;
+    }
+
     const Exp::Call& requireCallExpHandle(const Ref<Exp>& exp_nn)
     {
         const auto callExp = MATCH(exp_nn(ast()).kind)
@@ -129,6 +140,37 @@ struct ParserFunctionTest : ParserTestBase {
             "second call argument should preserve the referenced global var "
             "name");
     }
+
+    void testFunctionDeclarationsParse()
+    {
+        parseRoot(
+            "int add(int lhs, int rhs); void noop(); int add(int lhs, int rhs)"
+            "{return lhs + rhs;} int main(){noop(); return add(1, 2);}");
+
+        require(root()(ast()).topLevelItems.size() == 4,
+            "compilation unit should preserve declarations and definitions in order");
+
+        const auto addDecl_nn
+            = requireTopLevelFuncItem(root()(ast()).topLevelItems[0]);
+        require(addDecl_nn(ast()).body == nullptr,
+            "function declaration should not synthesize a block body");
+        require(addDecl_nn(ast()).funcFParams.size() == 2,
+            "function declaration should preserve formal parameters");
+
+        const auto noopDecl_nn
+            = requireTopLevelFuncItem(root()(ast()).topLevelItems[1]);
+        require(noopDecl_nn(ast()).body == nullptr,
+            "void function declaration should not synthesize a block body");
+        require(noopDecl_nn(ast()).m_funcType == FuncTypeKeyword::voidKeyword,
+            "void declaration should preserve the declared return type");
+
+        const auto addDef_nn
+            = requireTopLevelFuncDef(root()(ast()).topLevelItems[2]);
+        require(addDef_nn(ast()).body != nullptr,
+            "function definition should preserve its parsed block body");
+        require(addDef_nn(ast()).body(ast()).items.size() == 1,
+            "function definition body should preserve its statements");
+    }
 };
 
 } // namespace
@@ -137,5 +179,6 @@ int main()
 {
     ParserFunctionTest test;
     test.testGlobalsFunctionsAndCallsParse();
+    test.testFunctionDeclarationsParse();
     return 0;
 }

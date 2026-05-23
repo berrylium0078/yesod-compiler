@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "frontend/arena.h"
@@ -292,7 +293,6 @@ class SemanticAnalyzer {
     };
 
     void analyzeCompUnit(Ptr<CompUnit> compUnit_nn);
-    void declareBuiltinFunctions();
     void declareFuncDef(Ptr<FuncDef> funcDef_nn);
     void analyzeFuncDef(Ptr<FuncDef> funcDef_nn);
     void analyzeBlock(Ptr<Block> block_nn);
@@ -376,6 +376,7 @@ class SemanticAnalyzer {
     std::vector<Ptr<WhileStmt>> m_loopStack;
     std::vector<SemanticDiagnostic> m_diagnostics;
     std::optional<SemanticType> m_currentFuncReturnType;
+    std::unordered_set<int32_t> m_definedFunctionSymbolIds;
     int32_t m_nextSymbolId = 0;
 };
 

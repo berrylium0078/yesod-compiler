@@ -26,6 +26,15 @@ namespace {
         return lhs == rhs;
     }
 
+    bool functionSignaturesMatch(const SemanticSymbol& symbol,
+        const SemanticType& returnType,
+        const std::vector<SemanticType>& paramTypes)
+    {
+        return symbol.kind == SemanticSymbolKind::function
+            && symbol.m_functionSignature.m_returnType == returnType
+            && symbol.m_functionSignature.m_paramTypes == paramTypes;
+    }
+
     bool typesMatchForCallImpl(
         const SemanticType& paramType, const SemanticType& argType)
     {
@@ -135,6 +144,7 @@ SemanticOutput SemanticAnalyzer::analyze(AST ast, Ptr<CompUnit> compUnit_nn)
     m_loopStack.clear();
     m_diagnostics.clear();
     m_currentFuncReturnType.reset();
+    m_definedFunctionSymbolIds.clear();
     m_nextSymbolId = 0;
 
     if (compUnit_nn) {
@@ -153,7 +163,6 @@ void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
 {
     const auto& compUnit = node(compUnit_nn, "compilation unit is missing");
     pushScope();
-    declareBuiltinFunctions();
 
     for (const auto topLevelItem : compUnit.topLevelItems) {
         MATCH(topLevelItem)
@@ -176,42 +185,12 @@ void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
 
     for (const auto topLevelItem : compUnit.topLevelItems) {
         MATCH(topLevelItem)
-        WITH([&](Ref<FuncDef> funcDef) { analyzeFuncDef(funcDef.ptr()); },
+        WITH([&](Ref<FuncDef> funcDef) {
+            if (funcDef(m_ast).body != nullptr) {
+                analyzeFuncDef(funcDef.ptr());
+            }
+        },
             [](const auto&) { });
-    }
-}
-
-void SemanticAnalyzer::declareBuiltinFunctions()
-{
-    struct BuiltinSpec {
-        const char* name;
-        SemanticType m_returnType;
-        std::vector<SemanticType> m_paramTypes;
-    };
-
-    const std::vector<BuiltinSpec> builtins {
-        { "getint", SemanticType::makeInteger(), { } },
-        { "getch", SemanticType::makeInteger(), { } },
-        { "getarray", SemanticType::makeInteger(),
-            { SemanticType::makeUnsizedArray(SemanticType::makeInteger()) } },
-        { "putint", SemanticType::makeVoid(), { SemanticType::makeInteger() } },
-        { "putch", SemanticType::makeVoid(), { SemanticType::makeInteger() } },
-        { "putarray", SemanticType::makeVoid(),
-            { SemanticType::makeInteger(),
-                SemanticType::makeUnsizedArray(SemanticType::makeInteger()) } },
-        { "starttime", SemanticType::makeVoid(), { } },
-        { "stoptime", SemanticType::makeVoid(), { } },
-    };
-
-    for (const auto& builtin : builtins) {
-        const auto identifier_nn = m_ast.alloc<Identifier>(
-            SourcePos(-1), std::string(builtin.name));
-        const auto symbol = makeFunctionSymbol(
-            identifier_nn, builtin.m_returnType, builtin.m_paramTypes);
-        if (!defineSymbol(builtin.name, identifier_nn)) {
-            continue;
-        }
-        bindSymbol(identifier_nn, symbol);
     }
 }
 
@@ -230,21 +209,66 @@ void SemanticAnalyzer::declareFuncDef(Ptr<FuncDef> funcDef_nn)
         }
         paramTypes.push_back(paramType);
     }
-    const auto symbol = makeFunctionSymbol(
-        funcDef.identifier, lowerFuncType(funcDef.m_funcType), paramTypes);
-    if (!defineSymbol(identifier.name, funcDef.identifier)) {
+    const auto returnType = lowerFuncType(funcDef.m_funcType);
+    const auto existingIdentifier = lookupSymbol(identifier.name);
+    if (!existingIdentifier.has_value()) {
+        const auto symbol = makeFunctionSymbol(
+            funcDef.identifier, returnType, paramTypes);
+        if (!defineSymbol(identifier.name, funcDef.identifier)) {
+            recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+                identifier.sourcePos.m_offset,
+                "double definition of '" + identifier.name + "'");
+        }
+        bindSymbol(funcDef.identifier, symbol);
+        if (funcDef.body != nullptr) {
+            m_definedFunctionSymbolIds.insert(symbol.m_id);
+        }
+        return;
+    }
+
+    const auto* existingSymbol = m_info.findSymbol(*existingIdentifier);
+    if (existingSymbol == nullptr) {
+        throw std::runtime_error(
+            "function declaration is missing an existing symbol binding");
+    }
+
+    if (existingSymbol->kind != SemanticSymbolKind::function) {
         recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
             identifier.sourcePos.m_offset,
             "double definition of '" + identifier.name + "'");
+        bindSymbol(funcDef.identifier, *existingSymbol);
+        return;
     }
-    bindSymbol(funcDef.identifier, symbol);
+
+    if (!functionSignaturesMatch(*existingSymbol, returnType, paramTypes)) {
+        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            identifier.sourcePos.m_offset,
+            "conflicting declaration of '" + identifier.name + "'");
+        bindSymbol(funcDef.identifier, *existingSymbol);
+        return;
+    }
+
+    if (funcDef.body != nullptr
+        && m_definedFunctionSymbolIds.contains(existingSymbol->m_id)) {
+        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            identifier.sourcePos.m_offset,
+            "redefinition of '" + identifier.name + "'");
+    }
+    if (funcDef.body != nullptr) {
+        m_definedFunctionSymbolIds.insert(existingSymbol->m_id);
+    }
+    bindSymbol(funcDef.identifier, *existingSymbol);
 }
 
 void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
 {
     const auto& funcDef
         = node(funcDef_nn, "compilation unit is missing a function");
-    const auto& body = funcDef.body;
+    if (funcDef.body == nullptr) {
+        return;
+    }
+
+    const auto body_nn = funcDef.body;
     const auto* functionSymbol = m_info.findSymbol(funcDef.identifier);
     if (functionSymbol == nullptr) {
         throw std::runtime_error(
@@ -266,7 +290,7 @@ void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
         }
         bindSymbol(funcFParam.identifier, symbol);
     }
-    for (const auto blockItem : body(m_ast).items) {
+    for (const auto blockItem : body_nn(m_ast).items) {
         analyzeBlockItemNode(blockItem);
     }
     popScope();
