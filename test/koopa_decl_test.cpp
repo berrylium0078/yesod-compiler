@@ -16,7 +16,7 @@ void testVarDeclarationAssignmentAndReturnLowering()
         "var declaration and assignment should emit "
         "alloc/store/load/add/store/load/return");
     require(endBlock->getNumInsts() == 1,
-        "guard end block should contain only the synthesized default return");
+        "guard end body should contain only the synthesized default return");
 
     const auto* allocValue = requireAlloc(basicBlock->getInst(0), "%value");
 
@@ -127,7 +127,7 @@ void testShadowedNamesGetUniqueKoopaStorage()
         "use after the first shadowing declaration should load the first inner "
         "symbol");
     require(secondInnerLoad->getSource() == secondInnerAlloc,
-        "use inside the second nested block should load the second inner "
+        "use inside the second nested body should load the second inner "
         "symbol");
     require(outerLoadAfterBlocks->getSource() == outerAlloc,
         "use after both inner blocks should load the outer symbol");

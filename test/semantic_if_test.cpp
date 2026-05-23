@@ -13,11 +13,11 @@ struct SemanticIfTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[1]);
-        require(requireExpValueKind(m_output, ifStmt_nn(ast()).m_condExp_nn)
+            funcDef_nn(ast()).body(ast()).items[1]);
+        require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "if conditions should be recorded as boolean expressions");
-        require(requireSymbol(m_output, ifStmt_nn(ast()).m_condExp_nn).m_name
+        require(requireSymbol(m_output, ifStmt_nn(ast()).condition).name
                 == "a",
             "plain lvalue conditions should still preserve their symbol binding");
     }
@@ -30,23 +30,23 @@ struct SemanticIfTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[3]);
+            funcDef_nn(ast()).body(ast()).items[3]);
         const auto& outerBinaryExp = requireBinaryExp(
-            ifStmt_nn(ast()).m_condExp_nn);
-        const auto& nestedBinaryExp = requireBinaryExp(outerBinaryExp.m_rhs_nn);
+            ifStmt_nn(ast()).condition);
+        const auto& nestedBinaryExp = requireBinaryExp(outerBinaryExp.rhs);
 
-        require(requireExpValueKind(m_output, ifStmt_nn(ast()).m_condExp_nn)
+        require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "the full if condition should be classified as boolean");
-        require(outerBinaryExp.m_op == ast::BinaryOpKeyword::plus,
+        require(outerBinaryExp.op == ast::BinaryOpKeyword::plus,
             "the outer condition should stay an additive binary expression");
-        require(requireExpValueKind(m_output, ifStmt_nn(ast()).m_condExp_nn)
+        require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "the condition root should be classified as boolean even if its "
             "operator remains additive");
-        require(nestedBinaryExp.m_op == ast::BinaryOpKeyword::orOr,
+        require(nestedBinaryExp.op == ast::BinaryOpKeyword::orOr,
             "the grouped rhs subexpression should remain logical-or");
-        require(requireExpValueKind(m_output, outerBinaryExp.m_rhs_nn)
+        require(requireExpValueKind(m_output, outerBinaryExp.rhs)
                 == ExpType::integer,
             "logical-or subexpressions used as additive operands should be "
             "normalized to integer");
@@ -60,8 +60,8 @@ struct SemanticIfTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[0]);
-        require(requireConstantValue(m_output, ifStmt_nn(ast()).m_condExp_nn)
+            funcDef_nn(ast()).body(ast()).items[0]);
+        require(requireConstantValue(m_output, ifStmt_nn(ast()).condition)
                 == 1,
             "constant logical conditions should record their folded truth "
             "value");

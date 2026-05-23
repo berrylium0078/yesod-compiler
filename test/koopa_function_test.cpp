@@ -70,7 +70,7 @@ void testGlobalVariableAndForwardCallLowering()
         "main should emit load/add/store/load/call/return for the global "
         "update and helper call");
     require(mainEnd->getNumInsts() == 1,
-        "main guard end block should keep the synthesized default return");
+        "main guard end body should keep the synthesized default return");
 
     const auto* counterLoad
         = requireLoad(mainEntry->getInst(0), counterGlobal, "%1");
@@ -114,11 +114,11 @@ void testVoidFunctionCallLowering()
     const auto* noopEntry = requireEntryBlock(*noopFunction);
     const auto* noopEnd = requireEndBlock(*noopFunction);
     require(noopEntry->getNumInsts() == 1,
-        "explicit void return should emit a single return in the entry block");
+        "explicit void return should emit a single return in the entry body");
     require(requireReturn(noopEntry->getInst(0))->getVal() == nullptr,
         "explicit void return should lower to a valueless return");
     require(requireReturn(noopEnd->getInst(0))->getVal() == nullptr,
-        "void guard end block should synthesize a valueless return");
+        "void guard end body should synthesize a valueless return");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     const auto* mainCall = requireCall(mainEntry->getInst(0), noopFunction);
@@ -168,10 +168,10 @@ void testVoidCallBeforeIntegerReturnCallLowering()
     const auto* fEntry = requireEntryBlock(*fFunction);
     const auto* fEnd = requireEndBlock(*fFunction);
     require(fEntry->getNumInsts() == 1,
-        "empty void function should fall through to the synthesized end block");
+        "empty void function should fall through to the synthesized end body");
     (void)requireJump(fEntry->getInst(0), fEnd);
     require(requireReturn(fEnd->getInst(0))->getVal() == nullptr,
-        "void function end block should synthesize a valueless return");
+        "void function end body should synthesize a valueless return");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     const auto* mainEnd = requireEndBlock(*mainFunction);
@@ -222,13 +222,13 @@ void testLogicalAndShortCircuitKeepsDivisionCallOnRhsPath()
     require(countCallsToCallee(*mainEntry, *divFunction) == 0,
         "division call must not be emitted before the lhs short-circuit check");
     require(countCallsToCallee(*mainEntry, *idFunction) == 2,
-        "both id initializers should remain in the entry block");
+        "both id initializers should remain in the entry body");
     (void)requireCall(mainEntry->getInst(1), idFunction);
     (void)requireCall(mainEntry->getInst(4), idFunction);
     (void)requireBranch(mainEntry->getInst(10), rhsBlock, falseBlock);
 
     require(rhsBlock->getNumInsts() == 4,
-        "rhs block should load both operands, call div, and branch on its result");
+        "rhs body should load both operands, call div, and branch on its result");
     const auto* divCall = requireCall(rhsBlock->getInst(2), divFunction);
     require(divCall->getNumArgs() == 2,
         "div call should preserve both arguments on the rhs path");
@@ -239,7 +239,7 @@ void testLogicalAndShortCircuitKeepsDivisionCallOnRhsPath()
     (void)requireJump(trueBlock->getInst(1), contBlock);
     (void)requireJump(falseBlock->getInst(1), contBlock);
     require(requireReturn(contBlock->getInst(1))->getVal() == contBlock->getInst(0),
-        "continuation block should return the loaded short-circuit result");
+        "continuation body should return the loaded short-circuit result");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 

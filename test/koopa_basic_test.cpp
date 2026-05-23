@@ -24,7 +24,7 @@ void testGeneratorBuildsExpectedWrapperObjects()
     require(basicBlock->getNumInsts() == 1,
         "literal return should only contain the return instruction");
     require(endBlock->getNumInsts() == 1,
-        "guard end block should contain only the synthesized default return");
+        "guard end body should contain only the synthesized default return");
 
     const auto* returnValue = requireReturn(basicBlock->getInst(0));
     requireInteger(returnValue->getVal(), 42);
@@ -39,10 +39,10 @@ void testEmptyFunctionFallsThroughToGuardReturn()
     const auto* endBlock = requireEndBlock(*function);
 
     require(entryBlock->getNumInsts() == 1,
-        "empty function body should synthesize a jump to the guard block");
+        "empty function body should synthesize a jump to the guard body");
     (void)requireJump(entryBlock->getInst(0), endBlock);
     require(endBlock->getNumInsts() == 1,
-        "guard end block should contain only the synthesized default return");
+        "guard end body should contain only the synthesized default return");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 

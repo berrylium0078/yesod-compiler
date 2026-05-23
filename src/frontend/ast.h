@@ -80,7 +80,6 @@ struct ConstDef;
 struct VarDef;
 struct ConstDecl;
 struct VarDecl;
-struct DeclNode;
 struct FuncFParam;
 struct IfStmt;
 struct WhileStmt;
@@ -89,185 +88,159 @@ struct ContinueStmt;
 struct AssignStmt;
 struct ExpStmt;
 struct ReturnStmt;
-struct StmtNode;
-struct BlockItemNode;
 struct Block;
-struct TopLevelItemNode;
 
 struct Identifier {
-    SourcePos m_sourcePos;
-    std::string m_name;
+    SourcePos sourcePos;
+    std::string name;
 };
 struct Exp {
     struct Binary {
-        Ptr<Exp> m_lhs_nn;
-        Ptr<Exp> m_rhs_nn;
-        BinaryOpKeyword m_op = BinaryOpKeyword::plus;
+        Ref<Exp> lhs;
+        Ref<Exp> rhs;
+        BinaryOpKeyword op;
     };
 
     struct Unary {
-        Ptr<Exp> m_lhs_nn;
-        UnaryOpKeyword m_op = UnaryOpKeyword::plus;
+        Ref<Exp> lhs;
+        UnaryOpKeyword op;
     };
 
     struct Call {
-        Ptr<Identifier> m_func_nn;
-        std::vector<Ptr<Exp>> m_params;
+        Ref<Identifier> funcName;
+        std::vector<Ref<Exp>> params;
     };
     struct Number {
-        int32_t m_value;
+        int32_t value;
     };
     struct LVal {
-        Ptr<Identifier> m_identifier_nn;
-        std::vector<Ptr<Exp>> m_indices;
+        Ref<Identifier> identifier;
+        std::vector<Ref<Exp>> indices;
     };
-
     using Kind = std::variant<Binary, Unary, Call, LVal, Number>;
 
-    SourcePos m_sourcePos;
-    Kind m_kind;
+    SourcePos sourcePos;
+    Kind kind;
 };
 
 struct ConstInitVal {
-    using List = std::vector<Ptr<ConstInitVal>>;
-    using Kind = std::variant<Ptr<Exp>, List>;
-    SourcePos m_sourcePos;
-    Kind m_kind;
+    using List = std::vector<Ref<ConstInitVal>>;
+    using Kind = std::variant<Ref<Exp>, List>;
+    SourcePos sourcePos;
+    Kind kind;
 };
 
 struct InitVal {
-    using List = std::vector<Ptr<InitVal>>;
-    using Kind = std::variant<Ptr<Exp>, List>;
-    SourcePos m_sourcePos;
-    Kind m_kind;
+    using List = std::vector<Ref<InitVal>>;
+    using Kind = std::variant<Ref<Exp>, List>;
+    SourcePos sourcePos;
+    Kind kind;
 };
 
 struct ConstDef {
-    SourcePos m_sourcePos;
-    Ptr<Identifier> m_identifier_nn;
-    std::vector<Ptr<Exp>> m_dimensions;
-    Ptr<ConstInitVal> m_constInitVal_nn;
+    SourcePos sourcePos;
+    Ref<Identifier> identifier;
+    std::vector<Ref<Exp>> shape;
+    Ref<ConstInitVal> constInitVal;
 };
 
 struct VarDef {
-    SourcePos m_sourcePos;
-    Ptr<Identifier> m_identifier_nn;
-    std::vector<Ptr<Exp>> m_dimensions;
-    Ptr<InitVal> m_initVal_nn;
+    SourcePos sourcePos;
+    Ref<Identifier> identifier;
+    std::vector<Ref<Exp>> shape;
+    Ptr<InitVal> initVal;
 };
 
 struct ConstDecl {
-    SourcePos m_sourcePos;
-    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    std::vector<Ptr<ConstDef>> m_constDefs;
+    SourcePos sourcePos;
+    BTypeKeyword bType = BTypeKeyword::intKeyword;
+    std::vector<Ref<ConstDef>> constDef;
 };
 
 struct VarDecl {
-    SourcePos m_sourcePos;
-    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    std::vector<Ptr<VarDef>> m_varDefs;
+    SourcePos sourcePos;
+    BTypeKeyword bType = BTypeKeyword::intKeyword;
+    std::vector<Ref<VarDef>> varDef;
 };
 
 using Decl = std::variant<Ptr<ConstDecl>, Ptr<VarDecl>>;
-
-struct DeclNode {
-    SourcePos m_sourcePos;
-    Decl m_decl;
-};
-
-struct IfStmt {
-    SourcePos m_sourcePos;
-    Ptr<Exp> m_condExp_nn;
-    Ptr<StmtNode> m_thenStmt_nn;
-    Ptr<StmtNode> m_elseStmt_nn;
-};
-
-struct WhileStmt {
-    SourcePos m_sourcePos;
-    Ptr<Exp> m_condExp_nn;
-    Ptr<StmtNode> m_bodyStmt_nn;
-};
-
-struct BreakStmt {
-    SourcePos m_sourcePos;
-};
-
-struct ContinueStmt {
-    SourcePos m_sourcePos;
-};
-
-struct AssignStmt {
-    SourcePos m_sourcePos;
-    Ptr<Exp> m_lVal_nn;
-    Ptr<Exp> m_exp_nn;
-};
-
-struct ExpStmt {
-    SourcePos m_sourcePos;
-    Ptr<Exp> m_exp_nn;
-};
-
-struct ReturnStmt {
-    SourcePos m_sourcePos;
-    Ptr<Exp> m_exp_nn;
-};
 
 using Stmt = std::variant<Ptr<IfStmt>, Ptr<WhileStmt>, Ptr<BreakStmt>,
     Ptr<ContinueStmt>, Ptr<AssignStmt>, Ptr<Block>, Ptr<ReturnStmt>,
     Ptr<ExpStmt>>;
 
-struct StmtNode {
-    SourcePos m_sourcePos;
-    Stmt m_stmt;
+struct IfStmt {
+    SourcePos sourcePos;
+    Ref<Exp> condition;
+    Stmt thenBody;
+    bool m_hasElse = false;
+    Stmt elseBody;
 };
 
-using BlockItem = std::variant<Ptr<DeclNode>, Ptr<StmtNode>>;
-
-struct BlockItemNode {
-    SourcePos m_sourcePos;
-    BlockItem m_blockItem;
+struct WhileStmt {
+    SourcePos sourcePos;
+    Ref<Exp> condition;
+    Stmt body;
 };
 
+struct BreakStmt {
+    SourcePos sourcePos;
+};
+
+struct ContinueStmt {
+    SourcePos sourcePos;
+};
+
+struct AssignStmt {
+    SourcePos sourcePos;
+    Ref<Exp> m_lVal_nn;
+    Ref<Exp> m_exp_nn;
+};
+
+struct ExpStmt {
+    SourcePos sourcePos;
+    Ptr<Exp> m_exp_nn;
+};
+
+struct ReturnStmt {
+    SourcePos sourcePos;
+    Ptr<Exp> m_exp_nn;
+};
+
+using BlockItem = std::variant<Decl, Stmt>;
 struct Block {
-    SourcePos m_sourcePos;
-    std::vector<Ptr<BlockItemNode>> m_blockItems;
+    SourcePos sourcePos;
+    std::vector<BlockItem> items;
 };
 
 struct FuncFParam {
-    SourcePos m_sourcePos;
-    BTypeKeyword m_bType = BTypeKeyword::intKeyword;
-    Ptr<Identifier> m_identifier_nn;
+    SourcePos sourcePos;
+    BTypeKeyword bType = BTypeKeyword::intKeyword;
+    Ref<Identifier> identifier;
     bool m_isArray = false;
-    std::vector<Ptr<Exp>> m_trailingDimensions;
+    std::vector<Ref<Exp>> m_trailingDimensions;
 };
 
 struct FuncDef {
-    SourcePos m_sourcePos;
+    SourcePos sourcePos;
     FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
-    Ptr<Identifier> m_identifier_nn;
-    std::vector<Ptr<FuncFParam>> m_funcFParams;
-    Ptr<Block> m_block_nn;
+    Ref<Identifier> identifier;
+    std::vector<FuncFParam> funcFParams;
+    Ref<Block> body;
 };
-
-using TopLevelItem = std::variant<Ptr<DeclNode>, Ptr<FuncDef>>;
-
-struct TopLevelItemNode {
-    SourcePos m_sourcePos;
-    TopLevelItem m_topLevelItem;
-};
-
 struct CompUnit {
-    SourcePos m_sourcePos;
-    std::vector<Ptr<TopLevelItemNode>> m_topLevelItems;
+    using Item = std::variant<Decl, Ptr<FuncDef>>;
+    SourcePos sourcePos;
+    std::vector<Item> topLevelItems;
 };
 
 using AST = Arena<Identifier, Exp,
         ConstInitVal, InitVal, ConstDef, VarDef,
-        ConstDecl, VarDecl, DeclNode, FuncFParam,
+        ConstDecl, VarDecl, FuncFParam,
         IfStmt, WhileStmt, BreakStmt,
         ContinueStmt, AssignStmt, ExpStmt,
-        ReturnStmt, StmtNode, BlockItemNode, Block,
-        FuncDef, TopLevelItemNode, CompUnit>;
+        ReturnStmt, Block,
+        FuncDef, CompUnit>;
 
 } // namespace yesod::frontend
 

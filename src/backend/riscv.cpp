@@ -222,7 +222,7 @@ namespace {
             const auto it = m_blockLabels.find(&basicBlock);
             if (it == m_blockLabels.end()) {
                 throw std::runtime_error(
-                    "missing RISC-V label for basic block");
+                    "missing RISC-V label for basic body");
             }
             return it->second;
         }
@@ -623,7 +623,7 @@ namespace {
             if (branchValue.getNumTrueArgs() != 0
                 || branchValue.getNumFalseArgs() != 0) {
                 throw std::runtime_error(
-                    "RISC-V backend does not support block arguments yet");
+                    "RISC-V backend does not support body arguments yet");
             }
 
             loadValueToRegister(*branchValue.getCondition(), "t0");
@@ -638,7 +638,7 @@ namespace {
         {
             if (jumpValue.getNumArgs() != 0) {
                 throw std::runtime_error(
-                    "RISC-V backend does not support block arguments yet");
+                    "RISC-V backend does not support body arguments yet");
             }
             m_output << "  j " << blockLabel(*jumpValue.getTargetBB()) << "\n";
         }

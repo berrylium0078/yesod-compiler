@@ -10,27 +10,27 @@ public:
         const auto root_nn = root();
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.front());
+            funcDef_nn(ast()).body(ast()).items.front());
 
-        require(root_nn(ast()).m_sourcePos.m_offset == 0,
+        require(root_nn(ast()).sourcePos.m_offset == 0,
             "root start offset should be the first token");
         require(
             funcDef_nn(ast()).m_funcType == FuncTypeKeyword::intKeyword,
             "function type should use enum keyword");
         require(
-            funcDef_nn(ast()).m_identifier_nn(ast()).m_name == "main",
+            funcDef_nn(ast()).identifier(ast()).name == "main",
             "identifier payload should only store text");
         require(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.size()
+            funcDef_nn(ast()).body(ast()).items.size()
                 == 1,
             "block should contain the single documented statement");
-        require(returnStmt_nn(ast()).m_sourcePos.m_offset == 11,
+        require(returnStmt_nn(ast()).sourcePos.m_offset == 11,
             "statement start offset should point to the return keyword");
         require(
-            returnStmt_nn(ast()).m_exp_nn(ast()).m_sourcePos.m_offset
+            returnStmt_nn(ast()).m_exp_nn(ast()).sourcePos.m_offset
                 == 18,
             "expression start offset should match source byte offset");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn) == 42,
+        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
             "number literal should parse decimal values");
     }
 
@@ -42,16 +42,16 @@ public:
         const auto root_nn = root();
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.front());
+            funcDef_nn(ast()).body(ast()).items.front());
 
-        require(root_nn(ast()).m_sourcePos.m_offset == 3,
+        require(root_nn(ast()).sourcePos.m_offset == 3,
             "leading whitespace should be skipped before the first token");
-        require(funcDef_nn(ast()).m_identifier_nn(ast()).m_name
+        require(funcDef_nn(ast()).identifier(ast()).name
                 == "spaced_name",
             "identifier should survive trivia skipping");
-        require(returnStmt_nn(ast()).m_sourcePos.m_offset == 27,
+        require(returnStmt_nn(ast()).sourcePos.m_offset == 27,
             "statement start offset should point to the return keyword");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn) == 7,
+        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 7,
             "number should parse after trivia");
     }
 
@@ -68,12 +68,12 @@ public:
         parseRoot(source);
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.front());
+            funcDef_nn(ast()).body(ast()).items.front());
 
         require(
-            funcDef_nn(ast()).m_identifier_nn(ast()).m_name == "main",
+            funcDef_nn(ast()).identifier(ast()).name == "main",
             "comments should be skipped instead of entering the AST");
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn) == 42,
+        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
             "number should parse across comments");
     }
 
@@ -82,9 +82,9 @@ public:
         parseRoot("int d(){return 42;}");
         require(evaluateExp(
                     extractReturnStmt(firstFuncDef()(ast())
-                                .m_block_nn(ast())
-                                .m_blockItems.front())(ast())
-                        .m_exp_nn)
+                                .body(ast())
+                                .items.front())(ast())
+                        .m_exp_nn.ref())
                 == 42,
             "decimal literal should parse");
     }
@@ -93,9 +93,9 @@ public:
         parseRoot("int o(){return 053;}");
         require(evaluateExp(
                     extractReturnStmt(firstFuncDef()(ast())
-                                .m_block_nn(ast())
-                                .m_blockItems.front())(ast())
-                        .m_exp_nn)
+                                .body(ast())
+                                .items.front())(ast())
+                        .m_exp_nn.ref())
                 == 43,
             "octal literal should parse");
     }
@@ -104,9 +104,9 @@ public:
         parseRoot("int h(){return 0X2c;}");
         require(evaluateExp(
                     extractReturnStmt(firstFuncDef()(ast())
-                                .m_block_nn(ast())
-                                .m_blockItems.front())(ast())
-                        .m_exp_nn)
+                                .body(ast())
+                                .items.front())(ast())
+                        .m_exp_nn.ref())
                 == 44,
             "hexadecimal literal should parse");
     }
@@ -115,8 +115,8 @@ public:
     {
         parseRoot("int main(){/*I am empty*/}");
         require(firstFuncDef()(ast())
-                    .m_block_nn(ast())
-                    .m_blockItems.empty(),
+                    .body(ast())
+                    .items.empty(),
             "block grammar should allow zero block items");
     }
 
@@ -125,8 +125,8 @@ public:
         parseRoot("int hex(){return 0x2a;}");
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.front());
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn) == 42,
+            funcDef_nn(ast()).body(ast()).items.front());
+        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == 42,
             "0x2a must parse as a hexadecimal literal, not octal zero plus "
             "trailing input");
     }
@@ -140,7 +140,7 @@ public:
             "missing semicolon should recover to the block boundary and still "
             "build the root");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::missingSemicolon,
+            firstDiagnostic().kind == DiagnosticKind::missingSemicolon,
             "missing semicolon should report the PEG recovery label");
         require(firstDiagnostic().m_offset == 19,
             "missing semicolon should diagnose at the statement boundary "
@@ -149,7 +149,7 @@ public:
 
         parseSource("int main(){return 0x;}");
         require(!success(), "malformed hexadecimal literal should fail");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == DiagnosticKind::malformedReturnValue,
             "malformed hexadecimal literal should report the committed "
             "malformed-return diagnostic");
@@ -160,7 +160,7 @@ public:
         require(root() != nullptr,
             "missing closing brace should recover at EOF and still build the "
             "root");
-        require(firstDiagnostic().m_kind == DiagnosticKind::missingRBrace,
+        require(firstDiagnostic().kind == DiagnosticKind::missingRBrace,
             "missing closing brace should report the PEG recovery label");
 
         parseSource("int main( {return 1;}");
@@ -170,13 +170,13 @@ public:
             "missing ')' should recover before the block and still build the "
             "root");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::missingFuncRParen,
+            firstDiagnostic().kind == DiagnosticKind::missingFuncRParen,
             "missing ')' should report the PEG recovery label");
 
         parseSource("int main(){nope}");
         require(!success(), "malformed statement head should fail");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::missingSemicolon,
+            firstDiagnostic().kind == DiagnosticKind::missingSemicolon,
             "bare identifier statement should now report the "
             "expression-statement "
             "semicolon label");
@@ -184,14 +184,14 @@ public:
         parseRoot("int main(){return ;}");
         const auto emptyReturnStmt
             = extractReturnStmt(firstFuncDef()(ast())
-                    .m_block_nn(ast())
-                    .m_blockItems.front());
+                    .body(ast())
+                    .items.front());
         require(emptyReturnStmt(ast()).m_exp_nn == nullptr,
             "empty return should now parse as an optional-expression return");
 
         parseSource("int main(){return 1;} trailing");
         require(!success(), "trailing input should fail");
-        require(firstDiagnostic().m_kind == DiagnosticKind::trailingInput,
+        require(firstDiagnostic().kind == DiagnosticKind::trailingInput,
             "trailing input should produce a trailing-input diagnostic");
     }
 
@@ -200,7 +200,7 @@ public:
         parseSource("int main(){return 2147483648;}");
         require(!success(), "out-of-range integer should fail");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::integerOutOfRange,
+            firstDiagnostic().kind == DiagnosticKind::integerOutOfRange,
             "out-of-range integer should report range overflow");
     }
 };

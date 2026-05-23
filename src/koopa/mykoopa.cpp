@@ -407,7 +407,7 @@ BranchValue* BranchValue::get(Value* Condition, BasicBlock* TrueBB,
     assert(Condition->getVType()->isInt32Type()
         && "the condition of branch value should have integer type");
     assert(!TrueBB->isEntry() && !FalseBB->isEntry()
-        && "branch value should not jump to entry block");
+        && "branch value should not jump to entry body");
     assert(TrueBB->getNumParams() == TrueArgs.size() && "arity should match");
     for (size_t i = 0; i != TrueBB->getNumParams(); ++i) {
         assert(*TrueBB->getParam(i)->getVType() == *TrueArgs[i]->getVType()
@@ -435,7 +435,7 @@ koopa_raw_value_t BranchValue::dumpRawImpl() const
 
 JumpValue* JumpValue::get(BasicBlock* TargetBB, vector<Value*>&& Args)
 {
-    assert(!TargetBB->isEntry() && "jump value should not jump to entry block");
+    assert(!TargetBB->isEntry() && "jump value should not jump to entry body");
     assert(TargetBB->getNumParams() == Args.size() && "arity should match");
     for (size_t i = 0; i != TargetBB->getNumParams(); ++i) {
         assert(*TargetBB->getParam(i)->getVType() == *Args[i]->getVType()
@@ -495,12 +495,12 @@ koopa_raw_value_t ReturnValue::dumpRawImpl() const
 
 void BasicBlock::validate() const
 {
-    assert(insts().size() > 0 && "basic block should not be empty");
+    assert(insts().size() > 0 && "basic body should not be empty");
     assert(insts().back()->canTerminateBlock()
-        && "basic block should end with terminator");
+        && "basic body should end with terminator");
     for (size_t i = 0; i < insts().size() - 1; ++i) {
         assert(!getInst(i)->canTerminateBlock()
-            && "basic block should contain only one terminator");
+            && "basic body should contain only one terminator");
     }
 }
 

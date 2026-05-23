@@ -12,13 +12,13 @@ namespace {
 
     bool isScalarTypeImpl(const SemanticType& type)
     {
-        return type.m_kind == SemanticTypeKind::integer
-            || type.m_kind == SemanticTypeKind::boolean;
+        return type.kind == SemanticTypeKind::integer
+            || type.kind == SemanticTypeKind::boolean;
     }
 
     bool isArrayTypeImpl(const SemanticType& type)
     {
-        return type.m_kind == SemanticTypeKind::array;
+        return type.kind == SemanticTypeKind::array;
     }
 
     bool typesMatchExactly(const SemanticType& lhs, const SemanticType& rhs)
@@ -155,32 +155,25 @@ void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
     pushScope();
     declareBuiltinFunctions();
 
-    for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
-        const auto& topLevelItem
-            = node(topLevelItem_nn, "top-level item is missing");
-        MATCH(topLevelItem.m_topLevelItem)
-        WITH([&](Ptr<DeclNode> declNode) { analyzeDeclNode(declNode); },
+    for (const auto topLevelItem : compUnit.topLevelItems) {
+        MATCH(topLevelItem)
+        WITH([&](Decl decl) { analyzeDeclNode(decl); },
             [&](Ptr<FuncDef> funcDef) { declareFuncDef(funcDef); });
     }
 
-    for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
-        const auto& topLevelItem
-            = node(topLevelItem_nn, "top-level item is missing");
-
-        auto decl = std::get_if<Ptr<DeclNode>>(&topLevelItem.m_topLevelItem);
-        if (!decl)
-            continue;
-        auto& declNode = node(*decl, "declaration payload is missing");
-        MATCH(declNode.m_decl)
-        WITH([&](Ptr<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
-            [](const auto&) { });
+    for (const auto topLevelItem : compUnit.topLevelItems) {
+        MATCH(topLevelItem)
+        WITH(
+            [&](Decl decl) {
+                MATCH(decl)
+                WITH([&](Ptr<VarDecl>& vardecl) { analyzeVarDecl(vardecl); },
+                    [](const auto&) { });
+            },
+            [&](Ptr<FuncDef> funcDef) { });
     }
 
-    for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
-        const auto& topLevelItem
-            = node(topLevelItem_nn, "top-level item is missing");
-
-        MATCH(topLevelItem.m_topLevelItem)
+    for (const auto topLevelItem : compUnit.topLevelItems) {
+        MATCH(topLevelItem)
         WITH([&](Ptr<FuncDef> funcDef) { analyzeFuncDef(funcDef); },
             [](const auto&) { });
     }
@@ -189,7 +182,7 @@ void SemanticAnalyzer::analyzeCompUnit(Ptr<CompUnit> compUnit_nn)
 void SemanticAnalyzer::declareBuiltinFunctions()
 {
     struct BuiltinSpec {
-        const char* m_name;
+        const char* name;
         SemanticType m_returnType;
         std::vector<SemanticType> m_paramTypes;
     };
@@ -210,10 +203,10 @@ void SemanticAnalyzer::declareBuiltinFunctions()
 
     for (const auto& builtin : builtins) {
         const auto identifier_nn = m_ast.alloc<Identifier>(
-            SourcePos(-1), std::string(builtin.m_name));
+            SourcePos(-1), std::string(builtin.name));
         const auto symbol = makeFunctionSymbol(
             identifier_nn, builtin.m_returnType, builtin.m_paramTypes);
-        if (!defineSymbol(builtin.m_name, identifier_nn)) {
+        if (!defineSymbol(builtin.name, identifier_nn)) {
             continue;
         }
         bindSymbol(identifier_nn, symbol);
@@ -224,39 +217,33 @@ void SemanticAnalyzer::declareFuncDef(Ptr<FuncDef> funcDef_nn)
 {
     const auto& funcDef
         = node(funcDef_nn, "compilation unit is missing a function");
-    const auto& identifier = node(funcDef.m_identifier_nn,
-        "function definition is missing an identifier");
+    const auto& identifier = funcDef.identifier(m_ast);
     std::vector<SemanticType> paramTypes;
-    paramTypes.reserve(funcDef.m_funcFParams.size());
-    for (const auto funcFParam_nn : funcDef.m_funcFParams) {
-        const auto& funcFParam
-            = node(funcFParam_nn, "function parameter is missing");
+    paramTypes.reserve(funcDef.funcFParams.size());
+    for (const auto& funcFParam : funcDef.funcFParams) {
         auto paramType = analyzeObjectType(
-            funcFParam.m_trailingDimensions, funcFParam.m_sourcePos.m_offset);
+            funcFParam.m_trailingDimensions, funcFParam.sourcePos.m_offset);
         if (funcFParam.m_isArray) {
             paramType = SemanticType::makeUnsizedArray(paramType);
         }
         paramTypes.push_back(paramType);
     }
     const auto symbol = makeFunctionSymbol(
-        funcDef.m_identifier_nn, lowerFuncType(funcDef.m_funcType), paramTypes);
-    if (!defineSymbol(identifier.m_name, funcDef.m_identifier_nn)) {
+        funcDef.identifier, lowerFuncType(funcDef.m_funcType), paramTypes);
+    if (!defineSymbol(identifier.name, funcDef.identifier)) {
         recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
-            identifier.m_sourcePos.m_offset,
-            "double definition of '" + identifier.m_name + "'");
+            identifier.sourcePos.m_offset,
+            "double definition of '" + identifier.name + "'");
     }
-    bindSymbol(funcDef.m_identifier_nn, symbol);
+    bindSymbol(funcDef.identifier, symbol);
 }
 
 void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
 {
     const auto& funcDef
         = node(funcDef_nn, "compilation unit is missing a function");
-    (void)node(funcDef.m_identifier_nn,
-        "function definition is missing an identifier");
-    const auto& block
-        = node(funcDef.m_block_nn, "function definition is missing a block");
-    const auto* functionSymbol = m_info.findSymbol(funcDef.m_identifier_nn);
+    const auto& body = funcDef.body;
+    const auto* functionSymbol = m_info.findSymbol(funcDef.identifier);
     if (functionSymbol == nullptr) {
         throw std::runtime_error(
             "function definition is missing a declared function symbol");
@@ -265,22 +252,19 @@ void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
     const auto previousReturnType = m_currentFuncReturnType;
     m_currentFuncReturnType = functionSymbol->m_functionSignature.m_returnType;
     pushScope();
-    for (size_t i = 0; i < funcDef.m_funcFParams.size(); ++i) {
-        const auto funcFParam_nn = funcDef.m_funcFParams[i];
-        const auto& funcFParam
-            = node(funcFParam_nn, "function parameter is missing");
-        const auto& identifier = node(funcFParam.m_identifier_nn,
-            "function parameter is missing an identifier");
-        const auto symbol = makeObjectSymbol(funcFParam.m_identifier_nn, false,
+    for (size_t i = 0; i != funcDef.funcFParams.size(); i++) {
+        const auto& funcFParam = funcDef.funcFParams[i];
+        const auto& identifier = funcFParam.identifier(m_ast);
+        const auto symbol = makeObjectSymbol(funcFParam.identifier, false,
             false, 0, functionSymbol->m_functionSignature.m_paramTypes[i]);
-        if (!defineSymbol(identifier.m_name, funcFParam.m_identifier_nn)) {
+        if (!defineSymbol(identifier.name, funcFParam.identifier)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
-                identifier.m_sourcePos.m_offset,
-                "double definition of '" + identifier.m_name + "'");
+                identifier.sourcePos.m_offset,
+                "double definition of '" + identifier.name + "'");
         }
-        bindSymbol(funcFParam.m_identifier_nn, symbol);
+        bindSymbol(funcFParam.identifier, symbol);
     }
-    for (const auto blockItem : block.m_blockItems) {
+    for (const auto blockItem : body(m_ast).items) {
         analyzeBlockItemNode(blockItem);
     }
     popScope();
@@ -289,29 +273,24 @@ void SemanticAnalyzer::analyzeFuncDef(Ptr<FuncDef> funcDef_nn)
 
 void SemanticAnalyzer::analyzeBlock(Ptr<Block> block_nn)
 {
-    const auto& block
-        = node(block_nn, "function definition is missing a block");
+    const auto& body = node(block_nn, "function definition is missing a body");
     pushScope();
-    for (const auto blockItem : block.m_blockItems) {
+    for (const auto blockItem : body.items) {
         analyzeBlockItemNode(blockItem);
     }
     popScope();
 }
 
-void SemanticAnalyzer::analyzeBlockItemNode(
-    Ptr<BlockItemNode> blockItemNode_nn)
+void SemanticAnalyzer::analyzeBlockItemNode(BlockItem blockItem)
 {
-    const auto& blockItemNode
-        = node(blockItemNode_nn, "block contains a null item");
-    MATCH(blockItemNode.m_blockItem)
-    WITH([&](Ptr<DeclNode> decl) { analyzeDeclNode(decl); },
-        [&](Ptr<StmtNode> stmt) { analyzeStmtNode(stmt); });
+    MATCH(blockItem)
+    WITH([&](Decl decl) { analyzeDeclNode(decl); },
+        [&](Stmt stmt) { analyzeStmtNode(stmt); });
 }
 
-void SemanticAnalyzer::analyzeDeclNode(Ptr<DeclNode> declNode_nn)
+void SemanticAnalyzer::analyzeDeclNode(Decl declNode)
 {
-    const auto& declNode = node(declNode_nn, "declaration payload is missing");
-    MATCH(declNode.m_decl)
+    MATCH(declNode)
     WITH([&](Ptr<ConstDecl> constDecl) { analyzeConstDecl(constDecl); },
         [&](Ptr<VarDecl> varDecl) { analyzeVarDecl(varDecl); });
 }
@@ -320,49 +299,43 @@ void SemanticAnalyzer::analyzeConstDecl(Ptr<ConstDecl> constDecl_nn)
 {
     const auto& constDecl
         = node(constDecl_nn, "const declaration payload is missing");
-    for (const auto constDef_nn : constDecl.m_constDefs) {
-        const auto& parsedConstDef
-            = node(constDef_nn, "const declaration contains a null declarator");
-        const auto& identifier = node(parsedConstDef.m_identifier_nn,
-            "const declarator is missing an identifier");
-        (void)node(parsedConstDef.m_constInitVal_nn,
-            "const declarator is missing an initializer");
+    for (const auto constDef : constDecl.constDef) {
+        const auto& parsedConstDef = constDef(m_ast);
+        const auto& identifier = parsedConstDef.identifier(m_ast);
         const auto objectType = analyzeObjectType(
-            parsedConstDef.m_dimensions, parsedConstDef.m_sourcePos.m_offset);
+            parsedConstDef.shape, parsedConstDef.sourcePos.m_offset);
 
         size_t nextIndex = 0;
         bool hasRemainingWarning = false;
-        auto analyzedInit
-            = analyzeConstInitVal(parsedConstDef.m_constInitVal_nn, objectType,
-                true, nextIndex, hasRemainingWarning);
+        auto analyzedInit = analyzeConstInitVal(parsedConstDef.constInitVal,
+            objectType, true, nextIndex, hasRemainingWarning);
 
-        if (!parsedConstDef.m_dimensions.empty()) {
+        if (!parsedConstDef.shape.empty()) {
             analyzedInit.m_isConstant = false;
             analyzedInit.m_constantValue = 0;
         } else {
             if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
                 recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                    parsedConstDef.m_sourcePos.m_offset,
+                    parsedConstDef.sourcePos.m_offset,
                     "const initializer must produce an integer value");
             }
             if (!analyzedInit.m_isConstant) {
                 recordDiagnostic(
                     SemanticDiagnosticKind::nonConstantConstInitializer,
-                    parsedConstDef.m_sourcePos.m_offset,
+                    parsedConstDef.sourcePos.m_offset,
                     "const initializer must be a constant expression");
             }
         }
 
-        const auto symbol = makeObjectSymbol(parsedConstDef.m_identifier_nn,
-            true,
-            parsedConstDef.m_dimensions.empty() && analyzedInit.m_isConstant,
+        const auto symbol = makeObjectSymbol(parsedConstDef.identifier, true,
+            parsedConstDef.shape.empty() && analyzedInit.m_isConstant,
             analyzedInit.m_constantValue, objectType);
-        if (!defineSymbol(identifier.m_name, parsedConstDef.m_identifier_nn)) {
+        if (!defineSymbol(identifier.name, parsedConstDef.identifier)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
-                identifier.m_sourcePos.m_offset,
-                "double definition of '" + identifier.m_name + "'");
+                identifier.sourcePos.m_offset,
+                "double definition of '" + identifier.name + "'");
         }
-        bindSymbol(parsedConstDef.m_identifier_nn, symbol);
+        bindSymbol(parsedConstDef.identifier, symbol);
     }
 }
 
@@ -370,30 +343,27 @@ void SemanticAnalyzer::analyzeVarDecl(Ptr<VarDecl> varDecl_nn)
 {
     const auto& varDecl
         = node(varDecl_nn, "var declaration payload is missing");
-    for (const auto varDef_nn : varDecl.m_varDefs) {
-        const auto& parsedVarDef
-            = node(varDef_nn, "var declaration contains a null declarator");
-        const auto& identifier = node(parsedVarDef.m_identifier_nn,
-            "var declarator is missing an identifier");
+    for (const auto varDef : varDecl.varDef) {
+        const auto& parsedVarDef = varDef(m_ast);
+        const auto& identifier = parsedVarDef.identifier(m_ast);
         const auto objectType = analyzeObjectType(
-            parsedVarDef.m_dimensions, parsedVarDef.m_sourcePos.m_offset);
-        if (parsedVarDef.m_initVal_nn) {
+            parsedVarDef.shape, parsedVarDef.sourcePos.m_offset);
+        if (parsedVarDef.initVal) {
             size_t nextIndex = 0;
             bool hasRemainingWarning = false;
-            (void)analyzeInitVal(parsedVarDef.m_initVal_nn, objectType,
+            (void)analyzeInitVal(parsedVarDef.initVal, objectType,
                 isGlobalScope(), true, nextIndex, hasRemainingWarning);
         }
 
-        if (m_info.findSymbol(parsedVarDef.m_identifier_nn) == nullptr) {
+        if (m_info.findSymbol(parsedVarDef.identifier) == nullptr) {
             const auto symbol = makeObjectSymbol(
-                parsedVarDef.m_identifier_nn, false, false, 0, objectType);
-            if (!defineSymbol(
-                    identifier.m_name, parsedVarDef.m_identifier_nn)) {
+                parsedVarDef.identifier, false, false, 0, objectType);
+            if (!defineSymbol(identifier.name, parsedVarDef.identifier)) {
                 recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
-                    identifier.m_sourcePos.m_offset,
-                    "double definition of '" + identifier.m_name + "'");
+                    identifier.sourcePos.m_offset,
+                    "double definition of '" + identifier.name + "'");
             }
-            bindSymbol(parsedVarDef.m_identifier_nn, symbol);
+            bindSymbol(parsedVarDef.identifier, symbol);
         }
     }
 }
@@ -402,25 +372,23 @@ void SemanticAnalyzer::declareVarDecl(Ptr<VarDecl> varDecl_nn)
 {
     const auto& varDecl
         = node(varDecl_nn, "var declaration payload is missing");
-    for (const auto varDef_nn : varDecl.m_varDefs) {
-        const auto& parsedVarDef
-            = node(varDef_nn, "var declaration contains a null declarator");
-        const auto& identifier = node(parsedVarDef.m_identifier_nn,
-            "var declarator is missing an identifier");
+    for (const auto varDef : varDecl.varDef) {
+        const auto& parsedVarDef = varDef(m_ast);
+        const auto& identifier = parsedVarDef.identifier(m_ast);
         const auto objectType = analyzeObjectType(
-            parsedVarDef.m_dimensions, parsedVarDef.m_sourcePos.m_offset);
-        if (m_info.findSymbol(parsedVarDef.m_identifier_nn) != nullptr) {
+            parsedVarDef.shape, parsedVarDef.sourcePos.m_offset);
+        if (m_info.findSymbol(parsedVarDef.identifier) != nullptr) {
             continue;
         }
         const auto symbol = makeObjectSymbol(
-            parsedVarDef.m_identifier_nn, false, false, 0, objectType);
-        if (!defineSymbol(identifier.m_name, parsedVarDef.m_identifier_nn)) {
+            parsedVarDef.identifier, false, false, 0, objectType);
+        if (!defineSymbol(identifier.name, parsedVarDef.identifier)) {
             recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
-                identifier.m_sourcePos.m_offset,
-                "double definition of '" + identifier.m_name + "'");
+                identifier.sourcePos.m_offset,
+                "double definition of '" + identifier.name + "'");
             continue;
         }
-        bindSymbol(parsedVarDef.m_identifier_nn, symbol);
+        bindSymbol(parsedVarDef.identifier, symbol);
     }
 }
 
@@ -447,27 +415,27 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
         hasRemainingWarning = true;
     };
 
-    MATCH(init.m_kind)
+    MATCH(init.kind)
     WITH(
-        [&](Ptr<Exp> expr) {
+        [&](Ref<Exp> expr) {
             if (!expectedType.isArray()) {
                 analyzedInit = analyzeExp(expr);
                 ++nextIndex;
                 if (analyzedInit.m_type.isVoid()
                     || analyzedInit.m_type.isArray()) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        init.m_sourcePos.m_offset,
+                        init.sourcePos.m_offset,
                         "const initializer must produce an integer value");
                 }
                 if (!analyzedInit.m_isConstant) {
                     recordDiagnostic(
                         SemanticDiagnosticKind::nonConstantConstInitializer,
-                        init.m_sourcePos.m_offset,
+                        init.sourcePos.m_offset,
                         "const initializer must be a constant expression");
                 }
             } else {
-                const std::vector<Ptr<ConstInitVal>> singleton {
-                    constInitVal_nn
+                const std::vector<Ref<ConstInitVal>> singleton {
+                    constInitVal_nn.ref()
                 };
                 size_t nextValueIndex = 0;
                 analyzedInit = analyzeConstInitSequence(singleton,
@@ -485,7 +453,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
                     nextIndex += consumed;
                 }
                 if (initValues.size() > 1) {
-                    recordExcessInitializer(init.m_sourcePos.m_offset);
+                    recordExcessInitializer(init.sourcePos.m_offset);
                 }
             } else {
                 size_t nextValueIndex = 0;
@@ -503,7 +471,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitVal(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
-    const std::vector<Ptr<ConstInitVal>>& values, size_t& nextValueIndex,
+    const std::vector<Ref<ConstInitVal>>& values, size_t& nextValueIndex,
     const SemanticType& expectedType, bool& hasRemainingWarning)
 {
     if (!expectedType.isArray()) {
@@ -529,11 +497,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeConstInitSequence(
 
     for (int32_t i = 0;
         i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
-        const auto& child = node(
-            values[nextValueIndex], "const initializer element is missing");
-        MATCH(child.m_kind)
+        MATCH(values[nextValueIndex](m_ast).kind)
         WITH(
-            [&](Ptr<Exp>) {
+            [&](Ref<Exp>) {
                 (void)analyzeConstInitSequence(values, nextValueIndex,
                     *expectedType.m_elementType, hasRemainingWarning);
             },
@@ -576,28 +542,28 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
         hasRemainingWarning = true;
     };
 
-    MATCH(init.m_kind)
+    MATCH(init.kind)
     WITH(
-        [&](Ptr<Exp> initAlt) {
+        [&](Ref<Exp> initAlt) {
             if (!expectedType.isArray()) {
                 analyzedInit = analyzeExp(initAlt);
                 ++nextIndex;
                 if (analyzedInit.m_type.isVoid()
                     || analyzedInit.m_type.isArray()) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        init.m_sourcePos.m_offset,
+                        init.sourcePos.m_offset,
                         "variable initializer must produce an integer "
                         "value");
                 }
                 if (isGlobal && !analyzedInit.m_isConstant) {
                     recordDiagnostic(
                         SemanticDiagnosticKind::nonConstantGlobalInitializer,
-                        init.m_sourcePos.m_offset,
+                        init.sourcePos.m_offset,
                         "global initializer must be a constant "
                         "expression");
                 }
             } else {
-                const std::vector<Ptr<InitVal>> singleton { initVal_nn };
+                const std::vector<Ref<InitVal>> singleton { initVal_nn.ref() };
                 size_t nextValueIndex = 0;
                 analyzedInit = analyzeInitSequence(singleton, nextValueIndex,
                     expectedType, isGlobal, hasRemainingWarning);
@@ -608,19 +574,17 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
             if (!expectedType.isArray()) {
                 if (!initAlt.empty()) {
                     size_t consumed = 0;
-                    analyzedInit
-                        = analyzeInitVal(initAlt.front(), expectedType,
-                            isGlobal, false, consumed, hasRemainingWarning);
+                    analyzedInit = analyzeInitVal(initAlt.front(), expectedType,
+                        isGlobal, false, consumed, hasRemainingWarning);
                     nextIndex += consumed;
                 }
                 if (initAlt.size() > 1) {
-                    recordExcessInitializer(init.m_sourcePos.m_offset);
+                    recordExcessInitializer(init.sourcePos.m_offset);
                 }
             } else {
                 size_t nextValueIndex = 0;
-                analyzedInit
-                    = analyzeInitSequence(initAlt, nextValueIndex,
-                        expectedType, isGlobal, hasRemainingWarning);
+                analyzedInit = analyzeInitSequence(initAlt, nextValueIndex,
+                    expectedType, isGlobal, hasRemainingWarning);
                 nextIndex += nextValueIndex;
             }
         });
@@ -633,7 +597,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitVal(
 }
 
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
-    const std::vector<Ptr<InitVal>>& values, size_t& nextValueIndex,
+    const std::vector<Ref<InitVal>>& values, size_t& nextValueIndex,
     const SemanticType& expectedType, bool isGlobal, bool& hasRemainingWarning)
 {
     if (!expectedType.isArray()) {
@@ -659,11 +623,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
 
     for (int32_t i = 0;
         i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
-        const auto& child
-            = node(values[nextValueIndex], "initializer element is missing");
-        MATCH(child.m_kind)
+        MATCH(values[nextValueIndex](m_ast).kind)
         WITH(
-            [&](Ptr<Exp>) {
+            [&](Ref<Exp>) {
                 (void)analyzeInitSequence(values, nextValueIndex,
                     *expectedType.m_elementType, isGlobal, hasRemainingWarning);
             },
@@ -684,10 +646,9 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeInitSequence(
     };
 }
 
-void SemanticAnalyzer::analyzeStmtNode(Ptr<StmtNode> stmtNode_nn)
+void SemanticAnalyzer::analyzeStmtNode(Stmt stmtNode)
 {
-    const auto& stmtNode = node(stmtNode_nn, "statement payload is missing");
-    MATCH(stmtNode.m_stmt)
+    MATCH(stmtNode)
     WITH([&](Ptr<IfStmt> ifStmt) { analyzeIfStmt(ifStmt); },
         [&](Ptr<WhileStmt> whileStmt) { analyzeWhileStmt(whileStmt); },
         [&](Ptr<BreakStmt> breakStmt) { analyzeBreakStmt(breakStmt); },
@@ -695,7 +656,7 @@ void SemanticAnalyzer::analyzeStmtNode(Ptr<StmtNode> stmtNode_nn)
             analyzeContinueStmt(continueStmt);
         },
         [&](Ptr<AssignStmt> assignStmt) { analyzeAssignStmt(assignStmt); },
-        [&](Ptr<Block> block) { analyzeBlock(block); },
+        [&](Ptr<Block> body) { analyzeBlock(body); },
         [&](Ptr<ReturnStmt> returnStmt) { analyzeReturnStmt(returnStmt); },
         [&](Ptr<ExpStmt> expStmt) { analyzeExpStmt(expStmt); });
 }
@@ -703,11 +664,9 @@ void SemanticAnalyzer::analyzeStmtNode(Ptr<StmtNode> stmtNode_nn)
 void SemanticAnalyzer::analyzeIfStmt(Ptr<IfStmt> ifStmt_nn)
 {
     const auto& ifStmt = node(ifStmt_nn, "if statement payload is missing");
-    (void)analyzeCondExp(ifStmt.m_condExp_nn);
-    analyzeStmtNode(ifStmt.m_thenStmt_nn);
-    if (ifStmt.m_elseStmt_nn) {
-        analyzeStmtNode(ifStmt.m_elseStmt_nn);
-    }
+    (void)analyzeCondExp(ifStmt.condition);
+    analyzeStmtNode(ifStmt.thenBody);
+    analyzeStmtNode(ifStmt.elseBody);
 }
 
 void SemanticAnalyzer::analyzeWhileStmt(Ptr<WhileStmt> whileStmt_nn)
@@ -715,8 +674,8 @@ void SemanticAnalyzer::analyzeWhileStmt(Ptr<WhileStmt> whileStmt_nn)
     const auto& whileStmt
         = node(whileStmt_nn, "while statement payload is missing");
     m_loopStack.push_back(whileStmt_nn);
-    (void)analyzeCondExp(whileStmt.m_condExp_nn);
-    analyzeStmtNode(whileStmt.m_bodyStmt_nn);
+    (void)analyzeCondExp(whileStmt.condition);
+    analyzeStmtNode(whileStmt.body);
     m_loopStack.pop_back();
 }
 
@@ -727,7 +686,7 @@ void SemanticAnalyzer::analyzeBreakStmt(Ptr<BreakStmt> breakStmt_nn)
     const auto loop = currentLoop();
     if (!loop.has_value()) {
         recordDiagnostic(SemanticDiagnosticKind::breakOutsideWhile,
-            breakStmt.m_sourcePos.m_offset,
+            breakStmt.sourcePos.m_offset,
             "break statement is not inside a while loop");
         return;
     }
@@ -741,7 +700,7 @@ void SemanticAnalyzer::analyzeContinueStmt(Ptr<ContinueStmt> continueStmt_nn)
     const auto loop = currentLoop();
     if (!loop.has_value()) {
         recordDiagnostic(SemanticDiagnosticKind::continueOutsideWhile,
-            continueStmt.m_sourcePos.m_offset,
+            continueStmt.sourcePos.m_offset,
             "continue statement is not inside a while loop");
         return;
     }
@@ -752,34 +711,31 @@ void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
 {
     const auto& assignStmt
         = node(assignStmt_nn, "assignment statement payload is missing");
-    const auto& lValExp
-        = node(assignStmt.m_lVal_nn, "assignment is missing an lvalue");
-    MATCH(lValExp.m_kind)
+    const auto& lValExp = assignStmt.m_lVal_nn(m_ast);
+    MATCH(lValExp.kind)
     WITH(
         [&](Exp::Exp::LVal expAlt) {
-            const auto& identifier = node(expAlt.m_identifier_nn,
-                "assignment lvalue is missing an identifier");
-            (void)resolveSymbol(expAlt.m_identifier_nn);
-            const auto* symbol = m_info.findSymbol(expAlt.m_identifier_nn);
+            const auto& identifier = expAlt.identifier(m_ast);
+            (void)resolveSymbol(expAlt.identifier);
+            const auto* symbol = m_info.findSymbol(expAlt.identifier);
             if (symbol != nullptr && symbol->m_isConst) {
                 recordDiagnostic(SemanticDiagnosticKind::assignToConst,
-                    identifier.m_sourcePos.m_offset,
-                    "cannot assign to const '" + symbol->m_name + "'");
+                    identifier.sourcePos.m_offset,
+                    "cannot assign to const '" + symbol->name + "'");
             }
             auto currentType = symbol != nullptr ? symbol->m_type
                                                  : SemanticType::makeInteger();
-            for (const auto index_nn : expAlt.m_indices) {
+            for (const auto index_nn : expAlt.indices) {
                 const auto analyzedIndex = analyzeExp(index_nn);
                 if (!isScalarType(analyzedIndex.m_type)) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        node(index_nn, "array subscript is missing")
-                            .m_sourcePos.m_offset,
+                        index_nn(m_ast).sourcePos.m_offset,
                         "array subscript must produce an integer value");
                 }
                 if (!currentType.isArray()
                     || currentType.m_elementType == nullptr) {
                     recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                        identifier.m_sourcePos.m_offset,
+                        identifier.sourcePos.m_offset,
                         "subscripted assignment target is not an array");
                     break;
                 }
@@ -787,7 +743,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
             }
             if (currentType.isArray()) {
                 recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                    identifier.m_sourcePos.m_offset,
+                    identifier.sourcePos.m_offset,
                     "assignment target must designate an integer object");
             }
         },
@@ -800,7 +756,7 @@ void SemanticAnalyzer::analyzeAssignStmt(Ptr<AssignStmt> assignStmt_nn)
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            assignStmt.m_sourcePos.m_offset,
+            assignStmt.sourcePos.m_offset,
             "assignment rhs must produce an integer value");
     }
 }
@@ -810,7 +766,7 @@ void SemanticAnalyzer::analyzeExpStmt(Ptr<ExpStmt> expStmt_nn)
     const auto& expStmt
         = node(expStmt_nn, "expression statement payload is missing");
     if (expStmt.m_exp_nn) {
-        (void)analyzeExp(expStmt.m_exp_nn);
+        (void)analyzeExp(expStmt.m_exp_nn.ref());
     }
 }
 
@@ -820,24 +776,24 @@ void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
         = node(returnStmt_nn, "return statement payload is missing");
     if (!m_currentFuncReturnType.has_value()) {
         if (returnStmt.m_exp_nn) {
-            (void)analyzeExp(returnStmt.m_exp_nn);
+            (void)analyzeExp(returnStmt.m_exp_nn.ref());
         }
         return;
     }
 
     if (!returnStmt.m_exp_nn) {
-        if (m_currentFuncReturnType->m_kind != SemanticTypeKind::voidType) {
+        if (m_currentFuncReturnType->kind != SemanticTypeKind::voidType) {
             recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
-                returnStmt.m_sourcePos.m_offset,
+                returnStmt.sourcePos.m_offset,
                 "non-void function must return an integer value");
         }
         return;
     }
 
-    const auto analyzedExp = analyzeExp(returnStmt.m_exp_nn);
-    if (m_currentFuncReturnType->m_kind == SemanticTypeKind::voidType) {
+    const auto analyzedExp = analyzeExp(returnStmt.m_exp_nn.ref());
+    if (m_currentFuncReturnType->kind == SemanticTypeKind::voidType) {
         recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
-            returnStmt.m_sourcePos.m_offset,
+            returnStmt.sourcePos.m_offset,
             "void function must use 'return;' without a value");
         return;
     }
@@ -845,7 +801,7 @@ void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch,
-            returnStmt.m_sourcePos.m_offset,
+            returnStmt.sourcePos.m_offset,
             "return expression must produce an integer value");
     }
 }
@@ -853,8 +809,8 @@ void SemanticAnalyzer::analyzeReturnStmt(Ptr<ReturnStmt> returnStmt_nn)
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
     const Exp& exp, const Exp::Binary& binary)
 {
-    auto lhs = analyzeExp(binary.m_lhs_nn);
-    auto rhs = analyzeExp(binary.m_rhs_nn);
+    auto lhs = analyzeExp(binary.lhs);
+    auto rhs = analyzeExp(binary.rhs);
     AnalyzedExp binaryExp {
         .m_type = SemanticType::makeInteger(),
         .m_valueKind = ExpType::integer,
@@ -864,12 +820,12 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
 
     if (!isScalarType(lhs.m_type) || !isScalarType(rhs.m_type)) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.m_sourcePos.m_offset,
+            exp.sourcePos.m_offset,
             "binary operator requires integer operands");
         return binaryExp;
     }
 
-    switch (binary.m_op) {
+    switch (binary.op) {
     case BinaryOpKeyword::orOr:
         lhs = normalizeToBoolean(std::move(lhs));
         rhs = normalizeToBoolean(std::move(rhs));
@@ -878,7 +834,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
         if (lhs.m_isConstant && rhs.m_isConstant) {
             binaryExp.m_isConstant = true;
             binaryExp.m_constantValue = applyLOrOp(
-                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+                binary.op, lhs.m_constantValue, rhs.m_constantValue);
         }
         break;
     case BinaryOpKeyword::andAnd:
@@ -889,7 +845,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
         if (lhs.m_isConstant && rhs.m_isConstant) {
             binaryExp.m_isConstant = true;
             binaryExp.m_constantValue = applyLAndOp(
-                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+                binary.op, lhs.m_constantValue, rhs.m_constantValue);
         }
         break;
     case BinaryOpKeyword::equal:
@@ -901,7 +857,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
         if (lhs.m_isConstant && rhs.m_isConstant) {
             binaryExp.m_isConstant = true;
             binaryExp.m_constantValue = applyEqOp(
-                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+                binary.op, lhs.m_constantValue, rhs.m_constantValue);
         }
         break;
     case BinaryOpKeyword::less:
@@ -915,7 +871,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
         if (lhs.m_isConstant && rhs.m_isConstant) {
             binaryExp.m_isConstant = true;
             binaryExp.m_constantValue = applyRelOp(
-                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+                binary.op, lhs.m_constantValue, rhs.m_constantValue);
         }
         break;
     case BinaryOpKeyword::star:
@@ -927,7 +883,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
         rhs = normalizeToArithmetic(std::move(rhs));
         if (lhs.m_isConstant && rhs.m_isConstant) {
             const auto folded = applyArithmeticOp(
-                binary.m_op, lhs.m_constantValue, rhs.m_constantValue);
+                binary.op, lhs.m_constantValue, rhs.m_constantValue);
             if (folded.has_value()) {
                 binaryExp.m_isConstant = true;
                 binaryExp.m_constantValue = *folded;
@@ -941,35 +897,34 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeBinaryExp(
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
     const Exp& exp, const Exp::Unary& unary)
 {
-    auto operand = analyzeExp(unary.m_lhs_nn);
+    auto operand = analyzeExp(unary.lhs);
     if (!isScalarType(operand.m_type)) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.m_sourcePos.m_offset,
+            exp.sourcePos.m_offset,
             "unary operator requires an integer value operand");
         return AnalyzedExp {
-            .m_type = unary.m_op == UnaryOpKeyword::bang
+            .m_type = unary.op == UnaryOpKeyword::bang
                 ? SemanticType::makeBoolean()
                 : SemanticType::makeInteger(),
-            .m_valueKind = unary.m_op == UnaryOpKeyword::bang
-                ? ExpType::boolean
-                : ExpType::integer,
+            .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
+                                                            : ExpType::integer,
             .m_isConstant = false,
             .m_constantValue = 0,
         };
     }
-    if (unary.m_op == UnaryOpKeyword::bang) {
+    if (unary.op == UnaryOpKeyword::bang) {
         operand = normalizeToBoolean(std::move(operand));
     } else {
         operand = normalizeToArithmetic(std::move(operand));
     }
     if (operand.m_isConstant) {
-        const auto folded = applyUnaryOp(unary.m_op, operand.m_constantValue);
+        const auto folded = applyUnaryOp(unary.op, operand.m_constantValue);
         if (folded.has_value()) {
             return AnalyzedExp {
-                .m_type = unary.m_op == UnaryOpKeyword::bang
+                .m_type = unary.op == UnaryOpKeyword::bang
                     ? SemanticType::makeBoolean()
                     : SemanticType::makeInteger(),
-                .m_valueKind = unary.m_op == UnaryOpKeyword::bang
+                .m_valueKind = unary.op == UnaryOpKeyword::bang
                     ? ExpType::boolean
                     : ExpType::integer,
                 .m_isConstant = true,
@@ -978,11 +933,11 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
         }
     }
     return AnalyzedExp {
-        .m_type = unary.m_op == UnaryOpKeyword::bang
+        .m_type = unary.op == UnaryOpKeyword::bang
             ? SemanticType::makeBoolean()
             : SemanticType::makeInteger(),
-        .m_valueKind = unary.m_op == UnaryOpKeyword::bang ? ExpType::boolean
-                                                          : ExpType::integer,
+        .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
+                                                        : ExpType::integer,
         .m_isConstant = false,
         .m_constantValue = 0,
     };
@@ -991,20 +946,18 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeUnaryExp(
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCallExp(
     const Exp& exp, const Exp::Call& call)
 {
-    const auto definitionIdentifier = lookupSymbol(
-        node(call.m_func_nn, "call expression is missing a callee").m_name);
+    const auto definitionIdentifier = lookupSymbol(call.funcName(m_ast).name);
     if (!definitionIdentifier.has_value()) {
-        const auto& calleeIdentifier
-            = node(call.m_func_nn, "call expression is missing a callee");
+        const auto& calleeIdentifier = call.funcName(m_ast);
         recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
-            calleeIdentifier.m_sourcePos.m_offset,
-            "use of '" + calleeIdentifier.m_name + "' before definition");
-        bindSymbol(call.m_func_nn, makePlaceholderSymbol(call.m_func_nn));
-        for (const auto arg_nn : call.m_params) {
+            calleeIdentifier.sourcePos.m_offset,
+            "use of '" + calleeIdentifier.name + "' before definition");
+        bindSymbol(call.funcName, makePlaceholderSymbol(call.funcName));
+        for (const auto arg_nn : call.params) {
             const auto analyzedArg = analyzeExp(arg_nn);
             if (analyzedArg.m_valueKind == ExpType::voidType) {
                 recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                    exp.m_sourcePos.m_offset,
+                    exp.sourcePos.m_offset,
                     "call arguments must produce integer values");
             }
         }
@@ -1020,42 +973,42 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCallExp(
         throw std::runtime_error(
             "call target definition is missing symbol binding");
     }
-    bindSymbol(call.m_func_nn, *calleeSymbol);
-    if (calleeSymbol->m_kind != SemanticSymbolKind::function) {
+    bindSymbol(call.funcName, *calleeSymbol);
+    if (calleeSymbol->kind != SemanticSymbolKind::function) {
         recordDiagnostic(SemanticDiagnosticKind::invalidCallTarget,
-            exp.m_sourcePos.m_offset,
-            "call target '" + calleeSymbol->m_name + "' is not a function");
+            exp.sourcePos.m_offset,
+            "call target '" + calleeSymbol->name + "' is not a function");
     }
-    if (calleeSymbol->m_kind == SemanticSymbolKind::function
+    if (calleeSymbol->kind == SemanticSymbolKind::function
         && calleeSymbol->m_functionSignature.m_paramTypes.size()
-            != call.m_params.size()) {
+            != call.params.size()) {
         recordDiagnostic(SemanticDiagnosticKind::callArityMismatch,
-            exp.m_sourcePos.m_offset,
-            "call to '" + calleeSymbol->m_name
+            exp.sourcePos.m_offset,
+            "call to '" + calleeSymbol->name
                 + "' uses the wrong number of arguments");
     }
-    for (size_t i = 0; i < call.m_params.size(); ++i) {
-        const auto analyzedArg = analyzeExp(call.m_params[i]);
+    for (size_t i = 0; i < call.params.size(); ++i) {
+        const auto analyzedArg = analyzeExp(call.params[i]);
         if (analyzedArg.m_valueKind == ExpType::voidType) {
             recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.m_sourcePos.m_offset,
+                exp.sourcePos.m_offset,
                 "call arguments must produce integer values");
         }
-        if (calleeSymbol->m_kind == SemanticSymbolKind::function
+        if (calleeSymbol->kind == SemanticSymbolKind::function
             && i < calleeSymbol->m_functionSignature.m_paramTypes.size()
             && !typesMatchForCall(
                 calleeSymbol->m_functionSignature.m_paramTypes[i],
                 analyzedArg.m_type)) {
             recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.m_sourcePos.m_offset,
+                exp.sourcePos.m_offset,
                 "call argument type does not match parameter type");
         }
     }
     return AnalyzedExp {
-        .m_type = calleeSymbol->m_kind == SemanticSymbolKind::function
+        .m_type = calleeSymbol->kind == SemanticSymbolKind::function
             ? calleeSymbol->m_functionSignature.m_returnType
             : SemanticType::makeInteger(),
-        .m_valueKind = calleeSymbol->m_kind == SemanticSymbolKind::function
+        .m_valueKind = calleeSymbol->kind == SemanticSymbolKind::function
             ? calleeSymbol->m_functionSignature.m_returnType.valueKind()
             : ExpType::integer,
         .m_isConstant = false,
@@ -1066,12 +1019,12 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCallExp(
 SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
     const Exp& exp, const Exp::LVal& lval)
 {
-    (void)resolveSymbol(lval.m_identifier_nn);
-    const auto* symbol = m_info.findSymbol(lval.m_identifier_nn);
-    if (symbol != nullptr && symbol->m_kind == SemanticSymbolKind::function) {
+    (void)resolveSymbol(lval.identifier);
+    const auto* symbol = m_info.findSymbol(lval.identifier);
+    if (symbol != nullptr && symbol->kind == SemanticSymbolKind::function) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.m_sourcePos.m_offset,
-            "function '" + symbol->m_name + "' must be called before use");
+            exp.sourcePos.m_offset,
+            "function '" + symbol->name + "' must be called before use");
         return AnalyzedExp {
             .m_type = SemanticType::makeInteger(),
             .m_valueKind = ExpType::integer,
@@ -1081,24 +1034,23 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
     }
     auto currentType
         = symbol != nullptr ? symbol->m_type : SemanticType::makeInteger();
-    for (const auto index_nn : lval.m_indices) {
+    for (const auto index_nn : lval.indices) {
         const auto analyzedIndex = analyzeExp(index_nn);
         if (!isScalarType(analyzedIndex.m_type)) {
             recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                node(index_nn, "array subscript is missing")
-                    .m_sourcePos.m_offset,
+                index_nn(m_ast).sourcePos.m_offset,
                 "array subscript must produce an integer value");
         }
         if (!currentType.isArray() || currentType.m_elementType == nullptr) {
             recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.m_sourcePos.m_offset,
+                exp.sourcePos.m_offset,
                 "subscripted expression is not an array");
             currentType = SemanticType::makeInteger();
             break;
         }
         currentType = *currentType.m_elementType;
     }
-    if (symbol != nullptr && lval.m_indices.empty() && symbol->m_isConst
+    if (symbol != nullptr && lval.indices.empty() && symbol->m_isConst
         && symbol->m_hasConstantValue) {
         return AnalyzedExp {
             .m_type = currentType,
@@ -1115,10 +1067,10 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeLvalExp(
         .m_constantValue = 0,
     };
 }
-SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Ptr<Exp> exp_nn)
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Ref<Exp> exp_nn)
 {
-    const auto& exp = node(exp_nn, "expression is missing");
-    auto analyzedExp = MATCH(exp.m_kind) WITH(
+    const auto& exp = exp_nn(m_ast);
+    auto analyzedExp = MATCH(exp.kind) WITH(
         [&](const Exp::Binary& binary) {
             return analyzeBinaryExp(exp, binary);
         },
@@ -1130,7 +1082,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Ptr<Exp> exp_nn)
                 .m_type = SemanticType::makeInteger(),
                 .m_valueKind = ExpType::integer,
                 .m_isConstant = true,
-                .m_constantValue = number.m_value,
+                .m_constantValue = number.value,
             };
         });
     if (analyzedExp.m_valueKind != ExpType::voidType
@@ -1141,15 +1093,13 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeExp(Ptr<Exp> exp_nn)
     return analyzedExp;
 }
 
-SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(
-    Ptr<Exp> exp_nn)
+SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(Ref<Exp> exp_nn)
 {
     auto analyzedExp = analyzeExp(exp_nn);
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
         recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            node(exp_nn, "condition expression is missing")
-                .m_sourcePos.m_offset,
+            exp_nn(m_ast).sourcePos.m_offset,
             "condition expression must produce an integer value");
         analyzedExp.m_type = SemanticType::makeBoolean();
         analyzedExp.m_valueKind = ExpType::boolean;
@@ -1161,7 +1111,7 @@ SemanticAnalyzer::AnalyzedExp SemanticAnalyzer::analyzeCondExp(
     return analyzedExp;
 }
 
-std::optional<Ptr<Identifier>> SemanticAnalyzer::lookupSymbol(
+std::optional<Ref<Identifier>> SemanticAnalyzer::lookupSymbol(
     const std::string& name) const
 {
     for (auto scopeIt = m_scopeStack.rbegin(); scopeIt != m_scopeStack.rend();
@@ -1174,10 +1124,10 @@ std::optional<Ptr<Identifier>> SemanticAnalyzer::lookupSymbol(
     return std::nullopt;
 }
 
-int32_t SemanticAnalyzer::resolveSymbol(Ptr<Identifier> identifier_nn)
+int32_t SemanticAnalyzer::resolveSymbol(Ref<Identifier> identifier_nn)
 {
-    const auto& identifier = node(identifier_nn, "identifier is missing");
-    const auto definitionIdentifier = lookupSymbol(identifier.m_name);
+    const auto& identifier = identifier_nn(m_ast);
+    const auto definitionIdentifier = lookupSymbol(identifier.name);
     if (definitionIdentifier.has_value()) {
         const auto* symbol = m_info.findSymbol(*definitionIdentifier);
         if (symbol == nullptr) {
@@ -1189,22 +1139,22 @@ int32_t SemanticAnalyzer::resolveSymbol(Ptr<Identifier> identifier_nn)
     }
 
     recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
-        identifier.m_sourcePos.m_offset,
-        "use of '" + identifier.m_name + "' before definition");
+        identifier.sourcePos.m_offset,
+        "use of '" + identifier.name + "' before definition");
     const auto placeholder = makePlaceholderSymbol(identifier_nn);
     bindSymbol(identifier_nn, placeholder);
     return placeholder.m_id;
 }
 
 SemanticSymbol SemanticAnalyzer::makePlaceholderSymbol(
-    Ptr<Identifier> identifier_nn)
+    Ref<Identifier> identifier_nn)
 {
     return makeObjectSymbol(
         identifier_nn, false, false, 0, SemanticType::makeInteger());
 }
 
 SemanticType SemanticAnalyzer::analyzeObjectType(
-    const std::vector<Ptr<Exp>>& dimensions, int32_t offset,
+    const std::vector<Ref<Exp>>& dimensions, int32_t offset,
     bool allowUnsizedFirstDimension)
 {
     auto objectType = SemanticType::makeInteger();
@@ -1242,19 +1192,19 @@ bool SemanticAnalyzer::isArrayType(const SemanticType& type) const
     return isArrayTypeImpl(type);
 }
 
-SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
-    Ptr<Identifier> identifier_nn, bool isConst, bool hasConstantValue,
-    int32_t constantValue, const SemanticType& type)
+SemanticSymbol SemanticAnalyzer::makeObjectSymbol(Ref<Identifier> identifier_nn,
+    bool isConst, bool hasConstantValue, int32_t constantValue,
+    const SemanticType& type)
 {
-    const auto& identifier = node(identifier_nn, "identifier is missing");
+    const auto& identifier = identifier_nn(m_ast);
     const int32_t symbolId = ++m_nextSymbolId;
     const std::string symbolName = type.isArray()
-        ? std::string(isConst ? "c_" : "v_") + identifier.m_name
-        : identifier.m_name;
+        ? std::string(isConst ? "c_" : "v_") + identifier.name
+        : identifier.name;
     return SemanticSymbol {
         .m_id = symbolId,
-        .m_name = symbolName,
-        .m_kind = SemanticSymbolKind::object,
+        .name = symbolName,
+        .kind = SemanticSymbolKind::object,
         .m_isConst = isConst,
         .m_hasConstantValue = hasConstantValue,
         .m_constantValue = constantValue,
@@ -1264,15 +1214,15 @@ SemanticSymbol SemanticAnalyzer::makeObjectSymbol(
 }
 
 SemanticSymbol SemanticAnalyzer::makeFunctionSymbol(
-    Ptr<Identifier> identifier_nn, const SemanticType& returnType,
+    Ref<Identifier> identifier_nn, const SemanticType& returnType,
     const std::vector<SemanticType>& paramTypes)
 {
-    const auto& identifier = node(identifier_nn, "identifier is missing");
+    const auto& identifier = identifier_nn(m_ast);
     const int32_t symbolId = ++m_nextSymbolId;
     return SemanticSymbol {
         .m_id = symbolId,
-        .m_name = identifier.m_name,
-        .m_kind = SemanticSymbolKind::function,
+        .name = identifier.name,
+        .kind = SemanticSymbolKind::function,
         .m_isConst = false,
         .m_hasConstantValue = false,
         .m_constantValue = 0,
@@ -1299,7 +1249,7 @@ bool SemanticAnalyzer::isGlobalScope() const
 }
 
 bool SemanticAnalyzer::defineSymbol(
-    const std::string& name, Ptr<Identifier> identifier_nn)
+    const std::string& name, Ref<Identifier> identifier_nn)
 {
     if (m_scopeStack.empty()) {
         pushScope();
@@ -1333,7 +1283,7 @@ void SemanticAnalyzer::recordDiagnostic(SemanticDiagnosticKind kind,
     int32_t offset, std::string message, SemanticDiagnosticSeverity severity)
 {
     m_diagnostics.push_back(SemanticDiagnostic {
-        .m_kind = kind,
+        .kind = kind,
         .m_offset = offset,
         .m_message = std::move(message),
         .m_severity = severity,

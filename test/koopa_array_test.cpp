@@ -78,7 +78,7 @@ const BasicBlock* requireBlockNameContains(
             return basicBlock;
         }
     }
-    fail("expected basic block name containing '" + infix + "'");
+    fail("expected basic body name containing '" + infix + "'");
 }
 
 const AllocValue* requireAllocByName(

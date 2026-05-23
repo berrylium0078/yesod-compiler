@@ -8,9 +8,9 @@ struct ParserUnaryTest : ParserTestBase {
         parseRoot("int plus(){return +42;}");
         require(
             evaluateExp(extractReturnStmt(
-                firstFuncDef()(ast()).m_block_nn(ast()).m_blockItems.front())(
+                firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn)
+                    .m_exp_nn.ref())
                 == 42,
             "unary plus should parse");
     }
@@ -19,9 +19,9 @@ struct ParserUnaryTest : ParserTestBase {
         parseRoot("int minus(){return -42;}");
         require(
             evaluateExp(extractReturnStmt(
-                firstFuncDef()(ast()).m_block_nn(ast()).m_blockItems.front())(
+                firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn)
+                    .m_exp_nn.ref())
                 == -42,
             "unary minus should parse");
     }
@@ -30,9 +30,9 @@ struct ParserUnaryTest : ParserTestBase {
         parseRoot("int bang(){return !0;}");
         require(
             evaluateExp(extractReturnStmt(
-                firstFuncDef()(ast()).m_block_nn(ast()).m_blockItems.front())(
+                firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn)
+                    .m_exp_nn.ref())
                 == 1,
             "logical not should parse");
     }
@@ -41,9 +41,9 @@ struct ParserUnaryTest : ParserTestBase {
         parseRoot("int nested(){return -(+42);}");
         require(
             evaluateExp(extractReturnStmt(
-                firstFuncDef()(ast()).m_block_nn(ast()).m_blockItems.front())(
+                firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn)
+                    .m_exp_nn.ref())
                 == -42,
             "nested unary expressions should parse recursively");
     }
@@ -56,11 +56,11 @@ struct ParserUnaryTest : ParserTestBase {
         parseRoot(source);
         const auto funcDef_nn = firstFuncDef();
         const auto returnStmt_nn = extractReturnStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems.front());
+            funcDef_nn(ast()).body(ast()).items.front());
 
-        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn) == -42,
+        require(evaluateExp(returnStmt_nn(ast()).m_exp_nn.ref()) == -42,
             "unary expression should parse across comments and whitespace");
-        require(requireUnaryExp(returnStmt_nn(ast()).m_exp_nn).m_op
+        require(requireUnaryExp(returnStmt_nn(ast()).m_exp_nn.ref()).op
                 == UnaryOpKeyword::minus,
             "unary root should preserve its operator after grouped parsing");
     }
@@ -69,13 +69,13 @@ struct ParserUnaryTest : ParserTestBase {
         parseSource("int main(){return -;}");
         require(!success(), "missing unary operand should fail");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::malformedReturnValue,
+            firstDiagnostic().kind == DiagnosticKind::malformedReturnValue,
             "missing unary operand should report the return-value diagnostic");
 
         parseSource("int main(){return (;}");
         require(!success(),
             "malformed parenthesized primary expression should fail");
-        require(firstDiagnostic().m_kind == DiagnosticKind::malformedPrimaryExp,
+        require(firstDiagnostic().kind == DiagnosticKind::malformedPrimaryExp,
             "malformed parenthesized expression should report the "
             "primary-expression diagnostic");
 
@@ -87,14 +87,14 @@ struct ParserUnaryTest : ParserTestBase {
             "missing ')' in primary expression should recover to the statement "
             "boundary and still build the root");
         require(
-            firstDiagnostic().m_kind == DiagnosticKind::missingPrimaryRParen,
+            firstDiagnostic().kind == DiagnosticKind::missingPrimaryRParen,
             "missing ')' in primary expression should report the "
             "primary-expression delimiter diagnostic");
         require(
             evaluateExp(extractReturnStmt(
-                firstFuncDef()(ast()).m_block_nn(ast()).m_blockItems.front())(
+                firstFuncDef()(ast()).body(ast()).items.front())(
                 ast())
-                    .m_exp_nn)
+                    .m_exp_nn.ref())
                 == 1,
             "missing ')' recovery should preserve the inner expression value");
     }

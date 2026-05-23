@@ -39,32 +39,6 @@ inline void bindCurrentAst(const AST& ast) { g_currentAst = &ast; }
     return *g_currentAst;
 }
 
-template <typename T> class HandleView {
-public:
-    HandleView() = default;
-    HandleView(Ptr<T> handle)
-        : m_handle(handle)
-    {
-    }
-
-    [[nodiscard]] operator Ptr<T>() const { return m_handle; }
-
-    [[nodiscard]] auto operator->() const { return &m_handle(currentAst()); }
-
-    [[nodiscard]] auto operator()(const AST& ast) const
-    {
-        return m_handle(ast);
-    }
-
-    [[nodiscard]] explicit operator bool() const
-    {
-        return static_cast<bool>(m_handle);
-    }
-
-private:
-    Ptr<T> m_handle;
-};
-
 template <typename Output> struct OutputAstBase {
     Output m_output;
 
@@ -92,11 +66,10 @@ struct AstTestHelperBase {
         auto compUnit_nn = self.root();
         require(compUnit_nn, "expected compilation unit node");
         const auto& compUnit = compUnit_nn(self.ast());
-        for (const auto topLevelItem_nn : compUnit.m_topLevelItems) {
-            const auto& topLevelItem = topLevelItem_nn(self.ast());
-            const auto funcDef_nn = MATCH(topLevelItem.m_topLevelItem) WITH(
-                [](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
-                [](const auto&) { return Ptr<FuncDef> { }; }, );
+        for (const auto topLevelItem : compUnit.topLevelItems) {
+            const auto funcDef_nn = MATCH(topLevelItem)
+                WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                    [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn) {
                 return funcDef_nn;
             }
@@ -106,9 +79,9 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] const Exp::Binary& requireBinaryExp(
-        this Self& self, const Ptr<Exp>& exp_nn)
+        this Self& self, const Ref<Exp>& exp_nn)
     {
-        const auto binaryExp = MATCH(exp_nn(self.ast()).m_kind)
+        const auto binaryExp = MATCH(exp_nn(self.ast()).kind)
             WITH([](const Exp::Binary& binaryExp) { return &binaryExp; },
                 [](const auto&) {
                     return static_cast<const Exp::Binary*>(nullptr);
@@ -119,9 +92,9 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] const Exp::Unary& requireUnaryExp(
-        this Self& self, const Ptr<Exp>& exp_nn)
+        this Self& self, const Ref<Exp>& exp_nn)
     {
-        const auto unaryExp = MATCH(exp_nn(self.ast()).m_kind)
+        const auto unaryExp = MATCH(exp_nn(self.ast()).kind)
             WITH([](const Exp::Unary& unaryExp) { return &unaryExp; },
                 [](const auto&) {
                     return static_cast<const Exp::Unary*>(nullptr);
@@ -132,9 +105,9 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] const LVal& requireLVal(
-        this Self& self, const Ptr<Exp>& exp_nn)
+        this Self& self, const Ref<Exp>& exp_nn)
     {
-        const auto lVal = MATCH(exp_nn(self.ast()).m_kind) WITH(
+        const auto lVal = MATCH(exp_nn(self.ast()).kind) WITH(
             [](const LVal& lVal) { return &lVal; },
             [](const auto&) { return static_cast<const LVal*>(nullptr); }, );
         require(lVal != nullptr, "expected lvalue expression");
@@ -143,9 +116,9 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] const Number& requireNumber(
-        this Self& self, const Ptr<Exp>& exp_nn)
+        this Self& self, const Ref<Exp>& exp_nn)
     {
-        const auto number = MATCH(exp_nn(self.ast()).m_kind) WITH(
+        const auto number = MATCH(exp_nn(self.ast()).kind) WITH(
             [](const Number& number) { return &number; },
             [](const auto&) { return static_cast<const Number*>(nullptr); }, );
         require(number != nullptr, "expected number expression");
@@ -153,65 +126,50 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<BlockItemNode> requireBlockItem(
-        this Self&, const Ptr<BlockItemNode>& node)
+    [[nodiscard]] Stmt extractStmtNode(
+        this Self& self, const BlockItem& blockItem)
     {
-        require(node, "expected block item node");
-        return node;
+        return MATCH(blockItem) WITH([](const Stmt& stmt) { return stmt; },
+            [](const auto&) -> Stmt {
+                fail("expected statement body item variant");
+                std::unreachable();
+            });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<StmtNode> extractStmtNode(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+    [[nodiscard]] Decl extractDeclNode(
+        this Self& self, const BlockItem& blockItem)
     {
-        auto& blockItem
-            = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
-        const auto stmtNode = MATCH(blockItem)
-            WITH([](const Ptr<StmtNode>& stmtNode) { return stmtNode; },
-                [](const auto&) { return Ptr<StmtNode> { }; }, );
-        require(stmtNode, "expected statement block item variant");
-        return stmtNode;
-    }
-
-    template <class Self>
-    [[nodiscard]] Ptr<DeclNode> extractDeclNode(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
-    {
-        auto& blockItem
-            = self.requireBlockItem(blockItemNode_nn)(self.ast()).m_blockItem;
-        const auto declNode = MATCH(blockItem)
-            WITH([](const Ptr<DeclNode>& declNode) { return declNode; },
-                [](const auto&) { return Ptr<DeclNode> { }; }, );
-        require(declNode, "expected declaration block item variant");
-        return declNode;
+        return MATCH(blockItem) WITH([](const Decl& decl) { return decl; },
+            [](const auto&) -> Decl {
+                fail("expected declaration body item variant");
+                std::unreachable();
+            });
     }
 
     template <class Self>
     [[nodiscard]] Ptr<ReturnStmt> extractReturnStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+        this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto returnStmt = MATCH(stmt) WITH(
-            [](const Ptr<ReturnStmt>& returnStmt) { return returnStmt; },
-            [](const auto&) { return Ptr<ReturnStmt> { }; }, );
+        const auto returnStmt = MATCH(stmt)
+            WITH([](const Ptr<ReturnStmt>& returnStmt) { return returnStmt; },
+                [](const auto&) { return Ptr<ReturnStmt> { }; }, );
         require(returnStmt, "expected return statement variant");
         return returnStmt;
     }
 
     template <class Self>
     [[nodiscard]] Ptr<ReturnStmt> extractReturnStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractReturnStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<IfStmt> extractIfStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+    [[nodiscard]] Ptr<IfStmt> extractIfStmt(this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto ifStmt = MATCH(stmt)
-            WITH([](const Ptr<IfStmt>& ifStmt) { return ifStmt; },
+        const auto ifStmt
+            = MATCH(stmt) WITH([](const Ptr<IfStmt>& ifStmt) { return ifStmt; },
                 [](const auto&) { return Ptr<IfStmt> { }; }, );
         require(ifStmt != nullptr, "expected if statement variant");
         return ifStmt;
@@ -219,16 +177,15 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] Ptr<IfStmt> extractIfStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractIfStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
     [[nodiscard]] Ptr<WhileStmt> extractWhileStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+        this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
         const auto whileStmt = MATCH(stmt)
             WITH([](const Ptr<WhileStmt>& whileStmt) { return whileStmt; },
                 [](const auto&) { return Ptr<WhileStmt> { }; }, );
@@ -238,16 +195,15 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] Ptr<WhileStmt> extractWhileStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractWhileStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
     [[nodiscard]] Ptr<BreakStmt> extractBreakStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+        this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
         const auto breakStmt = MATCH(stmt)
             WITH([](const Ptr<BreakStmt>& breakStmt) { return breakStmt; },
                 [](const auto&) { return Ptr<BreakStmt> { }; }, );
@@ -257,13 +213,10 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] Ptr<ContinueStmt> extractContinueStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+        this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
         const auto continueStmt = MATCH(stmt) WITH(
-            [](const Ptr<ContinueStmt>& continueStmt) {
-                return continueStmt;
-            },
+            [](const Ptr<ContinueStmt>& continueStmt) { return continueStmt; },
             [](const auto&) { return Ptr<ContinueStmt> { }; }, );
         require(continueStmt != nullptr, "expected continue statement variant");
         return continueStmt;
@@ -271,28 +224,25 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] Ptr<AssignStmt> extractAssignStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+        this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto assignStmt = MATCH(stmt) WITH(
-            [](const Ptr<AssignStmt>& assignStmt) { return assignStmt; },
-            [](const auto&) { return Ptr<AssignStmt> { }; }, );
+        const auto assignStmt = MATCH(stmt)
+            WITH([](const Ptr<AssignStmt>& assignStmt) { return assignStmt; },
+                [](const auto&) { return Ptr<AssignStmt> { }; }, );
         require(assignStmt != nullptr, "expected assignment statement variant");
         return assignStmt;
     }
 
     template <class Self>
     [[nodiscard]] Ptr<AssignStmt> extractAssignStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractAssignStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ExpStmt> extractExpStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+    [[nodiscard]] Ptr<ExpStmt> extractExpStmt(this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
         const auto expStmt = MATCH(stmt)
             WITH([](const Ptr<ExpStmt>& expStmt) { return expStmt; },
                 [](const auto&) { return Ptr<ExpStmt> { }; }, );
@@ -302,35 +252,32 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] Ptr<ExpStmt> extractExpStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractExpStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<Block> extractBlockStmt(
-        this Self& self, const Ptr<StmtNode>& stmtNode)
+    [[nodiscard]] Ptr<Block> extractBlockStmt(this Self& self, const Stmt& stmt)
     {
-        auto& stmt = stmtNode(self.ast()).m_stmt;
-        const auto block
-            = MATCH(stmt) WITH([](const Ptr<Block>& block) { return block; },
+        const auto body
+            = MATCH(stmt) WITH([](const Ptr<Block>& body) { return body; },
                 [](const auto&) { return Ptr<Block> { }; }, );
-        require(block != nullptr, "expected block statement variant");
-        return block;
+        require(body != nullptr, "expected body statement variant");
+        return body;
     }
 
     template <class Self>
     [[nodiscard]] Ptr<Block> extractBlockStmt(
-        this Self& self, const Ptr<BlockItemNode>& blockItemNode_nn)
+        this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractBlockStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
     [[nodiscard]] Ptr<ConstDecl> extractConstDecl(
-        this Self& self, const Ptr<DeclNode>& declNode_nn)
+        this Self& self, const Decl& decl)
     {
-        auto& decl = declNode_nn(self.ast()).m_decl;
         const auto constDecl = MATCH(decl)
             WITH([](const Ptr<ConstDecl>& constDecl) { return constDecl; },
                 [](const auto&) { return Ptr<ConstDecl> { }; }, );
@@ -339,10 +286,8 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<VarDecl> extractVarDecl(
-        this Self& self, const Ptr<DeclNode>& declNode_nn)
+    [[nodiscard]] Ptr<VarDecl> extractVarDecl(this Self& self, const Decl& decl)
     {
-        auto& decl = declNode_nn(self.ast()).m_decl;
         const auto varDecl = MATCH(decl)
             WITH([](const Ptr<VarDecl>& varDecl) { return varDecl; },
                 [](const auto&) { return Ptr<VarDecl> { }; }, );
@@ -351,10 +296,10 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
-    [[nodiscard]] int32_t evaluateExp(this Self& self, const Ptr<Exp>& exp)
+    [[nodiscard]] int32_t evaluateExp(this Self& self, const Ref<Exp>& exp)
     {
-        return MATCH(exp(self.ast()).m_kind)
-            WITH([](const Number& number) -> int32_t { return number.m_value; },
+        return MATCH(exp(self.ast()).kind)
+            WITH([](const Number& number) -> int32_t { return number.value; },
                 [](const LVal&) -> int32_t {
                     fail("cannot evaluate lvalue expression");
                 },
@@ -362,8 +307,8 @@ struct AstTestHelperBase {
                     fail("cannot evaluate call expression");
                 },
                 [&](const Exp::Unary& unary) -> int32_t {
-                    const auto value = self.evaluateExp(unary.m_lhs_nn);
-                    switch (unary.m_op) {
+                    const auto value = self.evaluateExp(unary.lhs);
+                    switch (unary.op) {
                     case UnaryOpKeyword::plus:
                         return value;
                     case UnaryOpKeyword::minus:
@@ -374,9 +319,9 @@ struct AstTestHelperBase {
                     fail("unexpected unary operator");
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
-                    const auto lhsValue = self.evaluateExp(binary.m_lhs_nn);
-                    const auto rhsValue = self.evaluateExp(binary.m_rhs_nn);
-                    switch (binary.m_op) {
+                    const auto lhsValue = self.evaluateExp(binary.lhs);
+                    const auto rhsValue = self.evaluateExp(binary.rhs);
+                    switch (binary.op) {
                     case BinaryOpKeyword::star:
                         return lhsValue * rhsValue;
                     case BinaryOpKeyword::slash:
@@ -409,46 +354,43 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<Exp> requireScalarConstInitExp(
+    [[nodiscard]] Ref<Exp> requireScalarConstInitExp(
         this Self& self, const Ptr<ConstInitVal>& initVal_nn)
     {
-        const auto exp_nn = MATCH(initVal_nn(self.ast()).m_kind)
-            WITH([](const Ptr<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Ptr<Exp> { }; }, );
-        require(
-            exp_nn != nullptr, "expected scalar const initializer expression");
-        return exp_nn;
+        return MATCH(initVal_nn(self.ast()).kind)
+            WITH([](const Ref<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) -> Ref<Exp> {
+                    fail("expected scalar const initializer expression");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<Exp> requireScalarInitExp(
+    [[nodiscard]] Ref<Exp> requireScalarInitExp(
         this Self& self, const Ptr<InitVal>& initVal_nn)
     {
-        const auto exp_nn = MATCH(initVal_nn(self.ast()).m_kind)
-            WITH([](const Ptr<Exp>& exp_nn) { return exp_nn; },
-                [](const auto&) { return Ptr<Exp> { }; }, );
-        require(exp_nn != nullptr, "expected scalar initializer expression");
-        return exp_nn;
+        return MATCH(initVal_nn(self.ast()).kind)
+            WITH([](const Ref<Exp>& exp_nn) { return exp_nn; },
+                [](const auto&) -> Ref<Exp> {
+                    fail("expected scalar initializer expression");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
     [[nodiscard]] const ConstInitVal::List& requireConstInitList(
         this Self& self, const Ptr<ConstInitVal>& initVal_nn)
     {
-        const auto list = MATCH(initVal_nn(self.ast()).m_kind)
+        return *MATCH(initVal_nn(self.ast()).kind)
             WITH([](const ConstInitVal::List& list) { return &list; },
-                [](const auto&) {
-                    return static_cast<const ConstInitVal::List*>(nullptr);
-                }, );
-        require(list != nullptr, "expected brace initializer list");
-        return *list;
+                [](const auto&) { fail("expected brace initializer list"); });
     }
 
     template <class Self>
     [[nodiscard]] const InitVal::List& requireInitList(
         this Self& self, const Ptr<InitVal>& initVal_nn)
     {
-        const auto list = MATCH(initVal_nn(self.ast()).m_kind)
+        const auto list = MATCH(initVal_nn(self.ast()).kind)
             WITH([](const InitVal::List& list) { return &list; },
                 [](const auto&) {
                     return static_cast<const InitVal::List*>(nullptr);
@@ -458,28 +400,27 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<DeclNode> requireTopLevelDecl(
-        this Self& self, const Ptr<TopLevelItemNode>& topLevelItemNode_nn)
+    [[nodiscard]] Decl requireTopLevelDecl(
+        this Self& self, const CompUnit::Item& topLevelItem)
     {
-        const auto declNode_nn
-            = MATCH(topLevelItemNode_nn(self.ast()).m_topLevelItem) WITH(
-                [](const Ptr<DeclNode>& declNode_nn) { return declNode_nn; },
-                [](const auto&) { return Ptr<DeclNode> { }; });
-        require(declNode_nn != nullptr, "expected top-level declaration");
-        return declNode_nn;
+        return MATCH(topLevelItem)
+            WITH([](const Decl& declNode) { return declNode; },
+                [](const auto&) -> Decl {
+                    fail("expected top-level declaration");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
     [[nodiscard]] Ptr<FuncDef> requireTopLevelFunc(
-        this Self& self, const Ptr<TopLevelItemNode>& topLevelItemNode_nn)
+        this Self& self, const CompUnit::Item& topLevelItem)
     {
-        const auto funcDef_nn
-            = MATCH(topLevelItemNode_nn(self.ast()).m_topLevelItem) WITH(
-                [](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
-                [](const auto&) { return Ptr<FuncDef> { }; }, );
-        require(
-            funcDef_nn != nullptr, "expected top-level function definition");
-        return funcDef_nn;
+        return MATCH(topLevelItem)
+            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                [](const auto&) {
+                    fail("expected top-level function definition");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
@@ -487,16 +428,12 @@ struct AstTestHelperBase {
         const Ptr<CompUnit>& compUnit_nn, const std::string& expectedName)
     {
         require(compUnit_nn != nullptr, "expected compilation unit node");
-        for (const auto topLevelItem_nn :
-            compUnit_nn(self.ast()).m_topLevelItems) {
-            const auto funcDef_nn
-                = MATCH(topLevelItem_nn(self.ast()).m_topLevelItem) WITH(
-                    [](const Ptr<FuncDef>& funcDef_nn) {
-                        return funcDef_nn;
-                    },
+        for (const auto topLevelItem : compUnit_nn(self.ast()).topLevelItems) {
+            const auto funcDef_nn = MATCH(topLevelItem)
+                WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
                     [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn != nullptr
-                && funcDef_nn(self.ast()).m_identifier_nn(self.ast()).m_name
+                && funcDef_nn(self.ast()).identifier(self.ast()).name
                     == expectedName) {
                 return funcDef_nn;
             }
@@ -506,9 +443,9 @@ struct AstTestHelperBase {
 
     template <class Self>
     [[nodiscard]] const Exp::Call& requireCallExp(
-        this Self& self, const Ptr<Exp>& exp_nn)
+        this Self& self, const Ref<Exp>& exp_nn)
     {
-        const auto callExp = MATCH(exp_nn(self.ast()).m_kind)
+        const auto callExp = MATCH(exp_nn(self.ast()).kind)
             WITH([](const Exp::Call& callExp) { return &callExp; },
                 [](const auto&) {
                     return static_cast<const Exp::Call*>(nullptr);
@@ -520,20 +457,15 @@ struct AstTestHelperBase {
 
 struct TestBase : AstTestHelperBase { };
 
-inline HandleView<FuncDef> firstFuncDef(const Ptr<CompUnit>& compUnit_nn)
+inline Ref<FuncDef> firstFuncDef(const Ptr<CompUnit>& compUnit_nn)
 {
     require(compUnit_nn != nullptr, "expected compilation unit node");
-    for (const auto topLevelItem_nn :
-        compUnit_nn(currentAst()).m_topLevelItems) {
-        const auto funcDef_nn
-            = MATCH(topLevelItem_nn(currentAst()).m_topLevelItem) WITH(
-                [](const Ptr<FuncDef>& funcDef_nn) {
-                    return HandleView<FuncDef>(funcDef_nn);
-                },
-                [](const auto&) { return HandleView<FuncDef> { }; }, );
-        if (funcDef_nn) {
-            return funcDef_nn;
-        }
+    for (const auto topLevelItem : compUnit_nn(currentAst()).topLevelItems) {
+        const auto funcDef = MATCH(topLevelItem)
+            WITH([](const Ptr<FuncDef>& funcDef_nn) { return funcDef_nn; },
+                [](const auto&) { return Ptr<FuncDef> { }; });
+        if (funcDef)
+            return funcDef.ref();
     }
     fail("expected at least one function definition in compilation unit");
 }

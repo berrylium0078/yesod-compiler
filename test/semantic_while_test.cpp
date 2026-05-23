@@ -13,15 +13,15 @@ struct SemanticWhileTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto outerWhile_nn = extractWhileStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[0]);
-        const auto outerBody_nn = extractBlockStmt(outerWhile_nn(ast()).m_bodyStmt_nn);
+            funcDef_nn(ast()).body(ast()).items[0]);
+        const auto outerBody_nn = extractBlockStmt(outerWhile_nn(ast()).body);
         const auto innerWhile_nn = extractWhileStmt(
-            outerBody_nn(ast()).m_blockItems[0]);
-        const auto innerBody_nn = extractBlockStmt(innerWhile_nn(ast()).m_bodyStmt_nn);
+            outerBody_nn(ast()).items[0]);
+        const auto innerBody_nn = extractBlockStmt(innerWhile_nn(ast()).body);
         const auto continueStmt_nn = extractContinueStmt(
-            extractStmtNode(innerBody_nn(ast()).m_blockItems[0]));
+            extractStmtNode(innerBody_nn(ast()).items[0]));
         const auto breakStmt_nn = extractBreakStmt(
-            extractStmtNode(outerBody_nn(ast()).m_blockItems[1]));
+            extractStmtNode(outerBody_nn(ast()).items[1]));
 
         const auto outerLoop = requireLoop(m_output, outerWhile_nn);
         const auto innerLoop = requireLoop(m_output, innerWhile_nn);
@@ -41,15 +41,15 @@ struct SemanticWhileTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto outerWhile_nn = extractWhileStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[0]);
-        const auto outerBody_nn = extractBlockStmt(outerWhile_nn(ast()).m_bodyStmt_nn);
+            funcDef_nn(ast()).body(ast()).items[0]);
+        const auto outerBody_nn = extractBlockStmt(outerWhile_nn(ast()).body);
         const auto innerWhile_nn = extractWhileStmt(
-            outerBody_nn(ast()).m_blockItems[0]);
-        const auto innerBody_nn = extractBlockStmt(innerWhile_nn(ast()).m_bodyStmt_nn);
+            outerBody_nn(ast()).items[0]);
+        const auto innerBody_nn = extractBlockStmt(innerWhile_nn(ast()).body);
         const auto breakStmt_nn = extractBreakStmt(
-            extractStmtNode(innerBody_nn(ast()).m_blockItems[0]));
+            extractStmtNode(innerBody_nn(ast()).items[0]));
         const auto continueStmt_nn = extractContinueStmt(
-            extractStmtNode(innerBody_nn(ast()).m_blockItems[1]));
+            extractStmtNode(innerBody_nn(ast()).items[1]));
 
         const auto innerLoop = requireLoop(m_output, innerWhile_nn);
         require(requireLoop(m_output, breakStmt_nn) == innerLoop,
@@ -68,10 +68,10 @@ struct SemanticWhileTest : SemanticTestBase {
 
         const auto funcDef_nn = firstFuncDef();
         const auto whileStmt_nn = extractWhileStmt(
-            funcDef_nn(ast()).m_block_nn(ast()).m_blockItems[0]);
-        const auto ifStmt_nn = extractIfStmt(whileStmt_nn(ast()).m_bodyStmt_nn);
-        const auto breakStmt_nn = extractBreakStmt(ifStmt_nn(ast()).m_thenStmt_nn);
-        const auto continueStmt_nn = extractContinueStmt(ifStmt_nn(ast()).m_elseStmt_nn);
+            funcDef_nn(ast()).body(ast()).items[0]);
+        const auto ifStmt_nn = extractIfStmt(whileStmt_nn(ast()).body);
+        const auto breakStmt_nn = extractBreakStmt(ifStmt_nn(ast()).thenBody);
+        const auto continueStmt_nn = extractContinueStmt(ifStmt_nn(ast()).elseBody);
 
         const auto whileLoop = requireLoop(m_output, whileStmt_nn);
         require(requireLoop(m_output, breakStmt_nn) == whileLoop,
@@ -85,7 +85,7 @@ struct SemanticWhileTest : SemanticTestBase {
         m_output = analyzeSource("int main(){break; return 0;}");
         require(!success(),
             "break outside while should report a semantic error");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::breakOutsideWhile,
             "break outside while should use the dedicated semantic diagnostic");
     }
@@ -95,7 +95,7 @@ struct SemanticWhileTest : SemanticTestBase {
         m_output = analyzeSource("int main(){continue; return 0;}");
         require(!success(),
             "continue outside while should report a semantic error");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::continueOutsideWhile,
             "continue outside while should use the dedicated semantic diagnostic");
     }

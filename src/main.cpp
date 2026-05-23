@@ -30,7 +30,7 @@ std::string readTextFile(const std::string& path)
 struct DiagInfo {
     std::size_t m_offset;
     std::string m_message;
-    std::string m_kind; // "parse" or "semantic"
+    std::string kind; // "parse" or "semantic"
 };
 
 static std::vector<std::size_t> buildLineStarts(const std::string& src)
@@ -71,7 +71,7 @@ static void printDiagnosticsAggregate(const std::string& inputPath,
         }
         const std::size_t col = offset - lineStarts[line] + 1;
 
-        std::cerr << d.m_kind << " error at " << inputPath << ":"
+        std::cerr << d.kind << " error at " << inputPath << ":"
                   << (line + 1) << ":" << col << " (offset " << offset << "): "
                   << d.m_message << std::endl;
 

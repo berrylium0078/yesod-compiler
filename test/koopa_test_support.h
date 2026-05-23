@@ -16,20 +16,15 @@
 
 namespace yesod::test_support::koopa {
 
-using yesod::frontend::CompUnit;
-using yesod::frontend::Ptr;
-using yesod::frontend::ParseOutput;
-using yesod::frontend::Parser;
-using yesod::frontend::SemanticAnalyzer;
 using namespace yesod::koopa;
+namespace ast = yesod::frontend;
 
 using yesod::test_support::TestBase;
 using yesod::test_support::OutputAstBase;
 using yesod::test_support::fail;
 using yesod::test_support::require;
 
-static_assert(std::is_same_v<decltype(std::declval<CompUnit>().m_topLevelItems),
-    std::vector<Ptr<yesod::frontend::TopLevelItemNode>>>);
+using TopLevelItem = decltype(CompUnit::topLevelItems.front());
 
 struct KoopaTestBase : OutputAstBase<ParseOutput>, TestBase {
     template <class Self> auto&& ast(this Self& self)
@@ -135,31 +130,31 @@ inline const AggregateValue* requireAggregate(
 inline const BasicBlock* requireEntryBlock(const Function& function)
 {
     require(function.getNumBBs() >= 2,
-        "expected entry block plus synthesized guard end block");
+        "expected entry body plus synthesized guard end body");
     const auto* basicBlock = function.getBB(0);
     require(
-        basicBlock->isEntry(), "first basic block should be the entry block");
+        basicBlock->isEntry(), "first basic body should be the entry body");
     require(basicBlock->getName() == "%entry",
-        "entry block should use the documented label");
+        "entry body should use the documented label");
     return basicBlock;
 }
 
 inline const BasicBlock* requireEndBlock(const Function& function)
 {
     require(function.getNumBBs() >= 2,
-        "expected entry block plus synthesized guard end block");
+        "expected entry body plus synthesized guard end body");
     const auto* basicBlock = function.getBB(function.getNumBBs() - 1);
     require(!basicBlock->isEntry(),
-        "guard end block should not be the entry block");
+        "guard end body should not be the entry body");
     require(basicBlock->getName() == "%end",
-        "guard end block should use the documented label");
+        "guard end body should use the documented label");
     return basicBlock;
 }
 
 inline const BasicBlock* requireBlock(const Function& function, size_t index)
 {
     require(index < function.getNumBBs(),
-        "expected basic block at requested index");
+        "expected basic body at requested index");
     return function.getBB(index);
 }
 
@@ -257,9 +252,9 @@ inline const JumpValue* requireJump(
     const auto* jumpValue = dynamic_cast<const JumpValue*>(value);
     require(jumpValue != nullptr, "expected jump instruction cast");
     require(jumpValue->getTargetBB() == expectedTarget,
-        "jump instruction should target the expected basic block");
+        "jump instruction should target the expected basic body");
     require(jumpValue->getNumArgs() == 0,
-        "current subset should not emit block arguments on jumps");
+        "current subset should not emit body arguments on jumps");
     return jumpValue;
 }
 
@@ -271,13 +266,13 @@ inline const BranchValue* requireBranch(const Value* value,
     const auto* branchValue = dynamic_cast<const BranchValue*>(value);
     require(branchValue != nullptr, "expected branch instruction cast");
     require(branchValue->getTrueBB() == expectedTrueTarget,
-        "branch instruction should target the expected true basic block");
+        "branch instruction should target the expected true basic body");
     require(branchValue->getFalseBB() == expectedFalseTarget,
-        "branch instruction should target the expected false basic block");
+        "branch instruction should target the expected false basic body");
     require(branchValue->getNumTrueArgs() == 0,
-        "current subset should not emit block arguments on true branches");
+        "current subset should not emit body arguments on true branches");
     require(branchValue->getNumFalseArgs() == 0,
-        "current subset should not emit block arguments on false branches");
+        "current subset should not emit body arguments on false branches");
     return branchValue;
 }
 

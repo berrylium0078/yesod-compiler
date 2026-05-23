@@ -18,38 +18,30 @@ namespace yesod::test_support::parser {
 using namespace yesod::frontend;
 
 static_assert(
-    std::is_same_v<decltype(std::declval<Identifier>().m_name), std::string>);
-static_assert(
-    std::is_same_v<decltype(std::declval<Number>().m_value), int32_t>);
+    std::is_same_v<decltype(std::declval<Identifier>().name), std::string>);
+static_assert(std::is_same_v<decltype(std::declval<Number>().value), int32_t>);
 static_assert(std::is_same_v<decltype(std::declval<FuncDef>().m_funcType),
     FuncTypeKeyword>);
 static_assert(
-    std::is_same_v<decltype(std::declval<ConstDecl>().m_bType), BTypeKeyword>);
+    std::is_same_v<decltype(std::declval<ConstDecl>().bType), BTypeKeyword>);
 static_assert(
     std::is_same_v<decltype(std::declval<ReturnStmt>().m_exp_nn), Ptr<Exp>>);
-static_assert(std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn),
-    Ptr<Exp>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<AssignStmt>().m_lVal_nn), Ref<Exp>>);
 static_assert(
     std::is_same_v<decltype(std::declval<ExpStmt>().m_exp_nn), Ptr<Exp>>);
 static_assert(
-    std::is_same_v<decltype(std::declval<IfStmt>().m_condExp_nn), Ptr<Exp>>);
-static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_thenStmt_nn),
-    Ptr<StmtNode>>);
-static_assert(std::is_same_v<decltype(std::declval<IfStmt>().m_elseStmt_nn),
-    Ptr<StmtNode>>);
-static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_condExp_nn),
-    Ptr<Exp>>);
-static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().m_bodyStmt_nn),
-    Ptr<StmtNode>>);
+    std::is_same_v<decltype(std::declval<IfStmt>().condition), Ref<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<IfStmt>().thenBody), Stmt>);
+static_assert(std::is_same_v<decltype(std::declval<IfStmt>().elseBody), Stmt>);
+static_assert(
+    std::is_same_v<decltype(std::declval<WhileStmt>().condition), Ref<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<WhileStmt>().body), Stmt>);
 static_assert(std::is_enum_v<UnaryOpKeyword>);
 static_assert(std::is_enum_v<BinaryOpKeyword>);
-static_assert(
-    std::variant_size_v<decltype(std::declval<DeclNode>().m_decl)> == 2);
-static_assert(
-    std::variant_size_v<decltype(std::declval<StmtNode>().m_stmt)> == 8);
-static_assert(
-    std::variant_size_v<decltype(std::declval<BlockItemNode>().m_blockItem)>
-    == 2);
+static_assert(std::variant_size_v<Decl> == 2);
+static_assert(std::variant_size_v<Stmt> == 8);
+static_assert(std::variant_size_v<BlockItem> == 2);
 static_assert(std::variant_size_v<Exp::Kind> == 5);
 
 [[noreturn]] void fail(const std::string& message)
@@ -101,168 +93,143 @@ public:
     {
         auto compUnit_nn = root();
         require(compUnit_nn, "expected compilation unit node");
-        for (const auto topLevelItem_nn : compUnit_nn(ast()).m_topLevelItems) {
-            auto funcDef = std::get_if<Ptr<FuncDef>>(
-                &topLevelItem_nn(ast()).m_topLevelItem);
+        for (const auto topLevelItem : compUnit_nn(ast()).topLevelItems) {
+            auto funcDef = std::get_if<Ptr<FuncDef>>(&topLevelItem);
             if (funcDef)
                 return *funcDef;
         }
         fail("expected at least one function definition in compilation unit");
     }
 
-    const Exp::Binary& requireBinaryExp(const Ptr<Exp>& exp_nn)
+    const Exp::Binary& requireBinaryExp(const Ref<Exp>& exp_nn)
     {
-        const auto* binaryExp = std::get_if<Exp::Binary>(&exp_nn(ast()).m_kind);
+        const auto* binaryExp = std::get_if<Exp::Binary>(&exp_nn(ast()).kind);
         require(binaryExp != nullptr, "expected binary expression root");
         return *binaryExp;
     }
-    const Exp::Unary& requireUnaryExp(const Ptr<Exp>& exp_nn)
+    const Exp::Unary& requireUnaryExp(const Ref<Exp>& exp_nn)
     {
-        const auto* unaryExp = std::get_if<Exp::Unary>(&exp_nn(ast()).m_kind);
+        const auto* unaryExp = std::get_if<Exp::Unary>(&exp_nn(ast()).kind);
         require(unaryExp != nullptr, "expected unary expression root");
         return *unaryExp;
     }
-    const LVal& requireLVal(const Ptr<Exp>& exp_nn)
+    const LVal& requireLVal(const Ref<Exp>& exp_nn)
     {
-        const auto* lVal = std::get_if<LVal>(&exp_nn(ast()).m_kind);
+        const auto* lVal = std::get_if<LVal>(&exp_nn(ast()).kind);
         require(lVal != nullptr, "expected lvalue expression");
         return *lVal;
     }
-    const Number& requireNumber(const Ptr<Exp>& exp_nn)
+    const Number& requireNumber(const Ref<Exp>& exp_nn)
     {
-        const auto* number = std::get_if<Number>(&exp_nn(ast()).m_kind);
+        const auto* number = std::get_if<Number>(&exp_nn(ast()).kind);
         require(number != nullptr, "expected number expression");
         return *number;
     }
-    Ptr<BlockItemNode> requireBlockItem(const Ptr<BlockItemNode>& node)
+    Stmt extractStmtNode(const BlockItem& blockItem)
     {
-        require(node, "expected block item node");
-        return node;
-    }
-    Ptr<StmtNode> extractStmtNode(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
-    {
-        auto& blockItem = requireBlockItem(blockItemNode_nn)(ast()).m_blockItem;
-        auto* stmtNode = std::get_if<Ptr<StmtNode>>(&blockItem);
-        require(stmtNode, "expected statement block item variant");
+        auto* stmtNode = std::get_if<Stmt>(&blockItem);
+        require(stmtNode, "expected statement body item variant");
         return *stmtNode;
     }
 
-    Ptr<DeclNode> extractDeclNode(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Decl extractDeclNode(const BlockItem& blockItem)
     {
-        auto& blockItem = requireBlockItem(blockItemNode_nn)(ast()).m_blockItem;
-        auto* declNode = std::get_if<Ptr<DeclNode>>(&blockItem);
-        require(declNode, "expected declaration block item variant");
+        auto* declNode = std::get_if<Decl>(&blockItem);
+        require(declNode, "expected declaration body item variant");
         return *declNode;
     }
 
-    Ptr<ReturnStmt> extractReturnStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<ReturnStmt> extractReturnStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* returnStmt = std::get_if<Ptr<ReturnStmt>>(&stmt);
         require(returnStmt, "expected return statement variant");
-        return *returnStmt;
+        return returnStmt->ref();
     }
-    Ptr<ReturnStmt> extractReturnStmt(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<ReturnStmt> extractReturnStmt(const BlockItem& blockItemNode_nn)
     {
         return extractReturnStmt(extractStmtNode(blockItemNode_nn));
     }
-    Ptr<IfStmt> extractIfStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<IfStmt> extractIfStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* ifStmt = std::get_if<Ptr<IfStmt>>(&stmt);
         require(ifStmt != nullptr, "expected if statement variant");
-        return *ifStmt;
+        return ifStmt->ref();
     }
-    Ptr<IfStmt> extractIfStmt(const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<IfStmt> extractIfStmt(const BlockItem& blockItem)
     {
-        return extractIfStmt(extractStmtNode(blockItemNode_nn));
+        return extractIfStmt(extractStmtNode(blockItem));
     }
-    Ptr<WhileStmt> extractWhileStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<WhileStmt> extractWhileStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* whileStmt = std::get_if<Ptr<WhileStmt>>(&stmt);
         require(whileStmt != nullptr, "expected while statement variant");
-        return *whileStmt;
+        return whileStmt->ref();
     }
-    Ptr<WhileStmt> extractWhileStmt(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<WhileStmt> extractWhileStmt(const BlockItem& blockItem)
     {
-        return extractWhileStmt(extractStmtNode(blockItemNode_nn));
+        return extractWhileStmt(extractStmtNode(blockItem));
     }
-    Ptr<BreakStmt> extractBreakStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<BreakStmt> extractBreakStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* breakStmt = std::get_if<Ptr<BreakStmt>>(&stmt);
         require(breakStmt != nullptr, "expected break statement variant");
-        return *breakStmt;
+        return breakStmt->ref();
     }
-    Ptr<ContinueStmt> extractContinueStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<ContinueStmt> extractContinueStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* continueStmt = std::get_if<Ptr<ContinueStmt>>(&stmt);
         require(continueStmt != nullptr, "expected continue statement variant");
-        return *continueStmt;
+        return continueStmt->ref();
     }
-    Ptr<AssignStmt> extractAssignStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<AssignStmt> extractAssignStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* assignStmt = std::get_if<Ptr<AssignStmt>>(&stmt);
         require(assignStmt != nullptr, "expected assignment statement variant");
-        return *assignStmt;
+        return assignStmt->ref();
     }
-    Ptr<AssignStmt> extractAssignStmt(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<AssignStmt> extractAssignStmt(const BlockItem& blockItem)
     {
-        return extractAssignStmt(extractStmtNode(blockItemNode_nn));
+        return extractAssignStmt(extractStmtNode(blockItem));
     }
-    Ptr<ExpStmt> extractExpStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<ExpStmt> extractExpStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
         auto* expStmt = std::get_if<Ptr<ExpStmt>>(&stmt);
         require(expStmt != nullptr, "expected expression statement variant");
-        return *expStmt;
+        return expStmt->ref();
     }
-    Ptr<ExpStmt> extractExpStmt(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<ExpStmt> extractExpStmt(const BlockItem& blockItemNode_nn)
     {
         return extractExpStmt(extractStmtNode(blockItemNode_nn));
     }
-    Ptr<Block> extractBlockStmt(const Ptr<StmtNode>& stmtNode)
+    Ref<Block> extractBlockStmt(const Stmt& stmt)
     {
-        auto& stmt = stmtNode(ast()).m_stmt;
-        auto* block = std::get_if<Ptr<Block>>(&stmt);
-        require(block != nullptr, "expected block statement variant");
-        return *block;
+        auto* body = std::get_if<Ptr<Block>>(&stmt);
+        require(body != nullptr, "expected body statement variant");
+        return body->ref();
     }
-    Ptr<Block> extractBlockStmt(
-        const Ptr<BlockItemNode>& blockItemNode_nn)
+    Ref<Block> extractBlockStmt(const BlockItem& blockItem)
     {
-        return extractBlockStmt(extractStmtNode(blockItemNode_nn));
+        return extractBlockStmt(extractStmtNode(blockItem));
     }
 
-    Ptr<ConstDecl> extractConstDecl(const Ptr<DeclNode>& declNode_nn)
+    Ref<ConstDecl> extractConstDecl(const Decl& decl)
     {
-        auto& decl = declNode_nn(ast()).m_decl;
         auto* constDecl = std::get_if<Ptr<ConstDecl>>(&decl);
         require(constDecl, "expected const declaration variant");
-        return *constDecl;
+        return constDecl->ref();
     }
 
-    Ptr<VarDecl> extractVarDecl(const Ptr<DeclNode>& declNode_nn)
+    Ref<VarDecl> extractVarDecl(const Decl& decl)
     {
-        auto& decl = declNode_nn(ast()).m_decl;
         auto* varDecl = std::get_if<Ptr<VarDecl>>(&decl);
         require(varDecl, "expected var declaration variant");
-        return *varDecl;
+        return varDecl->ref();
     }
 
-    int32_t evaluateExp(Ptr<Exp> exp)
+    int32_t evaluateExp(Ref<Exp> exp)
     {
-        return MATCH(exp(ast()).m_kind)
-            WITH([](const Number& number) -> int32_t { return number.m_value; },
+        return MATCH(exp(ast()).kind)
+            WITH([](const Number& number) -> int32_t { return number.value; },
                 [](const LVal& lval) -> int32_t {
                     fail("cannot evaluate lvalue expression");
                 },
@@ -270,8 +237,8 @@ public:
                     fail("cannot evaluate call expression");
                 },
                 [&](const Exp::Unary& unary) -> int32_t {
-                    const auto value = evaluateExp(unary.m_lhs_nn);
-                    switch (unary.m_op) {
+                    const auto value = evaluateExp(unary.lhs);
+                    switch (unary.op) {
                     case UnaryOpKeyword::plus:
                         return value;
                     case UnaryOpKeyword::minus:
@@ -282,9 +249,9 @@ public:
                     fail("unexpected unary operator");
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
-                    const auto lhsValue = evaluateExp(binary.m_lhs_nn);
-                    const auto rhsValue = evaluateExp(binary.m_rhs_nn);
-                    switch (binary.m_op) {
+                    const auto lhsValue = evaluateExp(binary.lhs);
+                    const auto rhsValue = evaluateExp(binary.rhs);
+                    switch (binary.op) {
                     case BinaryOpKeyword::star:
                         return lhsValue * rhsValue;
                     case BinaryOpKeyword::slash:

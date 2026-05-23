@@ -12,13 +12,13 @@ struct SemanticSymbolTest : SemanticTestBase {
         require(success(), "expected semantic success");
 
         const auto funcDef_nn = firstFuncDef();
-        const auto& blockItems = funcDef_nn(ast()).m_block_nn(ast()).m_blockItems;
+        const auto& blockItems = funcDef_nn(ast()).body(ast()).items;
         const auto varDecl_nn = extractVarDecl(extractDeclNode(blockItems[0]));
         const auto assignStmt_nn = extractAssignStmt(extractStmtNode(blockItems[1]));
         const auto expStmt_nn = extractExpStmt(extractStmtNode(blockItems[2]));
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(blockItems[3]));
 
-        const auto& defSymbol = requireSymbol(m_output, varDecl_nn(ast()).m_varDefs[0]);
+        const auto& defSymbol = requireSymbol(m_output, varDecl_nn(ast()).varDef[0]);
         require(requireSymbol(m_output, assignStmt_nn(ast()).m_lVal_nn).m_id
                 == defSymbol.m_id,
             "assignment lvalue should resolve to the declaration symbol");
@@ -37,20 +37,20 @@ struct SemanticSymbolTest : SemanticTestBase {
         require(success(), "expected semantic success");
 
         const auto funcDef_nn = firstFuncDef();
-        const auto& outerItems = funcDef_nn(ast()).m_block_nn(ast()).m_blockItems;
+        const auto& outerItems = funcDef_nn(ast()).body(ast()).items;
         const auto outerDecl_nn = extractVarDecl(extractDeclNode(outerItems[0]));
         const auto nestedBlock_nn = extractBlockStmt(extractStmtNode(outerItems[1]));
         const auto outerReturn_nn = extractReturnStmt(extractStmtNode(outerItems[2]));
 
         const auto innerDecl_nn = extractVarDecl(
-            extractDeclNode(nestedBlock_nn(ast()).m_blockItems[0]));
+            extractDeclNode(nestedBlock_nn(ast()).items[0]));
         const auto innerExpStmt_nn = extractExpStmt(
-            extractStmtNode(nestedBlock_nn(ast()).m_blockItems[1]));
+            extractStmtNode(nestedBlock_nn(ast()).items[1]));
         const auto innerReturn_nn = extractReturnStmt(
-            extractStmtNode(nestedBlock_nn(ast()).m_blockItems[2]));
+            extractStmtNode(nestedBlock_nn(ast()).items[2]));
 
-        const auto& outerSymbol = requireSymbol(m_output, outerDecl_nn(ast()).m_varDefs[0]);
-        const auto& innerSymbol = requireSymbol(m_output, innerDecl_nn(ast()).m_varDefs[0]);
+        const auto& outerSymbol = requireSymbol(m_output, outerDecl_nn(ast()).varDef[0]);
+        const auto& innerSymbol = requireSymbol(m_output, innerDecl_nn(ast()).varDef[0]);
         require(innerSymbol.m_id != outerSymbol.m_id,
             "shadowing declarations should create distinct symbol identities");
 
@@ -70,7 +70,7 @@ struct SemanticSymbolTest : SemanticTestBase {
         m_output = analyzeSource("int main(){value = 1; return 0;}");
         require(!success(),
             "use-before-definition should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::useBeforeDefinition,
             "use-before-definition should report the expected semantic label");
     }
@@ -79,7 +79,7 @@ struct SemanticSymbolTest : SemanticTestBase {
     {
         m_output = analyzeSource("int main(){int value; int value; return 0;}");
         require(!success(), "double definition should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::doubleDefinition,
             "double definition should report the expected semantic label");
     }

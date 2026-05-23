@@ -14,20 +14,20 @@ struct SemanticFunctionTest : SemanticTestBase {
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto returnStmt_nn = extractReturnStmt(
-            mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[1]);
-        const auto& callExp = requireCallExp(returnStmt_nn(ast()).m_exp_nn);
+            mainFunc_nn(ast()).body(ast()).items[1]);
+        const auto& callExp = requireCallExp(returnStmt_nn(ast()).m_exp_nn.ref());
 
-        require(callExp.m_params.size() == 2,
+        require(callExp.params.size() == 2,
             "call expression should preserve both arguments");
-        require(requireSymbol(m_output, callExp.m_func_nn).m_kind
+        require(requireSymbol(m_output, callExp.funcName).kind
                 == ast::SemanticSymbolKind::function,
             "call callee should bind to a function symbol");
-        require(requireExpValueKind(m_output, returnStmt_nn(ast()).m_exp_nn)
+        require(requireExpValueKind(m_output, returnStmt_nn(ast()).m_exp_nn.ref())
                 == ExpType::integer,
             "int-returning call should produce an integer expression type");
-        require(requireConstantValue(m_output, callExp.m_params[0]) == 4,
+        require(requireConstantValue(m_output, callExp.params[0]) == 4,
             "global const arguments should preserve their folded constant value");
-        require(requireSymbol(m_output, callExp.m_params[1]).m_name == "counter",
+        require(requireSymbol(m_output, callExp.params[1]).name == "counter",
             "global variable arguments should resolve through global scope");
     }
 
@@ -38,8 +38,8 @@ struct SemanticFunctionTest : SemanticTestBase {
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
         const auto expStmt_nn = extractExpStmt(
-            mainFunc_nn(ast()).m_block_nn(ast()).m_blockItems[0]);
-        require(requireExpValueKind(m_output, expStmt_nn(ast()).m_exp_nn)
+            mainFunc_nn(ast()).body(ast()).items[0]);
+        require(requireExpValueKind(m_output, expStmt_nn(ast()).m_exp_nn.ref())
                 == ExpType::voidType,
             "void-returning calls should preserve a void expression type");
     }
@@ -49,7 +49,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         m_output = analyzeSource(
             "int add(int lhs){return lhs;} int main(){return add(1, 2);}");
         require(!success(), "wrong-arity call should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::callArityMismatch,
             "wrong-arity call should report the expected semantic label");
     }
@@ -58,7 +58,7 @@ struct SemanticFunctionTest : SemanticTestBase {
     {
         m_output = analyzeSource("int value = 1; int main(){return value();}");
         require(!success(), "calling a variable should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::invalidCallTarget,
             "calling a variable should report an invalid-call-target diagnostic");
     }
@@ -69,7 +69,7 @@ struct SemanticFunctionTest : SemanticTestBase {
             "int add(int lhs){return lhs;} int value = add(1); int main(){return value;}");
         require(!success(),
             "non-constant global initializer should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::nonConstantGlobalInitializer,
             "non-constant global initializer should report the expected semantic label");
     }
@@ -79,14 +79,14 @@ struct SemanticFunctionTest : SemanticTestBase {
         m_output = analyzeSource("void noop(){return 1;} int main(){return 0;}");
         require(!success(),
             "void function returning a value should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::returnTypeMismatch,
             "void function returning a value should report return type mismatch");
 
         m_output = analyzeSource("int main(){return;}\n");
         require(!success(),
             "int function returning no value should fail semantic analysis");
-        require(firstDiagnostic().m_kind
+        require(firstDiagnostic().kind
                 == SemanticDiagnosticKind::returnTypeMismatch,
             "missing int return value should report return type mismatch");
     }
