@@ -140,17 +140,16 @@ public:
             "missing semicolon should recover to the block boundary and still "
             "build the root");
         require(
-            firstDiagnostic().kind == DiagnosticKind::missingSemicolon,
+            isDiagnostic<MissingSemicolonDiagnostic>(firstDiagnostic()),
             "missing semicolon should report the PEG recovery label");
-        require(firstDiagnostic().m_offset == 19,
+        require(firstDiagnostic().offset == 19,
             "missing semicolon should diagnose at the statement boundary "
             "before "
             "the closing brace");
 
         parseSource("int main(){return 0x;}");
         require(!success(), "malformed hexadecimal literal should fail");
-        require(firstDiagnostic().kind
-                == DiagnosticKind::malformedReturnValue,
+        require(isDiagnostic<MalformedReturnValueDiagnostic>(firstDiagnostic()),
             "malformed hexadecimal literal should report the committed "
             "malformed-return diagnostic");
 
@@ -160,7 +159,7 @@ public:
         require(root() != nullptr,
             "missing closing brace should recover at EOF and still build the "
             "root");
-        require(firstDiagnostic().kind == DiagnosticKind::missingRBrace,
+        require(isDiagnostic<MissingRBraceDiagnostic>(firstDiagnostic()),
             "missing closing brace should report the PEG recovery label");
 
         parseSource("int main( {return 1;}");
@@ -170,13 +169,13 @@ public:
             "missing ')' should recover before the block and still build the "
             "root");
         require(
-            firstDiagnostic().kind == DiagnosticKind::missingFuncRParen,
+            isDiagnostic<MissingFuncRParenDiagnostic>(firstDiagnostic()),
             "missing ')' should report the PEG recovery label");
 
         parseSource("int main(){nope}");
         require(!success(), "malformed statement head should fail");
         require(
-            firstDiagnostic().kind == DiagnosticKind::missingSemicolon,
+            isDiagnostic<MissingSemicolonDiagnostic>(firstDiagnostic()),
             "bare identifier statement should now report the "
             "expression-statement "
             "semicolon label");
@@ -191,7 +190,7 @@ public:
 
         parseSource("int main(){return 1;} trailing");
         require(!success(), "trailing input should fail");
-        require(firstDiagnostic().kind == DiagnosticKind::trailingInput,
+        require(isDiagnostic<TrailingInputDiagnostic>(firstDiagnostic()),
             "trailing input should produce a trailing-input diagnostic");
     }
 
@@ -200,7 +199,7 @@ public:
         parseSource("int main(){return 2147483648;}");
         require(!success(), "out-of-range integer should fail");
         require(
-            firstDiagnostic().kind == DiagnosticKind::integerOutOfRange,
+            isDiagnostic<IntegerOutOfRangeDiagnostic>(firstDiagnostic()),
             "out-of-range integer should report range overflow");
     }
 };

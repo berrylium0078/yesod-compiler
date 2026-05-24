@@ -11,38 +11,24 @@
 #include <unordered_set>
 #include <vector>
 
+#include "frontend/ast.h"
 #include "utils.h"
-#include "frontend/ast.h"
-#include "frontend/ast.h"
 
 namespace yesod::frontend {
 
-enum class SemanticDiagnosticKind {
-    useBeforeDefinition,
-    doubleDefinition,
-    nonConstantConstInitializer,
-    nonConstantGlobalInitializer,
-    excessInitializerElements,
-    assignToConst,
-    breakOutsideWhile,
-    continueOutsideWhile,
-    invalidCallTarget,
-    callArityMismatch,
-    typeMismatch,
-    returnTypeMismatch,
-};
-
-enum class SemanticDiagnosticSeverity {
-    error,
-    warning,
-};
-
-struct SemanticDiagnostic {
-    SemanticDiagnosticKind kind;
-    int32_t m_offset;
-    std::string m_message;
-    SemanticDiagnosticSeverity m_severity = SemanticDiagnosticSeverity::error;
-};
+using SemanticDiagnosticSeverity = yesod::DiagnosticSeverity;
+YESOD_DECLARE_DIAGNOSTIC(UseBeforeDefinitionDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(DoubleDefinitionDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(NonConstantConstInitializerDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(NonConstantGlobalInitializerDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(ExcessInitializerElementsDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(AssignToConstDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(BreakOutsideWhileDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(ContinueOutsideWhileDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(InvalidCallTargetDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(CallArityMismatchDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(TypeMismatchDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(ReturnTypeMismatchDiagnostic)
 
 enum class ExpType {
     integer,
@@ -64,10 +50,7 @@ struct SemanticType {
     int32_t m_arrayLength = 0;
     std::shared_ptr<SemanticType> m_elementType;
 
-    [[nodiscard]] static SemanticType makeInteger()
-    {
-        return SemanticType { };
-    }
+    [[nodiscard]] static SemanticType makeInteger() { return SemanticType { }; }
 
     [[nodiscard]] static SemanticType makeBoolean()
     {
@@ -192,8 +175,7 @@ struct SemanticInfo {
     std::unordered_map<Ref<Identifier>, SemanticSymbol> m_symbolByIdentifier;
     std::unordered_map<Ref<Exp>, SemanticExpInfo> m_expInfoByExp;
     std::unordered_map<Ref<BreakStmt>, Ref<WhileStmt>> m_loopByBreakStmt;
-    std::unordered_map<Ref<ContinueStmt>, Ref<WhileStmt>>
-        m_loopByContinueStmt;
+    std::unordered_map<Ref<ContinueStmt>, Ref<WhileStmt>> m_loopByContinueStmt;
 
     [[nodiscard]] const SemanticSymbol* findSymbol(
         Ref<Identifier> identifier) const
@@ -205,8 +187,7 @@ struct SemanticInfo {
         return &symbolIt->second;
     }
 
-    [[nodiscard]] std::optional<ExpType> findExpValueKind(
-        Ref<Exp> node) const
+    [[nodiscard]] std::optional<ExpType> findExpValueKind(Ref<Exp> node) const
     {
         const auto infoIt = m_expInfoByExp.find(node);
         if (infoIt == m_expInfoByExp.end()) {
@@ -215,8 +196,7 @@ struct SemanticInfo {
         return infoIt->second.m_type;
     }
 
-    [[nodiscard]] std::optional<int32_t> findConstantValue(
-        Ref<Exp> node) const
+    [[nodiscard]] std::optional<int32_t> findConstantValue(Ref<Exp> node) const
     {
         const auto infoIt = m_expInfoByExp.find(node);
         if (infoIt == m_expInfoByExp.end()
@@ -226,8 +206,7 @@ struct SemanticInfo {
         return infoIt->second.m_constantValue;
     }
 
-    [[nodiscard]] std::optional<SemanticType> findExpType(
-        Ref<Exp> node) const
+    [[nodiscard]] std::optional<SemanticType> findExpType(Ref<Exp> node) const
     {
         const auto infoIt = m_expInfoByExp.find(node);
         if (infoIt == m_expInfoByExp.end()) {
@@ -237,8 +216,7 @@ struct SemanticInfo {
     }
 
     template <typename T>
-    [[nodiscard]] std::optional<Ref<WhileStmt>> findLoop(
-        Ref<T> node) const
+    [[nodiscard]] std::optional<Ref<WhileStmt>> findLoop(Ref<T> node) const
     {
         if constexpr (std::is_same_v<T, WhileStmt>) {
             return node;
@@ -264,7 +242,7 @@ struct SemanticOutput {
     AST m_ast;
     Ptr<CompUnit> m_root;
     SemanticInfo m_info;
-    std::vector<SemanticDiagnostic> m_diagnostics;
+    std::vector<std::unique_ptr<Diagnostic>> m_diagnostics;
 
     [[nodiscard]] bool success() const
     {
@@ -272,7 +250,7 @@ struct SemanticOutput {
             return false;
         }
         for (const auto& diagnostic : m_diagnostics) {
-            if (diagnostic.m_severity == SemanticDiagnosticSeverity::error) {
+            if (diagnostic->severity == SemanticDiagnosticSeverity::error) {
                 return false;
             }
         }
@@ -283,19 +261,20 @@ struct SemanticOutput {
 };
 
 class SemanticSymbolResolver : public AstVisitor {
-  public:
+public:
     explicit SemanticSymbolResolver(const AST& ast);
 
     void analyze(Ref<CompUnit> compUnit);
 
     [[nodiscard]] const std::unordered_map<Ref<Identifier>, SemanticSymbol>&
     symbolsByIdentifier() const;
-    [[nodiscard]] const std::vector<SemanticDiagnostic>& diagnostics() const;
+    [[nodiscard]] const std::vector<std::unique_ptr<Diagnostic>>&
+    diagnostics() const;
     [[nodiscard]] const SemanticSymbol* findSymbol(
         Ref<Identifier> identifier) const;
     [[nodiscard]] bool hasDeclaration(int32_t symbolId) const;
 
-  protected:
+protected:
     void visitCompUnit(Ref<CompUnit> compUnit) override;
     void visitFuncDef(Ref<FuncDef> funcDef) override;
     void visitBlock(Ref<Block> block) override;
@@ -304,7 +283,7 @@ class SemanticSymbolResolver : public AstVisitor {
     void visitCallExp(const Exp& exp, const Exp::Call& call) override;
     void visitLValExp(const Exp& exp, const Exp::LVal& lVal) override;
 
-  private:
+private:
     using Scope = std::unordered_map<std::string, Ref<Identifier>>;
 
     void declareFuncDef(Ref<FuncDef> funcDef);
@@ -315,28 +294,37 @@ class SemanticSymbolResolver : public AstVisitor {
     [[nodiscard]] std::optional<Ref<Identifier>> lookupSymbol(
         const std::string& name) const;
     [[nodiscard]] int32_t resolveIdentifier(Ref<Identifier> identifier);
-    void bindSymbol(
-        Ref<Identifier> identifier, const SemanticSymbol& symbol);
+    void bindSymbol(Ref<Identifier> identifier, const SemanticSymbol& symbol);
     [[nodiscard]] SemanticSymbol makePlaceholderSymbol(
         Ref<Identifier> identifier);
     [[nodiscard]] SemanticSymbol makeObjectSymbol(
         Ref<Identifier> identifier, bool isConst);
-    [[nodiscard]] SemanticSymbol makeFunctionSymbol(
-        Ref<Identifier> identifier);
-    void recordDiagnostic(
-        SemanticDiagnosticKind kind, int32_t offset, std::string message,
-        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error);
+    [[nodiscard]] SemanticSymbol makeFunctionSymbol(Ref<Identifier> identifier);
+
+    template <typename T>
+    void recordDiagnostic(int32_t offset, std::string message,
+        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error)
+    {
+        m_diagnostics.push_back(
+            makeDiagnostic<T>(offset, std::move(message), severity));
+    }
+    template <typename T>
+    [[nodiscard]] std::unique_ptr<Diagnostic> makeDiagnostic(int32_t offset,
+        std::string message, SemanticDiagnosticSeverity severity) const
+    {
+        return std::make_unique<T>(offset, std::move(message), severity);
+    }
 
     std::unordered_map<Ref<Identifier>, SemanticSymbol> m_symbolByIdentifier;
     std::vector<Scope> m_scopeStack;
-    std::vector<SemanticDiagnostic> m_diagnostics;
+    std::vector<std::unique_ptr<Diagnostic>> m_diagnostics;
     std::unordered_set<int32_t> m_declaredSymbolIds;
     std::unordered_set<int32_t> m_definedFunctionSymbolIds;
     int32_t m_nextSymbolId = 0;
 };
 
 class SemanticTypeAnalyzer : public AstVisitor {
-  public:
+public:
     explicit SemanticTypeAnalyzer(
         const AST& ast, const SemanticSymbolResolver& symbolResolver);
 
@@ -346,10 +334,11 @@ class SemanticTypeAnalyzer : public AstVisitor {
     expInfoByExp() const;
     [[nodiscard]] const std::unordered_map<int32_t, SemanticSymbol>&
     symbolsById() const;
-    [[nodiscard]] const std::vector<SemanticDiagnostic>& diagnostics() const;
+    [[nodiscard]] const std::vector<std::unique_ptr<Diagnostic>>&
+    diagnostics() const;
     [[nodiscard]] const SemanticSymbol* findSymbolById(int32_t symbolId) const;
 
-  protected:
+protected:
     void visitCompUnit(Ref<CompUnit> compUnit) override;
     void visitFuncDef(Ref<FuncDef> funcDef) override;
     void visitConstDecl(Ref<ConstDecl> constDecl) override;
@@ -361,7 +350,7 @@ class SemanticTypeAnalyzer : public AstVisitor {
     void visitReturnStmt(Ref<ReturnStmt> returnStmt) override;
     void visitExp(Ref<Exp> exp) override;
 
-  private:
+private:
     struct AnalyzedExp {
         SemanticType m_type = SemanticType::makeInteger();
         ExpType m_valueKind = ExpType::integer;
@@ -403,30 +392,40 @@ class SemanticTypeAnalyzer : public AstVisitor {
     [[nodiscard]] SemanticSymbol makeObjectSymbol(Ref<Identifier> identifier,
         bool isConst, bool hasConstantValue, int32_t constantValue,
         const SemanticType& type) const;
-    [[nodiscard]] SemanticSymbol makeFunctionSymbol(
-        Ref<Identifier> identifier, int32_t symbolId,
-        const SemanticType& returnType,
+    [[nodiscard]] SemanticSymbol makeFunctionSymbol(Ref<Identifier> identifier,
+        int32_t symbolId, const SemanticType& returnType,
         const std::vector<SemanticType>& paramTypes) const;
     [[nodiscard]] AnalyzedExp normalizeToArithmetic(
         AnalyzedExp analyzedExp) const;
     [[nodiscard]] AnalyzedExp normalizeToBoolean(AnalyzedExp analyzedExp) const;
     void recordExpFacts(Ref<Exp> exp, const AnalyzedExp& analyzedExp);
-    void recordDiagnostic(
-        SemanticDiagnosticKind kind, int32_t offset, std::string message,
-        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error);
+
+    template <typename T>
+    void recordDiagnostic(int32_t offset, std::string message,
+        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error)
+    {
+        m_diagnostics.push_back(
+            makeDiagnostic<T>(offset, std::move(message), severity));
+    }
+    template <typename T>
+    [[nodiscard]] std::unique_ptr<Diagnostic> makeDiagnostic(int32_t offset,
+        std::string message, SemanticDiagnosticSeverity severity) const
+    {
+        return std::make_unique<T>(offset, std::move(message), severity);
+    }
     [[nodiscard]] bool isGlobalSymbol(int32_t symbolId) const;
 
     const SemanticSymbolResolver& m_symbolResolver;
     std::unordered_map<Ref<Exp>, SemanticExpInfo> m_expInfoByExp;
     std::unordered_map<int32_t, SemanticSymbol> m_symbolById;
-    std::vector<SemanticDiagnostic> m_diagnostics;
+    std::vector<std::unique_ptr<Diagnostic>> m_diagnostics;
     std::optional<SemanticType> m_currentFuncReturnType;
     std::unordered_set<int32_t> m_definedFunctionSymbolIds;
     std::unordered_set<int32_t> m_globalSymbolIds;
 };
 
 class SemanticLoopBinder : public AstVisitor {
-  public:
+public:
     explicit SemanticLoopBinder(const AST& ast);
 
     void analyze(Ref<CompUnit> compUnit);
@@ -435,29 +434,41 @@ class SemanticLoopBinder : public AstVisitor {
     loopByBreakStmt() const;
     [[nodiscard]] const std::unordered_map<Ref<ContinueStmt>, Ref<WhileStmt>>&
     loopByContinueStmt() const;
-    [[nodiscard]] const std::vector<SemanticDiagnostic>& diagnostics() const;
+    [[nodiscard]] const std::vector<std::unique_ptr<Diagnostic>>&
+    diagnostics() const;
 
-  protected:
+protected:
     void visitWhileStmt(Ref<WhileStmt> whileStmt) override;
     void visitBreakStmt(Ref<BreakStmt> breakStmt) override;
     void visitContinueStmt(Ref<ContinueStmt> continueStmt) override;
 
-  private:
+private:
     [[nodiscard]] std::optional<Ref<WhileStmt>> currentLoop() const;
-    void recordDiagnostic(
-        SemanticDiagnosticKind kind, int32_t offset, std::string message,
-        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error);
+
+    template <typename T>
+    void recordDiagnostic(int32_t offset, std::string message,
+        SemanticDiagnosticSeverity severity = SemanticDiagnosticSeverity::error)
+    {
+        m_diagnostics.push_back(
+            makeDiagnostic<T>(offset, std::move(message), severity));
+    }
+    template <typename T>
+    [[nodiscard]] std::unique_ptr<Diagnostic> makeDiagnostic(int32_t offset,
+        std::string message, SemanticDiagnosticSeverity severity) const
+    {
+        return std::make_unique<T>(offset, std::move(message), severity);
+    }
 
     std::unordered_map<Ref<BreakStmt>, Ref<WhileStmt>> m_loopByBreakStmt;
-    std::unordered_map<Ref<ContinueStmt>, Ref<WhileStmt>>
-        m_loopByContinueStmt;
+    std::unordered_map<Ref<ContinueStmt>, Ref<WhileStmt>> m_loopByContinueStmt;
     std::vector<Ref<WhileStmt>> m_loopStack;
-    std::vector<SemanticDiagnostic> m_diagnostics;
+    std::vector<std::unique_ptr<Diagnostic>> m_diagnostics;
 };
 
 class SemanticAnalyzer {
-  public:
-    [[nodiscard]] SemanticOutput analyze(const AST &ast, Ref<CompUnit> compUnit);
+public:
+    [[nodiscard]] SemanticOutput analyze(
+        const AST& ast, Ref<CompUnit> compUnit);
 };
 
 } // namespace yesod::frontend

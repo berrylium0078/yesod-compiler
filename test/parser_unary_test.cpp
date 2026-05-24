@@ -69,13 +69,13 @@ struct ParserUnaryTest : ParserTestBase {
         parseSource("int main(){return -;}");
         require(!success(), "missing unary operand should fail");
         require(
-            firstDiagnostic().kind == DiagnosticKind::malformedReturnValue,
+            isDiagnostic<MalformedReturnValueDiagnostic>(firstDiagnostic()),
             "missing unary operand should report the return-value diagnostic");
 
         parseSource("int main(){return (;}");
         require(!success(),
             "malformed parenthesized primary expression should fail");
-        require(firstDiagnostic().kind == DiagnosticKind::malformedPrimaryExp,
+        require(isDiagnostic<MalformedPrimaryExpDiagnostic>(firstDiagnostic()),
             "malformed parenthesized expression should report the "
             "primary-expression diagnostic");
 
@@ -87,7 +87,7 @@ struct ParserUnaryTest : ParserTestBase {
             "missing ')' in primary expression should recover to the statement "
             "boundary and still build the root");
         require(
-            firstDiagnostic().kind == DiagnosticKind::missingPrimaryRParen,
+            isDiagnostic<MissingPrimaryRParenDiagnostic>(firstDiagnostic()),
             "missing ')' in primary expression should report the "
             "primary-expression delimiter diagnostic");
         require(

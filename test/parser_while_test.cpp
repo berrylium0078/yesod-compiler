@@ -76,7 +76,7 @@ struct ParserWhileTest : ParserTestBase {
         parseSource("int main(){while (1 return 1; return 0;}");
         require(!success(),
             "missing while-condition ')' should report recovery diagnostics");
-        require(firstDiagnostic().kind == DiagnosticKind::missingWhileRParen,
+        require(isDiagnostic<MissingWhileRParenDiagnostic>(firstDiagnostic()),
             "missing while-condition ')' should use the dedicated diagnostic");
         require(root() != nullptr,
             "missing while-condition ')' should recover to a root");
@@ -84,8 +84,7 @@ struct ParserWhileTest : ParserTestBase {
         parseSource("int main(){while (@) return 1;}");
         require(!success(),
             "malformed while condition should report recovery diagnostics");
-        require(firstDiagnostic().kind
-                == DiagnosticKind::malformedWhileCond,
+        require(isDiagnostic<MalformedWhileCondDiagnostic>(firstDiagnostic()),
             "malformed while condition should use the dedicated diagnostic");
     }
 
@@ -94,8 +93,7 @@ struct ParserWhileTest : ParserTestBase {
         parseSource("int main(){while (1) {break return 0;} return 1;}");
         require(!success(),
             "missing break semicolon should report recovery diagnostics");
-        require(firstDiagnostic().kind
-                == DiagnosticKind::missingBreakSemicolon,
+        require(isDiagnostic<MissingBreakSemicolonDiagnostic>(firstDiagnostic()),
             "missing break semicolon should use the dedicated diagnostic");
         require(root() != nullptr,
             "missing break semicolon should still recover to a root");
@@ -108,8 +106,7 @@ struct ParserWhileTest : ParserTestBase {
             "int main(){while (1) {continue return 0;} return 1;}");
         require(!success(),
             "missing continue semicolon should report recovery diagnostics");
-        require(firstDiagnostic().kind
-                == DiagnosticKind::missingContinueSemicolon,
+        require(isDiagnostic<MissingContinueSemicolonDiagnostic>(firstDiagnostic()),
             "missing continue semicolon should use the dedicated diagnostic");
         require(root() != nullptr,
             "missing continue semicolon should still recover to a root");

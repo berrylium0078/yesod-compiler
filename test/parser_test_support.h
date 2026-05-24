@@ -16,6 +16,7 @@
 namespace yesod::test_support::parser {
 
 using namespace yesod::frontend;
+using yesod::isDiagnostic;
 
 static_assert(
     std::is_same_v<decltype(std::declval<Identifier>().name), std::string>);
@@ -71,7 +72,7 @@ public:
             std::string message = "expected parse success";
             if (!m_output.m_diagnostics.empty()) {
                 message += ": ";
-                message += m_output.m_diagnostics.front().m_message;
+                message += m_output.m_diagnostics.front()->message;
             }
             fail(message);
         }
@@ -83,11 +84,11 @@ public:
     Ptr<CompUnit> root() const { return m_output.m_root; }
     bool success() const { return m_output.success(); }
 
-    const Diagnostic& firstDiagnostic()
+    const yesod::Diagnostic& firstDiagnostic()
     {
         require(!m_output.m_diagnostics.empty(),
             "expected at least one diagnostic");
-        return m_output.m_diagnostics.front();
+        return *m_output.m_diagnostics.front();
     }
     Ptr<FuncDef> firstFuncDef()
     {

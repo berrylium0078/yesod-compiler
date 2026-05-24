@@ -38,13 +38,13 @@ struct SemanticIfTest : SemanticTestBase {
         require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "the full if condition should be classified as boolean");
-        require(outerBinaryExp.op == ast::BinaryOpKeyword::plus,
+        require(outerBinaryExp.op == BinaryOpKeyword::plus,
             "the outer condition should stay an additive binary expression");
         require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "the condition root should be classified as boolean even if its "
             "operator remains additive");
-        require(nestedBinaryExp.op == ast::BinaryOpKeyword::orOr,
+        require(nestedBinaryExp.op == BinaryOpKeyword::orOr,
             "the grouped rhs subexpression should remain logical-or");
         require(requireExpValueKind(m_output, outerBinaryExp.rhs)
                 == ExpType::integer,

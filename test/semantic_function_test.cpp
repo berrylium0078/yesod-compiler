@@ -20,7 +20,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         require(callExp.params.size() == 2,
             "call expression should preserve both arguments");
         require(requireSymbol(m_output, callExp.funcName).kind
-                == ast::SemanticSymbolKind::function,
+                == SemanticSymbolKind::function,
             "call callee should bind to a function symbol");
         require(requireExpValueKind(m_output, returnStmt_nn(ast()).exp.ref())
                 == ExpType::integer,
@@ -51,7 +51,7 @@ struct SemanticFunctionTest : SemanticTestBase {
             "int add(int lhs){return lhs;} int main(){return add(1, 2);}");
         require(!success(), "wrong-arity call should fail semantic analysis");
         require(
-            firstDiagnostic().kind == SemanticDiagnosticKind::callArityMismatch,
+            isDiagnostic<CallArityMismatchDiagnostic>(firstDiagnostic()),
             "wrong-arity call should report the expected semantic label");
     }
 
@@ -60,7 +60,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         m_output = analyzeSource("int value = 1; int main(){return value();}");
         require(!success(), "calling a variable should fail semantic analysis");
         require(
-            firstDiagnostic().kind == SemanticDiagnosticKind::invalidCallTarget,
+            isDiagnostic<InvalidCallTargetDiagnostic>(firstDiagnostic()),
             "calling a variable should report an invalid-call-target "
             "diagnostic");
     }
@@ -71,8 +71,8 @@ struct SemanticFunctionTest : SemanticTestBase {
                                  "add(1); int main(){return value;}");
         require(!success(),
             "non-constant global initializer should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::nonConstantGlobalInitializer,
+        require(isDiagnostic<NonConstantGlobalInitializerDiagnostic>(
+                    firstDiagnostic()),
             "non-constant global initializer should report the expected "
             "semantic label");
     }
@@ -83,16 +83,14 @@ struct SemanticFunctionTest : SemanticTestBase {
             = analyzeSource("void noop(){return 1;} int main(){return 0;}");
         require(!success(),
             "void function returning a value should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::returnTypeMismatch,
+        require(isDiagnostic<ReturnTypeMismatchDiagnostic>(firstDiagnostic()),
             "void function returning a value should report return type "
             "mismatch");
 
         m_output = analyzeSource("int main(){return;}\n");
         require(!success(),
             "int function returning no value should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::returnTypeMismatch,
+        require(isDiagnostic<ReturnTypeMismatchDiagnostic>(firstDiagnostic()),
             "missing int return value should report return type mismatch");
     }
 
@@ -108,7 +106,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         const auto& callExp = requireCallExp(returnStmt_nn(ast()).exp.ref());
 
         require(requireSymbol(m_output, callExp.funcName).kind
-                == ast::SemanticSymbolKind::function,
+                == SemanticSymbolKind::function,
             "compatible redeclarations should still bind calls to the shared "
             "function symbol");
     }
@@ -120,7 +118,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         require(!success(),
             "conflicting function declarations should fail semantic analysis");
         require(
-            firstDiagnostic().kind == SemanticDiagnosticKind::doubleDefinition,
+            isDiagnostic<DoubleDefinitionDiagnostic>(firstDiagnostic()),
             "conflicting function declarations should report a "
             "double-definition diagnostic");
     }
@@ -132,7 +130,7 @@ struct SemanticFunctionTest : SemanticTestBase {
         require(!success(),
             "multiple function definitions should fail semantic analysis");
         require(
-            firstDiagnostic().kind == SemanticDiagnosticKind::doubleDefinition,
+            isDiagnostic<DoubleDefinitionDiagnostic>(firstDiagnostic()),
             "multiple function definitions should report a double-definition "
             "diagnostic");
     }

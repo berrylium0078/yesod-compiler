@@ -70,8 +70,7 @@ struct SemanticSymbolTest : SemanticTestBase {
         m_output = analyzeSource("int main(){value = 1; return 0;}");
         require(!success(),
             "use-before-definition should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::useBeforeDefinition,
+        require(isDiagnostic<UseBeforeDefinitionDiagnostic>(firstDiagnostic()),
             "use-before-definition should report the expected semantic label");
     }
 
@@ -79,8 +78,7 @@ struct SemanticSymbolTest : SemanticTestBase {
     {
         m_output = analyzeSource("int main(){int value; int value; return 0;}");
         require(!success(), "double definition should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::doubleDefinition,
+        require(isDiagnostic<DoubleDefinitionDiagnostic>(firstDiagnostic()),
             "double definition should report the expected semantic label");
     }
 };

@@ -62,7 +62,7 @@ void testExpressionStatementRecovery()
     test.parseSource("int main(){1 + 2 return 0;}");
     require(
         !test.success(), "missing expression-statement semicolon should fail");
-    require(test.firstDiagnostic().kind == DiagnosticKind::missingSemicolon,
+    require(isDiagnostic<MissingSemicolonDiagnostic>(test.firstDiagnostic()),
         "missing expression-statement semicolon should report the shared "
         "semicolon label");
     require(test.root() != nullptr,
@@ -71,7 +71,7 @@ void testExpressionStatementRecovery()
 
     test.parseSource("int main(){@ return 0;}");
     require(!test.success(), "invalid block item should fail");
-    require(test.firstDiagnostic().kind == DiagnosticKind::malformedBlockItem,
+    require(isDiagnostic<MalformedBlockItemDiagnostic>(test.firstDiagnostic()),
         "invalid block item should report the block-item recovery label");
 }
 

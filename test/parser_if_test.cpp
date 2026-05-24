@@ -45,7 +45,7 @@ struct ParserIfTest : ParserTestBase {
         parseSource("int main(){if (1 return 1; return 0;}");
         require(!success(),
             "missing if-condition ')' should report recovery diagnostics");
-        require(firstDiagnostic().kind == DiagnosticKind::missingIfRParen,
+        require(isDiagnostic<MissingIfRParenDiagnostic>(firstDiagnostic()),
             "missing if-condition ')' should use the dedicated diagnostic");
         require(root() != nullptr,
             "missing if-condition ')' should recover to a root");
@@ -53,7 +53,7 @@ struct ParserIfTest : ParserTestBase {
         parseSource("int main(){if (@) return 1;}");
         require(!success(),
             "malformed if condition should report recovery diagnostics");
-        require(firstDiagnostic().kind == DiagnosticKind::malformedIfCond,
+        require(isDiagnostic<MalformedIfCondDiagnostic>(firstDiagnostic()),
             "malformed if condition should use the dedicated diagnostic");
     }
 };

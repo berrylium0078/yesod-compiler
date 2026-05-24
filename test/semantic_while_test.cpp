@@ -85,8 +85,7 @@ struct SemanticWhileTest : SemanticTestBase {
         m_output = analyzeSource("int main(){break; return 0;}");
         require(!success(),
             "break outside while should report a semantic error");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::breakOutsideWhile,
+        require(isDiagnostic<BreakOutsideWhileDiagnostic>(firstDiagnostic()),
             "break outside while should use the dedicated semantic diagnostic");
     }
 
@@ -95,8 +94,7 @@ struct SemanticWhileTest : SemanticTestBase {
         m_output = analyzeSource("int main(){continue; return 0;}");
         require(!success(),
             "continue outside while should report a semantic error");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::continueOutsideWhile,
+        require(isDiagnostic<ContinueOutsideWhileDiagnostic>(firstDiagnostic()),
             "continue outside while should use the dedicated semantic diagnostic");
     }
 };

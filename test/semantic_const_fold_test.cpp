@@ -45,15 +45,15 @@ struct SemanticConstFoldTest : SemanticTestBase {
             "int main(){int value = 1; const int answer = value; return answer;}");
         require(!success(),
             "non-constant const initializer should fail semantic analysis");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::nonConstantConstInitializer,
+        require(isDiagnostic<NonConstantConstInitializerDiagnostic>(
+                    firstDiagnostic()),
             "non-constant const initializer should report the expected semantic label");
 
         m_output = analyzeSource(
             "int main(){const int answer = 1; answer = 2; return answer;}");
         require(!success(),
             "assignment to const should fail semantic analysis");
-        require(firstDiagnostic().kind == SemanticDiagnosticKind::assignToConst,
+        require(isDiagnostic<AssignToConstDiagnostic>(firstDiagnostic()),
             "assignment to const should report the expected semantic label");
     }
 };

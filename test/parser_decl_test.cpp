@@ -75,14 +75,14 @@ struct ParserDeclTest : ParserTestBase {
     {
         parseSource("int main(){const int = 1; return 0;}");
         require(!success(), "malformed declarator should fail");
-        require(firstDiagnostic().kind == DiagnosticKind::malformedDeclItem,
+        require(isDiagnostic<MalformedDeclItemDiagnostic>(firstDiagnostic()),
             "malformed declarator should report the declaration-item label");
         require(root() != nullptr,
             "malformed declaration should still recover to a root");
 
         parseSource("int main(){int value return 1;}");
         require(!success(), "missing declaration semicolon should fail");
-        require(firstDiagnostic().kind == DiagnosticKind::missingDeclSemicolon,
+        require(isDiagnostic<MissingDeclSemicolonDiagnostic>(firstDiagnostic()),
             "missing declaration semicolon should report the declaration "
             "label");
         require(root() != nullptr,

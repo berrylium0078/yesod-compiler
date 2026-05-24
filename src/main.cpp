@@ -145,7 +145,7 @@ int main(int argc, const char* argv[])
             std::vector<DiagInfo> diags;
             diags.reserve(parseOutput.m_diagnostics.size());
             for (const auto& d : parseOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("parse")});
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset), d->message, std::string("parse")});
             }
             printDiagnosticsAggregate(inputPath, source, diags);
             return 1;
@@ -159,10 +159,10 @@ int main(int argc, const char* argv[])
             // include any parse diagnostics (if present) and semantic diagnostics
             diags.reserve(parseOutput.m_diagnostics.size() + semanticOutput.m_diagnostics.size());
             for (const auto& d : parseOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("parse")});
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset), d->message, std::string("parse")});
             }
             for (const auto& d : semanticOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d.m_offset), d.m_message, std::string("semantic")});
+                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset), d->message, std::string("semantic")});
             }
             printDiagnosticsAggregate(inputPath, source, diags);
             return 1;

@@ -78,7 +78,7 @@ struct ParserArrayTest : ParserTestBase {
     {
         parseSource("int main(){int arr[2; return 0;}");
         require(!success(), "missing array bracket should fail parsing");
-        require(firstDiagnostic().kind == DiagnosticKind::missingArrayRBracket,
+        require(isDiagnostic<MissingArrayRBracketDiagnostic>(firstDiagnostic()),
             "missing array bracket should report the dedicated recovery label");
         require(root() != nullptr,
             "array declarator recovery should still produce a compilation unit");

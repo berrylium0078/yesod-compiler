@@ -41,7 +41,7 @@ void testAssignmentRecoveryDiagnostics()
     ParserTestBase test;
     test.parseSource("int main(){int value; value = ; return 1;}");
     require(!test.success(), "missing assignment rhs should fail");
-    require(test.firstDiagnostic().kind == DiagnosticKind::malformedAssignValue,
+    require(isDiagnostic<MalformedAssignValueDiagnostic>(test.firstDiagnostic()),
         "missing assignment rhs should report the assignment-value label");
     require(test.root() != nullptr,
         "missing assignment rhs should still recover to a root");
@@ -49,7 +49,7 @@ void testAssignmentRecoveryDiagnostics()
     test.parseSource("int main(){int value; value = 1 return 0;}");
     require(!test.success(), "missing assignment semicolon should fail");
     require(
-        test.firstDiagnostic().kind == DiagnosticKind::missingAssignSemicolon,
+        isDiagnostic<MissingAssignSemicolonDiagnostic>(test.firstDiagnostic()),
         "missing assignment semicolon should report the assignment delimiter "
         "label");
     require(test.root() != nullptr,

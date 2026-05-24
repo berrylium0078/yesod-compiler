@@ -75,16 +75,16 @@ constexpr const char* kStressGeneratedArrayInitializerSource
       "int main(){return 0;}";
 
 struct SemanticArrayTest : SemanticTestBase {
-    std::vector<Ptr<ast::FuncDef>> collectFunctions() const
+    std::vector<Ptr<FuncDef>> collectFunctions() const
     {
-        std::vector<Ptr<ast::FuncDef>> funcs;
+        std::vector<Ptr<FuncDef>> funcs;
         for (const auto topLevelItem : root()(ast()).topLevelItems) {
             const auto funcDef_nn
                 = MATCH(topLevelItem) WITH(
-                    [](const Ref<ast::FuncDef>& funcDef_nn) {
+                    [](const Ref<FuncDef>& funcDef_nn) {
                         return funcDef_nn.ptr();
                     },
-                    [](const auto&) { return Ptr<ast::FuncDef> { }; }, );
+                    [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);
             }
@@ -133,8 +133,8 @@ struct SemanticArrayTest : SemanticTestBase {
         require(!success(),
             "const array element reads should not participate in constant "
             "folding");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::nonConstantConstInitializer,
+        require(isDiagnostic<NonConstantConstInitializerDiagnostic>(
+                    firstDiagnostic()),
             "const array element read should report the non-constant const "
             "initializer label");
     }
@@ -187,7 +187,7 @@ struct SemanticArrayTest : SemanticTestBase {
             "assigning through a const array element should fail semantic "
             "analysis");
         require(
-            firstDiagnostic().kind == SemanticDiagnosticKind::assignToConst,
+            isDiagnostic<AssignToConstDiagnostic>(firstDiagnostic()),
             "const array assignment should report the assign-to-const semantic "
             "label");
     }
@@ -210,7 +210,7 @@ struct SemanticArrayTest : SemanticTestBase {
             "f1 parameter should preserve the unsized array semantic type");
         require(f1ArrayParam.m_type.m_elementType != nullptr
                 && f1ArrayParam.m_type.m_elementType->kind
-                    == ast::SemanticTypeKind::integer,
+                    == SemanticTypeKind::integer,
             "f1 parameter element type should be integer");
 
         const auto& f2ArrayParam = requireSymbol(
@@ -279,8 +279,8 @@ struct SemanticArrayTest : SemanticTestBase {
         require(!success(),
             "const array initializers should reject non-constant expression "
             "elements");
-        require(firstDiagnostic().kind
-                == SemanticDiagnosticKind::nonConstantConstInitializer,
+        require(isDiagnostic<NonConstantConstInitializerDiagnostic>(
+                    firstDiagnostic()),
             "non-constant const array initializer should report the dedicated "
             "semantic label");
     }

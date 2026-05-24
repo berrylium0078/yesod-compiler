@@ -168,7 +168,7 @@ SemanticSymbolResolver::symbolsByIdentifier() const
     return m_symbolByIdentifier;
 }
 
-const std::vector<SemanticDiagnostic>&
+const std::vector<std::unique_ptr<Diagnostic>>&
 SemanticSymbolResolver::diagnostics() const
 {
     return m_diagnostics;
@@ -227,7 +227,7 @@ void SemanticSymbolResolver::declareFuncDef(Ref<FuncDef> funcDef_ref)
     if (!existingIdentifier.has_value()) {
         const auto symbol = makeFunctionSymbol(funcDef.identifier);
         if (!defineSymbol(identifier.name, funcDef.identifier)) {
-            recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            recordDiagnostic<DoubleDefinitionDiagnostic>(
                 identifier.sourcePos.m_offset,
                 "double definition of '" + identifier.name + "'");
         }
@@ -246,7 +246,7 @@ void SemanticSymbolResolver::declareFuncDef(Ref<FuncDef> funcDef_ref)
     }
 
     if (existingSymbol->kind != SemanticSymbolKind::function) {
-        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+        recordDiagnostic<DoubleDefinitionDiagnostic>(
             identifier.sourcePos.m_offset,
             "double definition of '" + identifier.name + "'");
         bindSymbol(funcDef.identifier, *existingSymbol);
@@ -255,7 +255,7 @@ void SemanticSymbolResolver::declareFuncDef(Ref<FuncDef> funcDef_ref)
 
     if (funcDef.body != nullptr
         && m_definedFunctionSymbolIds.contains(existingSymbol->m_id)) {
-        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+        recordDiagnostic<DoubleDefinitionDiagnostic>(
             identifier.sourcePos.m_offset,
             "redefinition of '" + identifier.name + "'");
     }
@@ -277,7 +277,7 @@ void SemanticSymbolResolver::visitFuncDef(Ref<FuncDef> funcDef_ref)
         const auto& identifier = funcFParam.identifier(m_ast);
         const auto symbol = makeObjectSymbol(funcFParam.identifier, false);
         if (!defineSymbol(identifier.name, funcFParam.identifier)) {
-            recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            recordDiagnostic<DoubleDefinitionDiagnostic>(
                 identifier.sourcePos.m_offset,
                 "double definition of '" + identifier.name + "'");
         }
@@ -308,7 +308,7 @@ void SemanticSymbolResolver::visitConstDecl(Ref<ConstDecl> constDecl)
         const auto& identifier = parsedConstDef.identifier(m_ast);
         const auto symbol = makeObjectSymbol(parsedConstDef.identifier, true);
         if (!defineSymbol(identifier.name, parsedConstDef.identifier)) {
-            recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            recordDiagnostic<DoubleDefinitionDiagnostic>(
                 identifier.sourcePos.m_offset,
                 "double definition of '" + identifier.name + "'");
         }
@@ -325,7 +325,7 @@ void SemanticSymbolResolver::visitVarDecl(Ref<VarDecl> varDecl)
         const auto& identifier = parsedVarDef.identifier(m_ast);
         const auto symbol = makeObjectSymbol(parsedVarDef.identifier, false);
         if (!defineSymbol(identifier.name, parsedVarDef.identifier)) {
-            recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+            recordDiagnostic<DoubleDefinitionDiagnostic>(
                 identifier.sourcePos.m_offset,
                 "double definition of '" + identifier.name + "'");
         }
@@ -396,7 +396,7 @@ int32_t SemanticSymbolResolver::resolveIdentifier(Ref<Identifier> ident)
         return symbol->m_id;
     }
 
-    recordDiagnostic(SemanticDiagnosticKind::useBeforeDefinition,
+    recordDiagnostic<UseBeforeDefinitionDiagnostic>(
         ident(m_ast).sourcePos.m_offset,
         "use of '" + ident(m_ast).name + "' before definition");
     const auto placeholder = makePlaceholderSymbol(ident);
@@ -446,17 +446,6 @@ SemanticSymbol SemanticSymbolResolver::makeFunctionSymbol(
     };
 }
 
-void SemanticSymbolResolver::recordDiagnostic(SemanticDiagnosticKind kind,
-    int32_t offset, std::string message, SemanticDiagnosticSeverity severity)
-{
-    m_diagnostics.push_back(SemanticDiagnostic {
-        .kind = kind,
-        .m_offset = offset,
-        .m_message = std::move(message),
-        .m_severity = severity,
-    });
-}
-
 SemanticTypeAnalyzer::SemanticTypeAnalyzer(
     const AST& ast, const SemanticSymbolResolver& symbolResolver)
     : AstVisitor(ast)
@@ -487,7 +476,8 @@ SemanticTypeAnalyzer::symbolsById() const
     return m_symbolById;
 }
 
-const std::vector<SemanticDiagnostic>& SemanticTypeAnalyzer::diagnostics() const
+const std::vector<std::unique_ptr<Diagnostic>>&
+SemanticTypeAnalyzer::diagnostics() const
 {
     return m_diagnostics;
 }
@@ -552,7 +542,7 @@ void SemanticTypeAnalyzer::declareFuncDef(Ref<FuncDef> funcDef_ref)
     } else if (!functionSignaturesMatch(
                    *existingSymbol, returnType, paramTypes)) {
         const auto& identifier = funcDef.identifier(m_ast);
-        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+        recordDiagnostic<DoubleDefinitionDiagnostic>(
             identifier.sourcePos.m_offset,
             "conflicting declaration of '" + identifier.name + "'");
     }
@@ -560,7 +550,7 @@ void SemanticTypeAnalyzer::declareFuncDef(Ref<FuncDef> funcDef_ref)
     if (funcDef.body != nullptr
         && m_definedFunctionSymbolIds.contains(resolvedFunction->m_id)) {
         const auto& identifier = funcDef.identifier(m_ast);
-        recordDiagnostic(SemanticDiagnosticKind::doubleDefinition,
+        recordDiagnostic<DoubleDefinitionDiagnostic>(
             identifier.sourcePos.m_offset,
             "redefinition of '" + identifier.name + "'");
     }
@@ -626,13 +616,12 @@ void SemanticTypeAnalyzer::visitConstDecl(Ref<ConstDecl> constDecl)
             analyzedInit.m_constantValue = 0;
         } else {
             if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
-                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                recordDiagnostic<TypeMismatchDiagnostic>(
                     parsedConstDef.sourcePos.m_offset,
                     "const initializer must produce an integer value");
             }
             if (!analyzedInit.m_isConstant) {
-                recordDiagnostic(
-                    SemanticDiagnosticKind::nonConstantConstInitializer,
+                recordDiagnostic<NonConstantConstInitializerDiagnostic>(
                     parsedConstDef.sourcePos.m_offset,
                     "const initializer must be a constant expression");
             }
@@ -705,7 +694,7 @@ void SemanticTypeAnalyzer::visitAssignStmt(Ref<AssignStmt> assignStmt)
                 = symbol != nullptr ? symbol : boundSymbol;
             if (effectiveSymbol != nullptr && effectiveSymbol->m_isConst) {
                 const auto& identifier = lVal.identifier(m_ast);
-                recordDiagnostic(SemanticDiagnosticKind::assignToConst,
+                recordDiagnostic<AssignToConstDiagnostic>(
                     identifier.sourcePos.m_offset,
                     "cannot assign to const '" + effectiveSymbol->name + "'");
             }
@@ -716,14 +705,14 @@ void SemanticTypeAnalyzer::visitAssignStmt(Ref<AssignStmt> assignStmt)
             for (const auto index : lVal.indices) {
                 const auto analyzedIndex = analyzeExp(index);
                 if (!isScalarTypeImpl(analyzedIndex.m_type)) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    recordDiagnostic<TypeMismatchDiagnostic>(
                         index(m_ast).sourcePos.m_offset,
                         "array subscript must produce an integer value");
                 }
                 if (!currentType.isArray()
                     || currentType.m_elementType == nullptr) {
                     const auto& identifier = lVal.identifier(m_ast);
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    recordDiagnostic<TypeMismatchDiagnostic>(
                         identifier.sourcePos.m_offset,
                         "subscripted assignment target is not an array");
                     break;
@@ -732,7 +721,7 @@ void SemanticTypeAnalyzer::visitAssignStmt(Ref<AssignStmt> assignStmt)
             }
             if (currentType.isArray()) {
                 const auto& identifier = lVal.identifier(m_ast);
-                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                recordDiagnostic<TypeMismatchDiagnostic>(
                     identifier.sourcePos.m_offset,
                     "assignment target must designate an integer object");
             }
@@ -745,7 +734,7 @@ void SemanticTypeAnalyzer::visitAssignStmt(Ref<AssignStmt> assignStmt)
     const auto analyzedExp = analyzeExp(assignStmt(m_ast).exp);
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
-        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+        recordDiagnostic<TypeMismatchDiagnostic>(
             assignStmt(m_ast).sourcePos.m_offset,
             "assignment rhs must produce an integer value");
     }
@@ -770,22 +759,22 @@ void SemanticTypeAnalyzer::visitReturnStmt(Ref<ReturnStmt> returnStmt)
     }
     if (expr == nullptr) {
         if (m_currentFuncReturnType->kind != SemanticTypeKind::voidType) {
-            recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch, offset,
-                "non-void function must return an integer value");
+            recordDiagnostic<ReturnTypeMismatchDiagnostic>(
+                offset, "non-void function must return an integer value");
         }
         return;
     }
     const auto analyzedExp = analyzeExp(expr.ref());
     if (m_currentFuncReturnType->kind == SemanticTypeKind::voidType) {
-        recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch, offset,
-            "void function must use 'return;' without a value");
+        recordDiagnostic<ReturnTypeMismatchDiagnostic>(
+            offset, "void function must use 'return;' without a value");
         return;
     }
 
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
-        recordDiagnostic(SemanticDiagnosticKind::returnTypeMismatch, offset,
-            "return expression must produce an integer value");
+        recordDiagnostic<ReturnTypeMismatchDiagnostic>(
+            offset, "return expression must produce an integer value");
     }
 }
 
@@ -804,8 +793,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeBinaryExp(
     };
 
     if (!isScalarTypeImpl(lhs.m_type) || !isScalarTypeImpl(rhs.m_type)) {
-        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.sourcePos.m_offset,
+        recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
             "binary operator requires integer operands");
         return binaryExp;
     }
@@ -884,8 +872,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeUnaryExp(
 {
     auto operand = analyzeExp(unary.lhs);
     if (!isScalarTypeImpl(operand.m_type)) {
-        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.sourcePos.m_offset,
+        recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
             "unary operator requires an integer value operand");
         return AnalyzedExp {
             .m_type = unary.op == UnaryOpKeyword::bang
@@ -943,8 +930,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeCallExp(
         for (const auto arg : call.params) {
             const auto analyzedArg = analyzeExp(arg);
             if (analyzedArg.m_valueKind == ExpType::voidType) {
-                recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                    exp.sourcePos.m_offset,
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                     "call arguments must produce integer values");
             }
         }
@@ -958,16 +944,14 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeCallExp(
 
     if (calleeSymbol != nullptr
         && calleeSymbol->kind != SemanticSymbolKind::function) {
-        recordDiagnostic(SemanticDiagnosticKind::invalidCallTarget,
-            exp.sourcePos.m_offset,
+        recordDiagnostic<InvalidCallTargetDiagnostic>(exp.sourcePos.m_offset,
             "call target '" + calleeSymbol->name + "' is not a function");
     }
     if (calleeSymbol != nullptr
         && calleeSymbol->kind == SemanticSymbolKind::function
         && calleeSymbol->m_functionSignature.m_paramTypes.size()
             != call.params.size()) {
-        recordDiagnostic(SemanticDiagnosticKind::callArityMismatch,
-            exp.sourcePos.m_offset,
+        recordDiagnostic<CallArityMismatchDiagnostic>(exp.sourcePos.m_offset,
             "call to '" + calleeSymbol->name
                 + "' uses the wrong number of arguments");
     }
@@ -975,8 +959,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeCallExp(
     for (size_t i = 0; i < call.params.size(); ++i) {
         const auto analyzedArg = analyzeExp(call.params[i]);
         if (analyzedArg.m_valueKind == ExpType::voidType) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.sourcePos.m_offset,
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "call arguments must produce integer values");
         }
         if (calleeSymbol != nullptr
@@ -985,8 +968,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeCallExp(
             && !typesMatchForCall(
                 calleeSymbol->m_functionSignature.m_paramTypes[i],
                 analyzedArg.m_type)) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.sourcePos.m_offset,
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "call argument type does not match parameter type");
         }
     }
@@ -1015,8 +997,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeLValExp(
         = semanticSymbol != nullptr ? semanticSymbol : boundSymbol;
 
     if (symbol != nullptr && symbol->kind == SemanticSymbolKind::function) {
-        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp.sourcePos.m_offset,
+        recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
             "function '" + symbol->name + "' must be called before use");
         return AnalyzedExp {
             .m_type = SemanticType::makeInteger(),
@@ -1031,13 +1012,12 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeLValExp(
     for (const auto index : lVal.indices) {
         const auto analyzedIndex = analyzeExp(index);
         if (!isScalarTypeImpl(analyzedIndex.m_type)) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+            recordDiagnostic<TypeMismatchDiagnostic>(
                 index(m_ast).sourcePos.m_offset,
                 "array subscript must produce an integer value");
         }
         if (!currentType.isArray() || currentType.m_elementType == nullptr) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-                exp.sourcePos.m_offset,
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "subscripted expression is not an array");
             currentType = SemanticType::makeInteger();
             break;
@@ -1097,8 +1077,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeCondExp(
     auto analyzedExp = analyzeExp(exp);
     if (analyzedExp.m_valueKind == ExpType::voidType
         || analyzedExp.m_valueKind == ExpType::array) {
-        recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
-            exp(m_ast).sourcePos.m_offset,
+        recordDiagnostic<TypeMismatchDiagnostic>(exp(m_ast).sourcePos.m_offset,
             "condition expression must produce an integer value");
         analyzedExp.m_type = SemanticType::makeBoolean();
         analyzedExp.m_valueKind = ExpType::boolean;
@@ -1120,7 +1099,7 @@ SemanticType SemanticTypeAnalyzer::analyzeObjectType(
         const auto analyzedDim = analyzeExp(*dimIt);
         if (!isScalarTypeImpl(analyzedDim.m_type)
             || !analyzedDim.m_isConstant) {
-            recordDiagnostic(SemanticDiagnosticKind::typeMismatch, offset,
+            recordDiagnostic<TypeMismatchDiagnostic>(offset,
                 "array dimension must be a constant integer expression");
             objectType = SemanticType::makeArray(objectType, 0);
             continue;
@@ -1138,7 +1117,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeConstInitVal(
     Ref<ConstInitVal> constInitVal, const SemanticType& expectedType,
     bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
 {
-    const auto &init = constInitVal(m_ast);
+    const auto& init = constInitVal(m_ast);
     AnalyzedExp analyzedInit {
         .m_type = expectedType,
         .m_valueKind = expectedType.valueKind(),
@@ -1150,9 +1129,8 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeConstInitVal(
         if (hasRemainingWarning) {
             return;
         }
-        recordDiagnostic(SemanticDiagnosticKind::excessInitializerElements,
-            offset, "excess initializer elements",
-            SemanticDiagnosticSeverity::warning);
+        recordDiagnostic<ExcessInitializerElementsDiagnostic>(offset,
+            "excess initializer elements", SemanticDiagnosticSeverity::warning);
         hasRemainingWarning = true;
     };
 
@@ -1164,20 +1142,17 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeConstInitVal(
                 ++nextIndex;
                 if (analyzedInit.m_type.isVoid()
                     || analyzedInit.m_type.isArray()) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    recordDiagnostic<TypeMismatchDiagnostic>(
                         init.sourcePos.m_offset,
                         "const initializer must produce an integer value");
                 }
                 if (!analyzedInit.m_isConstant) {
-                    recordDiagnostic(
-                        SemanticDiagnosticKind::nonConstantConstInitializer,
+                    recordDiagnostic<NonConstantConstInitializerDiagnostic>(
                         init.sourcePos.m_offset,
                         "const initializer must be a constant expression");
                 }
             } else {
-                const std::vector<Ref<ConstInitVal>> singleton {
-                    constInitVal
-                };
+                const std::vector<Ref<ConstInitVal>> singleton { constInitVal };
                 size_t nextValueIndex = 0;
                 analyzedInit = analyzeConstInitSequence(singleton,
                     nextValueIndex, expectedType, hasRemainingWarning);
@@ -1265,7 +1240,7 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeInitVal(
     Ref<InitVal> initVal, const SemanticType& expectedType, bool isGlobal,
     bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
 {
-    const auto &init = initVal(m_ast);
+    const auto& init = initVal(m_ast);
     AnalyzedExp analyzedInit {
         .m_type = expectedType,
         .m_valueKind = expectedType.valueKind(),
@@ -1277,9 +1252,8 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeInitVal(
         if (hasRemainingWarning) {
             return;
         }
-        recordDiagnostic(SemanticDiagnosticKind::excessInitializerElements,
-            offset, "excess initializer elements",
-            SemanticDiagnosticSeverity::warning);
+        recordDiagnostic<ExcessInitializerElementsDiagnostic>(offset,
+            "excess initializer elements", SemanticDiagnosticSeverity::warning);
         hasRemainingWarning = true;
     };
 
@@ -1291,13 +1265,12 @@ SemanticTypeAnalyzer::AnalyzedExp SemanticTypeAnalyzer::analyzeInitVal(
                 ++nextIndex;
                 if (analyzedInit.m_type.isVoid()
                     || analyzedInit.m_type.isArray()) {
-                    recordDiagnostic(SemanticDiagnosticKind::typeMismatch,
+                    recordDiagnostic<TypeMismatchDiagnostic>(
                         init.sourcePos.m_offset,
                         "variable initializer must produce an integer value");
                 }
                 if (isGlobal && !analyzedInit.m_isConstant) {
-                    recordDiagnostic(
-                        SemanticDiagnosticKind::nonConstantGlobalInitializer,
+                    recordDiagnostic<NonConstantGlobalInitializerDiagnostic>(
                         init.sourcePos.m_offset,
                         "global initializer must be a constant expression");
                 }
@@ -1397,9 +1370,9 @@ const SemanticSymbol* SemanticTypeAnalyzer::resolvedSymbol(
     return m_symbolResolver.findSymbol(identifier);
 }
 
-SemanticSymbol SemanticTypeAnalyzer::makeObjectSymbol(
-    Ref<Identifier> ident, bool isConst, bool hasConstantValue,
-    int32_t constantValue, const SemanticType& type) const
+SemanticSymbol SemanticTypeAnalyzer::makeObjectSymbol(Ref<Identifier> ident,
+    bool isConst, bool hasConstantValue, int32_t constantValue,
+    const SemanticType& type) const
 {
     const auto& identifier = ident(m_ast);
     const auto* resolved = resolvedSymbol(ident);
@@ -1422,9 +1395,8 @@ SemanticSymbol SemanticTypeAnalyzer::makeObjectSymbol(
     };
 }
 
-SemanticSymbol SemanticTypeAnalyzer::makeFunctionSymbol(
-    Ref<Identifier> ident, int32_t symbolId,
-    const SemanticType& returnType,
+SemanticSymbol SemanticTypeAnalyzer::makeFunctionSymbol(Ref<Identifier> ident,
+    int32_t symbolId, const SemanticType& returnType,
     const std::vector<SemanticType>& paramTypes) const
 {
     const auto& identifier = ident(m_ast);
@@ -1488,17 +1460,6 @@ void SemanticTypeAnalyzer::recordExpFacts(
     };
 }
 
-void SemanticTypeAnalyzer::recordDiagnostic(SemanticDiagnosticKind kind,
-    int32_t offset, std::string message, SemanticDiagnosticSeverity severity)
-{
-    m_diagnostics.push_back(SemanticDiagnostic {
-        .kind = kind,
-        .m_offset = offset,
-        .m_message = std::move(message),
-        .m_severity = severity,
-    });
-}
-
 bool SemanticTypeAnalyzer::isGlobalSymbol(int32_t symbolId) const
 {
     return m_currentFuncReturnType == std::nullopt
@@ -1531,7 +1492,8 @@ SemanticLoopBinder::loopByContinueStmt() const
     return m_loopByContinueStmt;
 }
 
-const std::vector<SemanticDiagnostic>& SemanticLoopBinder::diagnostics() const
+const std::vector<std::unique_ptr<Diagnostic>>&
+SemanticLoopBinder::diagnostics() const
 {
     return m_diagnostics;
 }
@@ -1547,7 +1509,7 @@ void SemanticLoopBinder::visitBreakStmt(Ref<BreakStmt> breakStmt)
 {
     const auto loop = currentLoop();
     if (!loop.has_value()) {
-        recordDiagnostic(SemanticDiagnosticKind::breakOutsideWhile,
+        recordDiagnostic<BreakOutsideWhileDiagnostic>(
             breakStmt(m_ast).sourcePos.m_offset,
             "break statement is not inside a while loop");
         return;
@@ -1557,14 +1519,14 @@ void SemanticLoopBinder::visitBreakStmt(Ref<BreakStmt> breakStmt)
 
 void SemanticLoopBinder::visitContinueStmt(Ref<ContinueStmt> continueStmt)
 {
-        const auto loop = currentLoop();
-        if (!loop.has_value()) {
-            recordDiagnostic(SemanticDiagnosticKind::continueOutsideWhile,
-                continueStmt(m_ast).sourcePos.m_offset,
-                "continue statement is not inside a while loop");
-            return;
-        }
-        m_loopByContinueStmt.insert_or_assign(continueStmt, *loop);
+    const auto loop = currentLoop();
+    if (!loop.has_value()) {
+        recordDiagnostic<ContinueOutsideWhileDiagnostic>(
+            continueStmt(m_ast).sourcePos.m_offset,
+            "continue statement is not inside a while loop");
+        return;
+    }
+    m_loopByContinueStmt.insert_or_assign(continueStmt, *loop);
 }
 
 std::optional<Ref<WhileStmt>> SemanticLoopBinder::currentLoop() const
@@ -1575,21 +1537,10 @@ std::optional<Ref<WhileStmt>> SemanticLoopBinder::currentLoop() const
     return m_loopStack.back();
 }
 
-void SemanticLoopBinder::recordDiagnostic(SemanticDiagnosticKind kind,
-    int32_t offset, std::string message, SemanticDiagnosticSeverity severity)
-{
-    m_diagnostics.push_back(SemanticDiagnostic {
-        .kind = kind,
-        .m_offset = offset,
-        .m_message = std::move(message),
-        .m_severity = severity,
-    });
-}
-
-SemanticOutput SemanticAnalyzer::analyze(const AST &ast, Ref<CompUnit> compUnit)
+SemanticOutput SemanticAnalyzer::analyze(const AST& ast, Ref<CompUnit> compUnit)
 {
     SemanticInfo info;
-    std::vector<SemanticDiagnostic> diagnostics;
+    std::vector<std::unique_ptr<Diagnostic>> diagnostics;
 
     if (compUnit) {
         SemanticSymbolResolver symbolResolver(ast);
@@ -1615,17 +1566,19 @@ SemanticOutput SemanticAnalyzer::analyze(const AST &ast, Ref<CompUnit> compUnit)
         diagnostics.reserve(symbolResolver.diagnostics().size()
             + typeAnalyzer.diagnostics().size()
             + loopBinder.diagnostics().size());
-        diagnostics.insert(diagnostics.end(),
-            symbolResolver.diagnostics().begin(),
-            symbolResolver.diagnostics().end());
-        diagnostics.insert(diagnostics.end(),
-            typeAnalyzer.diagnostics().begin(),
-            typeAnalyzer.diagnostics().end());
-        diagnostics.insert(diagnostics.end(), loopBinder.diagnostics().begin(),
-            loopBinder.diagnostics().end());
+        for (const auto& diagnostic : symbolResolver.diagnostics()) {
+            diagnostics.emplace_back(diagnostic->clone());
+        }
+        for (const auto& diagnostic : typeAnalyzer.diagnostics()) {
+            diagnostics.push_back(diagnostic->clone());
+        }
+        for (const auto& diagnostic : loopBinder.diagnostics()) {
+            diagnostics.push_back(diagnostic->clone());
+        }
         std::stable_sort(diagnostics.begin(), diagnostics.end(),
-            [](const SemanticDiagnostic& lhs, const SemanticDiagnostic& rhs) {
-                return lhs.m_offset < rhs.m_offset;
+            [](const std::unique_ptr<Diagnostic>& lhs,
+                const std::unique_ptr<Diagnostic>& rhs) {
+                return lhs->offset < rhs->offset;
             });
     }
 

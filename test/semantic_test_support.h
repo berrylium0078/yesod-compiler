@@ -11,16 +11,8 @@
 
 namespace yesod::test_support::semantic {
 
-using yesod::frontend::ExpType;
-using yesod::frontend::ParseOutput;
-using yesod::frontend::Parser;
-using yesod::frontend::Ptr;
-using yesod::frontend::Ref;
-using yesod::frontend::SemanticAnalyzer;
-using yesod::frontend::SemanticDiagnostic;
-using yesod::frontend::SemanticDiagnosticKind;
-using yesod::frontend::SemanticOutput;
-namespace ast = yesod::frontend;
+using namespace yesod::frontend;
+using yesod::isDiagnostic;
 
 using yesod::test_support::fail;
 using yesod::test_support::OutputAstBase;
@@ -31,7 +23,7 @@ static_assert(std::is_same_v<
     decltype(std::declval<yesod::frontend::SemanticSymbol>().name),
     std::string>);
 static_assert(std::is_same_v<decltype(std::declval<Number>().value), int32_t>);
-static_assert(std::variant_size_v<ast::Stmt> == 8);
+static_assert(std::variant_size_v<Stmt> == 8);
 
 struct SemanticTestBase : OutputAstBase<SemanticOutput>, TestBase {
     template <class Self> auto&& ast(this Self& self)
@@ -39,11 +31,11 @@ struct SemanticTestBase : OutputAstBase<SemanticOutput>, TestBase {
         return self.m_output.m_ast;
     }
 
-    [[nodiscard]] const SemanticDiagnostic& firstDiagnostic()
+    [[nodiscard]] const yesod::Diagnostic& firstDiagnostic()
     {
         require(!m_output.m_diagnostics.empty(),
             "expected at least one semantic diagnostic");
-        return m_output.m_diagnostics.front();
+        return *m_output.m_diagnostics.front();
     }
 };
 
@@ -81,7 +73,7 @@ inline SemanticOutput analyzeRoot(const std::string& source)
         std::string message = "expected semantic success";
         if (!output.m_diagnostics.empty()) {
             message += ": ";
-            message += output.m_diagnostics.front().m_message;
+            message += output.m_diagnostics.front()->message;
         }
         fail(message);
     }
@@ -89,28 +81,28 @@ inline SemanticOutput analyzeRoot(const std::string& source)
 }
 
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const Ptr<ast::Identifier>& node)
+    const SemanticOutput& output, const Ptr<Identifier>& node)
 {
     const auto* symbol = output.m_info.findSymbol(node.ref());
     require(symbol != nullptr, "expected symbol binding for node");
     return *symbol;
 }
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const Ptr<ast::ConstDef>& node)
+    const SemanticOutput& output, const Ptr<ConstDef>& node)
 {
     const auto* symbol = output.m_info.findSymbol(node(output.m_ast).identifier);
     require(symbol != nullptr, "expected symbol binding for node");
     return *symbol;
 }
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const Ptr<ast::VarDef>& node)
+    const SemanticOutput& output, const Ptr<VarDef>& node)
 {
     const auto* symbol = output.m_info.findSymbol(node(output.m_ast).identifier);
     require(symbol != nullptr, "expected symbol binding for node");
     return *symbol;
 }
 inline const yesod::frontend::SemanticSymbol& requireSymbol(
-    const SemanticOutput& output, const Ptr<ast::Exp>& node)
+    const SemanticOutput& output, const Ptr<Exp>& node)
 {
     const auto& exp = node(output.m_ast);
     const auto &ident = MATCH(exp.kind)
@@ -141,7 +133,7 @@ inline ExpType requireExpValueKind(
 }
 
 template <typename T>
-inline Ptr<ast::WhileStmt> requireLoop(
+inline Ptr<WhileStmt> requireLoop(
     const SemanticOutput& output, Ref<T> node)
 {
     const auto loop = output.m_info.findLoop(node);
