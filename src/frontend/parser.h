@@ -61,10 +61,16 @@ struct Diagnostic {
     std::string m_message;
 };
 
-template <typename T> struct ParseResult {
-    bool success = false;
-    int32_t nextOffset = 0;
-    T value {};
+template <typename T, typename U = AST>
+struct ParseResult {
+    int32_t nextOffset;
+    std::optional<T> value {};
+};
+template <typename T, typename... Ts>
+    requires is_in_list<T, Ts...>
+struct ParseResult<T, Arena<Ts...>> {
+    int32_t nextOffset;
+    Ptr<T> value {};
 };
 
 struct ParseOutput {
@@ -100,48 +106,48 @@ class Parser {
         int32_t nextOffset = 0;
     };
 
-    [[nodiscard]] ParseResult<Ptr<CompUnit>> parseCompUnit(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<FuncDef>> parseFuncDef(int32_t offset);
+    [[nodiscard]] ParseResult<CompUnit> parseCompUnit(int32_t offset);
+    [[nodiscard]] ParseResult<FuncDef> parseFuncDef(int32_t offset);
     [[nodiscard]] ParseResult<FuncTypeKeyword> parseFuncType(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Block>> parseBlock(int32_t offset);
-    [[nodiscard]] ParseResult<std::optional<BlockItem>> parseBlockItem(
+    [[nodiscard]] ParseResult<Block> parseBlock(int32_t offset);
+    [[nodiscard]] ParseResult<BlockItem> parseBlockItem(
         int32_t offset);
-    [[nodiscard]] ParseResult<std::optional<Decl>> parseDecl(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ConstDecl>> parseConstDecl(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<VarDecl>> parseVarDecl(int32_t offset);
+    [[nodiscard]] ParseResult<Decl> parseDecl(int32_t offset);
+    [[nodiscard]] ParseResult<ConstDecl> parseConstDecl(int32_t offset);
+    [[nodiscard]] ParseResult<VarDecl> parseVarDecl(int32_t offset);
     [[nodiscard]] ParseResult<BTypeKeyword> parseBType(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ConstDef>> parseConstDef(int32_t offset);
+    [[nodiscard]] ParseResult<ConstDef> parseConstDef(int32_t offset);
     [[nodiscard]] ParseResult<std::vector<Ref<Exp>>> parseArrayConstDims(
         int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ConstInitVal>> parseConstInitVal(
+    [[nodiscard]] ParseResult<ConstInitVal> parseConstInitVal(
         int32_t offset);
     [[nodiscard]] ParseResult<std::vector<Ref<ConstInitVal>>>
     parseConstInitValList(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<VarDef>> parseVarDef(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<InitVal>> parseInitVal(int32_t offset);
+    [[nodiscard]] ParseResult<VarDef> parseVarDef(int32_t offset);
+    [[nodiscard]] ParseResult<InitVal> parseInitVal(int32_t offset);
     [[nodiscard]] ParseResult<std::vector<Ref<InitVal>>> parseInitValList(
         int32_t offset);
-    [[nodiscard]] ParseResult<std::optional<Stmt>> parseStmt(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<IfStmt>> parseIfStmt(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<WhileStmt>> parseWhileStmt(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<BreakStmt>> parseBreakStmt(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ContinueStmt>> parseContinueStmt(
+    [[nodiscard]] ParseResult<Stmt> parseStmt(int32_t offset);
+    [[nodiscard]] ParseResult<IfStmt> parseIfStmt(int32_t offset);
+    [[nodiscard]] ParseResult<WhileStmt> parseWhileStmt(int32_t offset);
+    [[nodiscard]] ParseResult<BreakStmt> parseBreakStmt(int32_t offset);
+    [[nodiscard]] ParseResult<ContinueStmt> parseContinueStmt(
         int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<AssignStmt>> parseAssignStmt(
+    [[nodiscard]] ParseResult<AssignStmt> parseAssignStmt(
         int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ExpStmt>> parseExpStmt(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<ReturnStmt>> parseReturnStmt(
+    [[nodiscard]] ParseResult<ExpStmt> parseExpStmt(int32_t offset);
+    [[nodiscard]] ParseResult<ReturnStmt> parseReturnStmt(
         int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseLOrExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseLAndExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseEqExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseRelExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseAddExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseMulExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parsePrimaryExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseUnaryExp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseLVal(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseLOrExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseLAndExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseEqExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseRelExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseAddExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseMulExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parsePrimaryExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseUnaryExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseLVal(int32_t offset);
     [[nodiscard]] ParseResult<std::vector<Ref<Exp>>> parseLValIndices(
         int32_t offset);
     [[nodiscard]] ParseResult<UnaryOpKeyword> parseUnaryOp(int32_t offset);
@@ -149,8 +155,8 @@ class Parser {
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseAddOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseRelOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseEqOp(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Exp>> parseNumber(int32_t offset);
-    [[nodiscard]] ParseResult<Ptr<Identifier>> parseIdent(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseNumber(int32_t offset);
+    [[nodiscard]] ParseResult<Identifier> parseIdent(int32_t offset);
     [[nodiscard]] ParseResult<ParamArraySuffixParse> parseParamArraySuffix(
         int32_t offset);
 
@@ -193,49 +199,49 @@ class Parser {
     int32_t m_bestFailureOffset = -1;
     std::vector<Diagnostic> m_bestDiagnostics;
 
-    std::unordered_map<int32_t, ParseResult<Ptr<CompUnit>>> m_compUnitMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<FuncDef>>> m_funcDefMemo;
+    std::unordered_map<int32_t, ParseResult<CompUnit>> m_compUnitMemo;
+    std::unordered_map<int32_t, ParseResult<FuncDef>> m_funcDefMemo;
     std::unordered_map<int32_t, ParseResult<FuncTypeKeyword>> m_funcTypeMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Block>>> m_blockMemo;
-    std::unordered_map<int32_t, ParseResult<std::optional<BlockItem>>>
+    std::unordered_map<int32_t, ParseResult<Block>> m_blockMemo;
+    std::unordered_map<int32_t, ParseResult<BlockItem>>
         m_blockItemMemo;
-    std::unordered_map<int32_t, ParseResult<std::optional<Decl>>> m_declMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ConstDecl>>> m_constDeclMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<VarDecl>>> m_varDeclMemo;
+    std::unordered_map<int32_t, ParseResult<Decl>> m_declMemo;
+    std::unordered_map<int32_t, ParseResult<ConstDecl>> m_constDeclMemo;
+    std::unordered_map<int32_t, ParseResult<VarDecl>> m_varDeclMemo;
     std::unordered_map<int32_t, ParseResult<BTypeKeyword>> m_bTypeMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ConstDef>>> m_constDefMemo;
+    std::unordered_map<int32_t, ParseResult<ConstDef>> m_constDefMemo;
     std::unordered_map<int32_t, ParseResult<std::vector<Ref<Exp>>>>
         m_arrayConstDimsMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ConstInitVal>>>
+    std::unordered_map<int32_t, ParseResult<ConstInitVal>>
         m_constInitValMemo;
     std::unordered_map<int32_t,
         ParseResult<std::vector<Ref<ConstInitVal>>>>
         m_constInitValListMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<VarDef>>> m_varDefMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<InitVal>>> m_initValMemo;
+    std::unordered_map<int32_t, ParseResult<VarDef>> m_varDefMemo;
+    std::unordered_map<int32_t, ParseResult<InitVal>> m_initValMemo;
     std::unordered_map<int32_t, ParseResult<std::vector<Ref<InitVal>>>>
         m_initValListMemo;
-    std::unordered_map<int32_t, ParseResult<std::optional<Stmt>>> m_stmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<IfStmt>>> m_ifStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<WhileStmt>>> m_whileStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<BreakStmt>>> m_breakStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ContinueStmt>>>
+    std::unordered_map<int32_t, ParseResult<Stmt>> m_stmtMemo;
+    std::unordered_map<int32_t, ParseResult<IfStmt>> m_ifStmtMemo;
+    std::unordered_map<int32_t, ParseResult<WhileStmt>> m_whileStmtMemo;
+    std::unordered_map<int32_t, ParseResult<BreakStmt>> m_breakStmtMemo;
+    std::unordered_map<int32_t, ParseResult<ContinueStmt>>
         m_continueStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<AssignStmt>>>
+    std::unordered_map<int32_t, ParseResult<AssignStmt>>
         m_assignStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ExpStmt>>> m_expStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<ReturnStmt>>>
+    std::unordered_map<int32_t, ParseResult<ExpStmt>> m_expStmtMemo;
+    std::unordered_map<int32_t, ParseResult<ReturnStmt>>
         m_returnStmtMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_expMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_lOrExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_lAndExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_eqExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_relExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_addExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_mulExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_primaryExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_unaryExpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_lValMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_expMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_lOrExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_lAndExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_eqExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_relExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_addExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_mulExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_primaryExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_unaryExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_lValMemo;
     std::unordered_map<int32_t, ParseResult<std::vector<Ref<Exp>>>>
         m_lValIndicesMemo;
     std::unordered_map<int32_t, ParseResult<UnaryOpKeyword>> m_unaryOpMemo;
@@ -243,8 +249,8 @@ class Parser {
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_addOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_relOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_eqOpMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Exp>>> m_numberMemo;
-    std::unordered_map<int32_t, ParseResult<Ptr<Identifier>>> m_identMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_numberMemo;
+    std::unordered_map<int32_t, ParseResult<Identifier>> m_identMemo;
     std::unordered_map<int32_t, ParseResult<ParamArraySuffixParse>>
         m_paramArraySuffixMemo;
 };

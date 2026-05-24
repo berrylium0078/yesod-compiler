@@ -49,6 +49,7 @@ template <typename T> class Ptr {
 
 public:
     Ptr() = default;
+    Ptr(std::nullptr_t): m_index(-1) {}
     Ptr(const Ptr&) = default;
     Ptr(const Ref<T>& other)
         : m_index(other.m_index)
