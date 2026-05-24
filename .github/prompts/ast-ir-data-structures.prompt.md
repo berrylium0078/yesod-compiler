@@ -28,16 +28,15 @@ If the input is incomplete or has multiple plausible interpretations because key
 ### Mapping
 
 1. Keep the design idiomatic modern C++ and favor clear ownership and value semantics.
-2. Decide which fields are embedded directly and which require links. Use a link only when recursion forces it, or when a field must be shared or mutated independently of its parent.
-3. For ASTs in this project, use arena-backed storage with typed handles. `Ref<T>` is the non-null handle for required links and variant alternatives. `Ptr<T>` is the nullable handle for optional links. Model recursive links as `Ref<T>` or `Ptr<T>` values into the owning top-level `AST` container that stores the node arenas.
-4. If a type has more than one constructor or production alternative, model it with `std::variant` instead of inheritance. For example, `Stmt` should use `std::variant<Ref<IfStmt>, Ref<WhileStmt>>`-style alternatives rather than a shared base class.
-5. Use `std::vector<T>` for fields that may appear arbitrary times.
-6. Use `std::optional<T>` only for optional non-node values or parser state. For optional AST links, prefer `Ptr<T>` over `std::optional<Ref<T>>`.
-7. Do not introduce a shared AST base class just to carry ids or virtual dispatch when `std::variant` plus typed handles already encode node identity and alternatives.
-8. Add `SourcePos` to each AST node type and keep ownership in the top-level `AST` object rather than inside individual nodes.
-9. If the parser normalizes an optional source construct into a default child node, model that normalization explicitly with a flag plus a concrete child rather than with a nullable link.
-10. Use `std::shared_ptr` or `std::unique_ptr` only when the caller explicitly asks for pointer-based ownership instead of arena handles.
-11. A compact example of the intended pattern:
+2. For ASTs in this project, use arena-backed storage with typed handles. `Ref<T>` is the non-null handle for required links and variant alternatives. `Ptr<T>` is the nullable handle for optional links. Model recursive links as `Ref<T>` or `Ptr<T>` values into the owning top-level `AST` container that stores the node arenas.
+3. If a type has more than one constructor or production alternative, model it with `std::variant` instead of inheritance. For example, `Stmt` should use `std::variant<Ref<IfStmt>, Ref<WhileStmt>>`-style alternatives rather than a shared base class.
+4. Use `std::vector<T>` for fields that may appear arbitrary times.
+5. Use `std::optional<T>` only for optional non-node values or parser state. For optional AST links, prefer `Ptr<T>` over `std::optional<Ref<T>>`.
+6. Do not introduce a shared AST base class just to carry ids or virtual dispatch when `std::variant` plus typed handles already encode node identity and alternatives.
+7. Add `SourcePos` to each AST node type and keep ownership in the top-level `AST` object rather than inside individual nodes.
+8. If the parser normalizes an optional source construct into a default child node, model that normalization explicitly with a flag plus a concrete child rather than with a nullable link.
+9. Use `std::shared_ptr` or `std::unique_ptr` only when the caller explicitly asks for pointer-based ownership instead of arena handles.
+10. A compact example of the intended pattern:
 
    ```cpp
    using Stmt = std::variant<Ref<IfStmt>, Ref<WhileStmt>, Ref<BreakStmt>,
@@ -67,7 +66,7 @@ List the key representation choices.
 
 ### 3. C++ Data Structure Definitions
 
-Write the modern C++ type definitions, but prioritizes the following guidelines:
+Write the modern C++ type definitions, but prioritize the following guidelines:
 - Keep fields public unless encapsulation is needed.
 - Use `struct` by default unless a `class` is justified.
 - Use meaningful names for alternatives and grouped inner types.

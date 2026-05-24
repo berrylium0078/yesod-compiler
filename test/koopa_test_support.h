@@ -75,7 +75,7 @@ inline std::unique_ptr<Program> generateProgram(const std::string& source)
     auto rootOutput = parseRoot(source);
     SemanticAnalyzer semanticAnalyzer;
     auto semanticOutput = semanticAnalyzer.analyze(
-        std::move(rootOutput.m_ast), rootOutput.m_root);
+        std::move(rootOutput.m_ast), rootOutput.m_root.ref());
     bindCurrentAst(semanticOutput.m_ast);
     if (!semanticOutput.success()) {
         fail("expected semantic success before Koopa generation");

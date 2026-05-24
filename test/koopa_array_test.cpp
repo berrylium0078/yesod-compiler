@@ -47,6 +47,8 @@ constexpr const char* kArrayInitializerExpressionSource =
     "int d[2][2] = {a + b, a - b, {a * 2, b * 2}};";
 
 constexpr const char* kBuiltinArrayDeclSource =
+    "int getarray(int a[]);"
+    "void putarray(int n, int a[]);"
     "int main(){int a[2]; putarray(2, a); return getarray(a);}";
 
 constexpr const char* kMixedBraceArrayInitializerSource =

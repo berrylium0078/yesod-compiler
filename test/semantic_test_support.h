@@ -65,8 +65,11 @@ inline SemanticOutput analyzeSource(const std::string& source)
     auto ast = std::move(parseOutput.m_ast);
     const auto root = parseOutput.m_root;
 
+    if (!root) {
+        fail("expected non-null root node from parser output");
+    }
     SemanticAnalyzer analyzer;
-    auto output = analyzer.analyze(std::move(ast), root);
+    auto output = analyzer.analyze(std::move(ast), root.ref());
     bindCurrentAst(output.m_ast);
     return output;
 }
@@ -139,7 +142,7 @@ inline ExpType requireExpValueKind(
 
 template <typename T>
 inline Ptr<ast::WhileStmt> requireLoop(
-    const SemanticOutput& output, Ptr<T> node)
+    const SemanticOutput& output, Ref<T> node)
 {
     const auto loop = output.m_info.findLoop(node);
     require(loop.has_value(), "expected loop binding for node");

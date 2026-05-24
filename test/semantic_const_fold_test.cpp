@@ -18,7 +18,7 @@ struct SemanticConstFoldTest : SemanticTestBase {
         const auto returnStmt_nn = extractReturnStmt(extractStmtNode(blockItems[2]));
 
         const auto constExp = requireScalarConstInitExp(
-            constDecl_nn(ast()).constDef[0](ast()).constInitVal);
+            constDecl_nn(ast()).constDef[0](ast()).constInitVal.ref());
         require(requireConstantValue(m_output, constExp) == 42,
             "const initializer should fold to a constant value");
 
@@ -30,7 +30,7 @@ struct SemanticConstFoldTest : SemanticTestBase {
             "const declaration should expose the folded constant value");
 
         const auto varInitExp = requireScalarInitExp(
-            varDecl_nn(ast()).varDef[0](ast()).initVal);
+            varDecl_nn(ast()).varDef[0](ast()).initVal.ref());
         require(requireConstantValue(m_output, varInitExp) == 44,
             "var initializer should fold const-backed integer");
 

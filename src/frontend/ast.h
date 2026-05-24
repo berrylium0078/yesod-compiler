@@ -10,26 +10,13 @@
 #include <variant>
 #include <vector>
 
-#include "frontend/arena.h"
+#include "utils.h"
 
 namespace yesod::frontend {
 
-/** 
- *  Helpers for std::visit
- *  Example usage adapted from cppreference:
- * 
- *  std::variant<int, std::string, Derived>
- *  MATCH (...) WITH (
- *      [](int i){ std::print("int = {}\n", i); },
- *      [](std::string_view s){ std::println("string = “{}”", s); },
- *      [](const Base&){ std::println("base"); }
- *  );
-*/
-
-template<class... Ts>
-struct overloads : Ts... { using Ts::operator()...; };
-#define MATCH(exp) [&,&expr=(exp)]
-#define WITH(...) { return std::visit(yesod::frontend::overloads{__VA_ARGS__}, expr); }()
+using yesod::Ref;
+using yesod::Ptr;
+using yesod::Arena;
 
 struct SourcePos {
     constexpr SourcePos() = default;
@@ -233,14 +220,50 @@ struct CompUnit {
     std::vector<Item> topLevelItems;
 };
 
-using AST = Arena<Identifier, Exp,
-        ConstInitVal, InitVal, ConstDef, VarDef,
-        ConstDecl, VarDecl, FuncFParam,
-        IfStmt, WhileStmt, BreakStmt,
-        ContinueStmt, AssignStmt, ExpStmt,
-        ReturnStmt, Block,
-        FuncDef, CompUnit>;
+using AST = Arena<Identifier, Exp, ConstInitVal, InitVal, ConstDef, VarDef,
+    ConstDecl, VarDecl, FuncFParam, IfStmt, WhileStmt, BreakStmt, ContinueStmt,
+    AssignStmt, ExpStmt, ReturnStmt, Block, FuncDef, CompUnit>;
+
+// basic visitor that traverses the whole AST. Override the visit* methods to
+// implement a visitor that does something useful.
+class AstVisitor {
+public:
+    explicit AstVisitor(const AST& ast);
+    virtual ~AstVisitor() = default;
+
+    void traverse(Ref<CompUnit> compUnit);
+
+protected:
+    const AST& m_ast;
+
+    virtual void visitCompUnit(Ref<CompUnit> compUnit);
+    virtual void visitFuncDef(Ref<FuncDef> funcDef);
+    virtual void visitFuncFParam(const FuncFParam& funcFParam);
+    virtual void visitBlock(Ref<Block> block);
+    virtual void visitBlockItem(BlockItem blockItem);
+    virtual void visitDecl(Decl decl);
+    virtual void visitConstDecl(Ref<ConstDecl> constDecl);
+    virtual void visitConstDef(Ref<ConstDef> constDef);
+    virtual void visitConstInitVal(Ref<ConstInitVal> constInitVal);
+    virtual void visitVarDecl(Ref<VarDecl> varDecl);
+    virtual void visitVarDef(Ref<VarDef> varDef);
+    virtual void visitInitVal(Ref<InitVal> initVal);
+    virtual void visitStmt(Stmt stmt);
+    virtual void visitIfStmt(Ref<IfStmt> ifStmt);
+    virtual void visitWhileStmt(Ref<WhileStmt> whileStmt);
+    virtual void visitBreakStmt(Ref<BreakStmt> breakStmt);
+    virtual void visitContinueStmt(Ref<ContinueStmt> continueStmt);
+    virtual void visitAssignStmt(Ref<AssignStmt> assignStmt);
+    virtual void visitExpStmt(Ref<ExpStmt> expStmt);
+    virtual void visitReturnStmt(Ref<ReturnStmt> returnStmt);
+    virtual void visitExp(Ref<Exp> exp);
+    virtual void visitBinaryExp(const Exp& exp, const Exp::Binary& binary);
+    virtual void visitUnaryExp(const Exp& exp, const Exp::Unary& unary);
+    virtual void visitCallExp(const Exp& exp, const Exp::Call& call);
+    virtual void visitLValExp(const Exp& exp, const Exp::LVal& lVal);
+    virtual void visitNumberExp(const Exp& exp, const Exp::Number& number);
+};
 
 } // namespace yesod::frontend
 
-#endif
+#endif // _YESOD_FRONTEND_AST_H_

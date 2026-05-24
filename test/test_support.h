@@ -20,12 +20,14 @@ using Number = Exp::Number;
 {
     std::cerr << "test failure: " << message << std::endl;
     std::exit(1);
+    std::unreachable();
 }
 
 inline void require(bool condition, const std::string& message)
 {
     if (!condition) {
         fail(message);
+        std::unreachable();
     }
 }
 
@@ -48,7 +50,7 @@ template <typename Output> struct OutputAstBase {
     }
 
     [[nodiscard]] bool success() const { return m_output.success(); }
-    [[nodiscard]] Ptr<CompUnit> root() const { return m_output.m_root; }
+    [[nodiscard]] Ref<CompUnit> root() const { return m_output.m_root.ref(); }
 };
 
 struct AstTestHelperBase {
@@ -60,23 +62,21 @@ struct AstTestHelperBase {
         return self.m_output.m_diagnostics.front();
     }
 
-    template <class Self>
-    [[nodiscard]] Ptr<FuncDef> firstFuncDef(this Self& self)
+    template <class Self> Ref<FuncDef> firstFuncDef(this Self& self)
     {
         auto compUnit_nn = self.root();
         require(compUnit_nn, "expected compilation unit node");
         const auto& compUnit = compUnit_nn(self.ast());
         for (const auto topLevelItem : compUnit.topLevelItems) {
-            const auto funcDef_nn = MATCH(topLevelItem)
-                WITH([](const Ref<FuncDef>& funcDef_nn) {
-                    return funcDef_nn.ptr();
-                },
-                    [](const auto&) { return Ptr<FuncDef> { }; }, );
+            const auto funcDef_nn = MATCH(topLevelItem) WITH(
+                [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
+                [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn) {
-                return funcDef_nn;
+                return funcDef_nn.ref();
             }
         }
         fail("expected at least one function definition in compilation unit");
+        std::unreachable();
     }
 
     template <class Self>
@@ -135,6 +135,7 @@ struct AstTestHelperBase {
             [](const auto&) -> Stmt {
                 fail("expected statement body item variant");
                 std::unreachable();
+                std::unreachable();
             });
     }
 
@@ -146,175 +147,165 @@ struct AstTestHelperBase {
             [](const auto&) -> Decl {
                 fail("expected declaration body item variant");
                 std::unreachable();
+                std::unreachable();
             });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ReturnStmt> extractReturnStmt(
+    [[nodiscard]] Ref<ReturnStmt> extractReturnStmt(
         this Self& self, const Stmt& stmt)
     {
-        const auto returnStmt = MATCH(stmt)
-            WITH([](const Ref<ReturnStmt>& returnStmt) {
-                return returnStmt.ptr();
-            },
-                [](const auto&) { return Ptr<ReturnStmt> { }; }, );
-        require(returnStmt, "expected return statement variant");
-        return returnStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<ReturnStmt>& returnStmt) { return returnStmt; },
+                [](const auto&) -> Ref<ReturnStmt> {
+                    fail("expected return statement variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ReturnStmt> extractReturnStmt(
+    [[nodiscard]] Ref<ReturnStmt> extractReturnStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractReturnStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<IfStmt> extractIfStmt(this Self& self, const Stmt& stmt)
+    [[nodiscard]] Ref<IfStmt> extractIfStmt(this Self& self, const Stmt& stmt)
     {
-        const auto ifStmt
-            = MATCH(stmt) WITH([](const Ref<IfStmt>& ifStmt) {
-                return ifStmt.ptr();
-            },
-                [](const auto&) { return Ptr<IfStmt> { }; }, );
-        require(ifStmt != nullptr, "expected if statement variant");
-        return ifStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<IfStmt>& ifStmt) { return ifStmt; },
+                [](const auto&) -> Ref<IfStmt> {
+                    fail("expected if statement variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<IfStmt> extractIfStmt(
+    [[nodiscard]] Ref<IfStmt> extractIfStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractIfStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<WhileStmt> extractWhileStmt(
+    [[nodiscard]] Ref<WhileStmt> extractWhileStmt(
         this Self& self, const Stmt& stmt)
     {
-        const auto whileStmt = MATCH(stmt)
-            WITH([](const Ref<WhileStmt>& whileStmt) {
-                return whileStmt.ptr();
-            },
-                [](const auto&) { return Ptr<WhileStmt> { }; }, );
-        require(whileStmt != nullptr, "expected while statement variant");
-        return whileStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<WhileStmt>& whileStmt) { return whileStmt; },
+                [](const auto&) -> Ref<WhileStmt> {
+                    fail("expected while statement variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<WhileStmt> extractWhileStmt(
+    [[nodiscard]] Ref<WhileStmt> extractWhileStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractWhileStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<BreakStmt> extractBreakStmt(
+    [[nodiscard]] Ref<BreakStmt> extractBreakStmt(
         this Self& self, const Stmt& stmt)
     {
-        const auto breakStmt = MATCH(stmt)
-            WITH([](const Ref<BreakStmt>& breakStmt) {
-                return breakStmt.ptr();
-            },
-                [](const auto&) { return Ptr<BreakStmt> { }; }, );
-        require(breakStmt != nullptr, "expected break statement variant");
-        return breakStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<BreakStmt>& breakStmt) { return breakStmt; },
+                [](const auto&) -> Ref<BreakStmt>{
+                    fail("expected break statement variant");
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ContinueStmt> extractContinueStmt(
+    [[nodiscard]] Ref<ContinueStmt> extractContinueStmt(
         this Self& self, const Stmt& stmt)
     {
-        const auto continueStmt = MATCH(stmt) WITH(
-            [](const Ref<ContinueStmt>& continueStmt) {
-                return continueStmt.ptr();
-            },
-            [](const auto&) { return Ptr<ContinueStmt> { }; }, );
-        require(continueStmt != nullptr, "expected continue statement variant");
-        return continueStmt;
+        return MATCH(stmt) WITH(
+            [](const Ref<ContinueStmt>& continueStmt) { return continueStmt; },
+            [](const auto&) -> Ref<ContinueStmt> {
+                fail("expected continue statement variant");
+                std::unreachable();
+            });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<AssignStmt> extractAssignStmt(
+    [[nodiscard]] Ref<AssignStmt> extractAssignStmt(
         this Self& self, const Stmt& stmt)
     {
-        const auto assignStmt = MATCH(stmt)
-            WITH([](const Ref<AssignStmt>& assignStmt) {
-                return assignStmt.ptr();
-            },
-                [](const auto&) { return Ptr<AssignStmt> { }; }, );
-        require(assignStmt != nullptr, "expected assignment statement variant");
-        return assignStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<AssignStmt>& assignStmt) { return assignStmt; },
+                [](const auto&) -> Ref<AssignStmt> {
+                    fail("expected assignment statement variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<AssignStmt> extractAssignStmt(
+    [[nodiscard]] Ref<AssignStmt> extractAssignStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractAssignStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ExpStmt> extractExpStmt(this Self& self, const Stmt& stmt)
+    [[nodiscard]] Ref<ExpStmt> extractExpStmt(this Self& self, const Stmt& stmt)
     {
-        const auto expStmt = MATCH(stmt)
-            WITH([](const Ref<ExpStmt>& expStmt) {
-                return expStmt.ptr();
-            },
-                [](const auto&) { return Ptr<ExpStmt> { }; }, );
-        require(expStmt != nullptr, "expected expression statement variant");
-        return expStmt;
+        return MATCH(stmt)
+            WITH([](const Ref<ExpStmt>& expStmt) { return expStmt; },
+                [](const auto&) -> Ref<ExpStmt> {
+                    fail("expected expression statement variant");
+                    std::unreachable();
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ExpStmt> extractExpStmt(
+    [[nodiscard]] Ref<ExpStmt> extractExpStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractExpStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<Block> extractBlockStmt(this Self& self, const Stmt& stmt)
+    [[nodiscard]] Ref<Block> extractBlockStmt(this Self& self, const Stmt& stmt)
     {
-        const auto body
-            = MATCH(stmt) WITH([](const Ref<Block>& body) {
-                  return body.ptr();
-              },
-                [](const auto&) { return Ptr<Block> { }; }, );
-        require(body != nullptr, "expected body statement variant");
-        return body;
+        return MATCH(stmt) WITH([](const Ref<Block>& body) { return body; },
+            [](const auto&) -> Ref<Block> {
+                fail("expected body statement variant");
+                std::unreachable();
+            });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<Block> extractBlockStmt(
+    [[nodiscard]] Ref<Block> extractBlockStmt(
         this Self& self, const BlockItem& blockItemNode_nn)
     {
         return self.extractBlockStmt(self.extractStmtNode(blockItemNode_nn));
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<ConstDecl> extractConstDecl(
+    [[nodiscard]] Ref<ConstDecl> extractConstDecl(
         this Self& self, const Decl& decl)
     {
-        const auto constDecl = MATCH(decl)
-            WITH([](const Ref<ConstDecl>& constDecl) {
-                return constDecl.ptr();
-            },
-                [](const auto&) { return Ptr<ConstDecl> { }; }, );
-        require(constDecl, "expected const declaration variant");
-        return constDecl;
+        return MATCH(decl)
+            WITH([](const Ref<ConstDecl>& constDecl) { return constDecl; },
+                [](const auto&) -> Ref<ConstDecl> {
+                    fail("expected const declaration variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<VarDecl> extractVarDecl(this Self& self, const Decl& decl)
+    [[nodiscard]] Ref<VarDecl> extractVarDecl(this Self& self, const Decl& decl)
     {
-        const auto varDecl = MATCH(decl)
-            WITH([](const Ref<VarDecl>& varDecl) {
-                return varDecl.ptr();
-            },
-                [](const auto&) { return Ptr<VarDecl> { }; }, );
-        require(varDecl, "expected var declaration variant");
-        return varDecl;
+        return MATCH(decl)
+            WITH([](const Ref<VarDecl>& varDecl) { return varDecl; },
+                [](const auto&) -> Ref<VarDecl> {
+                    fail("expected var declaration variant");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
@@ -324,9 +315,11 @@ struct AstTestHelperBase {
             WITH([](const Number& number) -> int32_t { return number.value; },
                 [](const LVal&) -> int32_t {
                     fail("cannot evaluate lvalue expression");
+                    std::unreachable();
                 },
                 [](const Exp::Call&) -> int32_t {
                     fail("cannot evaluate call expression");
+                    std::unreachable();
                 },
                 [&](const Exp::Unary& unary) -> int32_t {
                     const auto value = self.evaluateExp(unary.lhs);
@@ -339,6 +332,7 @@ struct AstTestHelperBase {
                         return value == 0 ? 1 : 0;
                     }
                     fail("unexpected unary operator");
+                    std::unreachable();
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
                     const auto lhsValue = self.evaluateExp(binary.lhs);
@@ -372,45 +366,51 @@ struct AstTestHelperBase {
                         return (lhsValue != 0 || rhsValue != 0) ? 1 : 0;
                     }
                     fail("unexpected binary operator");
+                    std::unreachable();
                 }, );
     }
 
     template <class Self>
     [[nodiscard]] Ref<Exp> requireScalarConstInitExp(
-        this Self& self, const Ptr<ConstInitVal>& initVal_nn)
+        this Self& self, const Ref<ConstInitVal>& initVal_nn)
     {
         return MATCH(initVal_nn(self.ast()).kind)
             WITH([](const Ref<Exp>& exp_nn) { return exp_nn; },
                 [](const auto&) -> Ref<Exp> {
                     fail("expected scalar const initializer expression");
                     std::unreachable();
+                    std::unreachable();
                 });
     }
 
     template <class Self>
     [[nodiscard]] Ref<Exp> requireScalarInitExp(
-        this Self& self, const Ptr<InitVal>& initVal_nn)
+        this Self& self, const Ref<InitVal>& initVal_nn)
     {
         return MATCH(initVal_nn(self.ast()).kind)
             WITH([](const Ref<Exp>& exp_nn) { return exp_nn; },
                 [](const auto&) -> Ref<Exp> {
                     fail("expected scalar initializer expression");
                     std::unreachable();
+                    std::unreachable();
                 });
     }
 
     template <class Self>
     [[nodiscard]] const ConstInitVal::List& requireConstInitList(
-        this Self& self, const Ptr<ConstInitVal>& initVal_nn)
+        this Self& self, const Ref<ConstInitVal>& initVal_nn)
     {
         return *MATCH(initVal_nn(self.ast()).kind)
             WITH([](const ConstInitVal::List& list) { return &list; },
-                [](const auto&) { fail("expected brace initializer list"); });
+                [](const auto&) {
+                    fail("expected brace initializer list");
+                    std::unreachable();
+                });
     }
 
     template <class Self>
     [[nodiscard]] const InitVal::List& requireInitList(
-        this Self& self, const Ptr<InitVal>& initVal_nn)
+        this Self& self, const Ref<InitVal>& initVal_nn)
     {
         const auto list = MATCH(initVal_nn(self.ast()).kind)
             WITH([](const InitVal::List& list) { return &list; },
@@ -430,41 +430,40 @@ struct AstTestHelperBase {
                 [](const auto&) -> Decl {
                     fail("expected top-level declaration");
                     std::unreachable();
-                });
-    }
-
-    template <class Self>
-    [[nodiscard]] Ptr<FuncDef> requireTopLevelFunc(
-        this Self& self, const CompUnit::Item& topLevelItem)
-    {
-        return MATCH(topLevelItem)
-            WITH([](const Ref<FuncDef>& funcDef_nn) {
-                return funcDef_nn.ptr();
-            },
-                [](const auto&) {
-                    fail("expected top-level function definition");
                     std::unreachable();
                 });
     }
 
     template <class Self>
-    [[nodiscard]] Ptr<FuncDef> requireFuncDefByName(this Self& self,
-        const Ptr<CompUnit>& compUnit_nn, const std::string& expectedName)
+    [[nodiscard]] Ref<FuncDef> requireTopLevelFunc(
+        this Self& self, const CompUnit::Item& topLevelItem)
+    {
+        return MATCH(topLevelItem) WITH(
+            [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
+            [](const auto&) {
+                fail("expected top-level function definition");
+                std::unreachable();
+                std::unreachable();
+            });
+    }
+
+    template <class Self>
+    [[nodiscard]] Ref<FuncDef> requireFuncDefByName(this Self& self,
+        const Ref<CompUnit>& compUnit_nn, const std::string& expectedName)
     {
         require(compUnit_nn != nullptr, "expected compilation unit node");
         for (const auto topLevelItem : compUnit_nn(self.ast()).topLevelItems) {
-            const auto funcDef_nn = MATCH(topLevelItem)
-                WITH([](const Ref<FuncDef>& funcDef_nn) {
-                    return funcDef_nn.ptr();
-                },
-                    [](const auto&) { return Ptr<FuncDef> { }; }, );
-            if (funcDef_nn != nullptr
-                && funcDef_nn(self.ast()).identifier(self.ast()).name
+            const auto funcDef = MATCH(topLevelItem) WITH(
+                [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
+                [](const auto&) { return Ptr<FuncDef> { }; }, );
+            if (funcDef != nullptr
+                && funcDef(self.ast()).identifier(self.ast()).name
                     == expectedName) {
-                return funcDef_nn;
+                return funcDef.ref();
             }
         }
         fail("expected function definition named '" + expectedName + "'");
+        std::unreachable();
     }
 
     template <class Self>
@@ -483,19 +482,18 @@ struct AstTestHelperBase {
 
 struct TestBase : AstTestHelperBase { };
 
-inline Ref<FuncDef> firstFuncDef(const Ptr<CompUnit>& compUnit_nn)
+inline Ref<FuncDef> firstFuncDef(const Ref<CompUnit>& compUnit_nn)
 {
     require(compUnit_nn != nullptr, "expected compilation unit node");
     for (const auto topLevelItem : compUnit_nn(currentAst()).topLevelItems) {
-        const auto funcDef = MATCH(topLevelItem)
-            WITH([](const Ref<FuncDef>& funcDef_nn) {
-                return funcDef_nn.ptr();
-            },
-                [](const auto&) { return Ptr<FuncDef> { }; });
+        const auto funcDef = MATCH(topLevelItem) WITH(
+            [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
+            [](const auto&) { return Ptr<FuncDef> { }; });
         if (funcDef)
             return funcDef.ref();
     }
     fail("expected at least one function definition in compilation unit");
+    std::unreachable();
 }
 
 } // namespace yesod::test_support

@@ -1,5 +1,5 @@
-#ifndef _YESOD_FRONTEND_ARENA_H_
-#define _YESOD_FRONTEND_ARENA_H_
+#ifndef _YESOD_UTILS_H_
+#define _YESOD_UTILS_H_
 
 #include <cassert>
 #include <cstddef>
@@ -11,7 +11,29 @@
 #include <utility>
 #include <vector>
 
-namespace yesod::frontend {
+namespace yesod {
+
+/**
+ *  Helpers for std::visit
+ *  Example usage adapted from cppreference:
+ *
+ *  std::variant<int, std::string, Derived>
+ *  MATCH (...) WITH (
+ *      [](int i){ std::print("int = {}\n", i); },
+ *      [](std::string_view s){ std::println("string = “{}”", s); },
+ *      [](const Base&){ std::println("base"); }
+ *  );
+ */
+
+template <class... Ts> struct overloads : Ts... {
+    using Ts::operator()...;
+};
+#define MATCH(exp) [&, &__expr__ = (exp) ]
+#define WITH(...)                                                              \
+    {                                                                          \
+        return std::visit(yesod::overloads { __VA_ARGS__ }, __expr__);         \
+    }                                                                          \
+    ()
 
 template <typename T, typename... Ts>
 concept is_in_list = (std::same_as<T, Ts> || ...);
@@ -44,7 +66,8 @@ public:
     bool operator==(std::nullptr_t) const { return m_index < 0; }
     bool operator!=(std::nullptr_t) const { return m_index >= 0; }
     operator bool() const { return m_index >= 0; }
-    Ref<T> ref() const {
+    Ref<T> ref() const
+    {
         if (m_index < 0) {
             throw std::runtime_error("attempted to dereference null pointer");
         }
@@ -103,9 +126,7 @@ public:
     bool operator==(std::nullptr_t) const { return false; }
     bool operator!=(std::nullptr_t) const { return true; }
     operator bool() const { return true; }
-    Ptr<T> ptr() const {
-        return Ptr<T>(m_index);
-    }
+    Ptr<T> ptr() const { return Ptr<T>(m_index); }
 
 private:
     explicit Ref(int32_t index)
@@ -144,21 +165,21 @@ private:
     std::tuple<std::vector<Ts>...> m_items;
 };
 
-} // namespace yesod::frontend
+} // namespace yesod
 
-template <typename T> class std::hash<yesod::frontend::Ptr<T>> {
+template <typename T> class std::hash<yesod::Ptr<T>> {
 public:
-    std::size_t operator()(const yesod::frontend::Ptr<T>& handle) const
+    std::size_t operator()(const yesod::Ptr<T>& handle) const
     {
         return std::hash<int32_t>()(handle.m_index);
     }
 };
-template <typename T> class std::hash<yesod::frontend::Ref<T>> {
+template <typename T> class std::hash<yesod::Ref<T>> {
 public:
-    std::size_t operator()(const yesod::frontend::Ref<T>& handle) const
+    std::size_t operator()(const yesod::Ref<T>& handle) const
     {
         return std::hash<int32_t>()(handle.m_index);
     }
 };
 
-#endif
+#endif // _YESOD_UTILS_H_

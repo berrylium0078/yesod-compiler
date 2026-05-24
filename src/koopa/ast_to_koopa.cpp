@@ -781,7 +781,7 @@ void FunctionGenerator::generateWhileStmt(Ptr<WhileStmt> whileStmt)
 void FunctionGenerator::generateBreakStmt(Ptr<BreakStmt> breakStmt)
 {
     auto& state = *this;
-    const auto loop = state.m_semanticInfo->findLoop(breakStmt);
+    const auto loop = state.m_semanticInfo->findLoop(breakStmt.ref());
     if (!loop.has_value()) {
         throw std::runtime_error("break statement references no loop binding");
     }
@@ -797,7 +797,7 @@ void FunctionGenerator::generateBreakStmt(Ptr<BreakStmt> breakStmt)
 void FunctionGenerator::generateContinueStmt(Ptr<ContinueStmt> continueStmt)
 {
     auto& state = *this;
-    const auto loop = state.m_semanticInfo->findLoop(continueStmt);
+    const auto loop = state.m_semanticInfo->findLoop(continueStmt.ref());
     if (!loop.has_value()) {
         throw std::runtime_error(
             "continue statement references no loop binding");

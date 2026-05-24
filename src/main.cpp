@@ -153,7 +153,7 @@ int main(int argc, const char* argv[])
 
         yesod::frontend::SemanticAnalyzer semanticAnalyzer;
         auto semanticOutput = semanticAnalyzer.analyze(
-            std::move(parseOutput.m_ast), parseOutput.m_root);
+            std::move(parseOutput.m_ast), parseOutput.m_root.ref());
         if (!semanticOutput.success()) {
             std::vector<DiagInfo> diags;
             // include any parse diagnostics (if present) and semantic diagnostics

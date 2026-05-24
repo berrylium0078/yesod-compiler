@@ -8,27 +8,56 @@ Project name: the YESOD compiler.
   - build/
 - Source code (src/):
   - main.cpp: Main program entry point.
+  - utils.h: Utility functions and definitions used across the project. Currently the Arena and variant matching utilities are defined here.
   - koopa/
     - mykoopa.*: Koopa IR generation helper library.
+    - ast_to_koopa.*: AST (with semantic information) to Koopa IR translation.
   - frontend/
-    - lexer.*: Lexeme parser for SysY language.
-    - ast.*: AST node definitions for SysY language. (Incomplete)
-    - parser.*: Parser for SysY language, generates AST from tokens. (Incomplete)
-- CTest Tests (test/):
-  - currently empty.
+    - ast.*: AST node definitions for SysY language, as well as a base visitor that traverses the AST.
+    - parser.*: Parser for SysY language, generates AST from tokens.
+    - semantic.*: Semantic analysis for SysY language, annotates AST with semantic information.
+  - backend/
+    - riscv.*: Code generation from Koopa IR to target RISC-V assembly.
+- CTest Tests (test/): Tests for the project, organized by component and SysY syntax.
 - Documentation (doc/):
   - koopaIR.md: Documentation for Koopa IR text format.
   - sysy.md: Documentation for the SysY language.
 
 ## Coding Style
 
+### Naming Style
+
 - Namespace and header guard naming follow directory structure. For example, `namespace yesod::frontend` and `_YESOD_FRONTEND_FILENAME_H_` for files in `src/frontend/filename.h`.
+
 - Use camelCase for variable and function names.
-  - Use `m_` prefix for member variables in classes.
-  - Use `_nn` suffix to specify that a pointer-like variable will never be null during its lifespan.
-  - Other part of the variable name should be in camelCase, e.g. `m_astNode_nn`.
-  - Never wrap a pointer-like (including STL smart pointers -- they are all nullable) in `std::optional`.
-- `std::variant` should always be consumed with `std::visit` and never with `std::get` or `std::get_if`.
+  - Use `m_` prefix for member variables in classes. But for structs that are primarily data holders, keep member names simple without prefixes. For example:
+    - `class MyClass { int m_value; void doSomething(); };`
+    - `struct Point { int x; int y; };`
+  - Other part of the variable name should be in camelCase, e.g. `m_astNode`.
+- Use PascalCase for class and struct names, e.g. `class MyClass { ... };` and `struct Point { ... };`.
+- Use ALL_CAPS with underscores for constants and macros, e.g. `const int MAX_SIZE = 100;` and `#define MAX_SIZE 100`.
+
+### Memory Management
+
+- Prefer Arena based allocation, with typed handles `Ref<T>` and `Ptr<T>` for links between nodes. Avoid raw pointers and heap allocation unless explicitly required by the caller.
+- Prefer non-nullable handles `Ref<T>` to enforce static type checking. Add error handling for null pointers before converting a `Ptr<T>` to `Ref<T>`.
+- Do not use `std::optional<Ref<T>>` for optional links. Instead, use `Ptr<T>` to indicate a nullable reference.
+
+### Variant Consumption
+
+To perform case-analysis on a `std::variant`, use the `MATCH(variant) WITH(lambda list...)` macro defined in `ast.h`.
+- Each case is written as a lambda taking a single parameter of the type of that case, e.g. `[](const IfStmt& ifStmt) { ... }`.
+- If there is only one non-default case and a default, use `std::get_if` to check for that case and handle it directly, and use a default case for the rest. For example:
+  ```cpp
+  if (auto* assignStmt = std::get_if<AssignStmt>(&stmt)) {
+      // Handle the AssignStmt case directly.
+  } else {
+      // Handle the non-AssignStmt cases in a default case.
+  }
+  ```
+
+### General guidelines
+
 - For none-primitive types, use const references when passing as parameters to avoid unnecessary copying.
 - For base classes, declare a virtual destructor to ensure proper cleanup of derived classes.
 
@@ -42,9 +71,18 @@ DO follow the coding style guidelines outlined above to maintain code consistenc
 
 ### Build & Test
 
-See `.github/prompts/build-and-test.prompt.md` for instructions on building the project and running tests.
+Basic usage:
+
+```sh
+cmake --build build -j 18
+ctest --test-dir build
+```
+
+If you want to add more tests, see `test/` directory for examples and `.github/instructions/compiler-test.instructions.md` for instructions on building the project and running tests.
 
 ### Code Review
+
+Check if the coding style guidelines are followed, and if the code is well-structured and documented. Provide constructive feedback on how to improve the code quality and maintainability.
 
 ### Documentation
 
