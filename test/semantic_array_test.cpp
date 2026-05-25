@@ -79,12 +79,9 @@ struct SemanticArrayTest : SemanticTestBase {
     {
         std::vector<Ptr<FuncDef>> funcs;
         for (const auto topLevelItem : root()(ast()).topLevelItems) {
-            const auto funcDef_nn
-                = MATCH(topLevelItem) WITH(
-                    [](const Ref<FuncDef>& funcDef_nn) {
-                        return funcDef_nn.ptr();
-                    },
-                    [](const auto&) { return Ptr<FuncDef> { }; }, );
+            const auto funcDef_nn = MATCH(topLevelItem) WITH(
+                [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
+                [](const auto&) { return Ptr<FuncDef> { }; }, );
             if (funcDef_nn) {
                 funcs.push_back(funcDef_nn);
             }
@@ -101,25 +98,27 @@ struct SemanticArrayTest : SemanticTestBase {
             success(), "array parameter call should pass semantic analysis");
 
         const auto takeFunc_nn = firstFuncDef();
-        const auto& takeSymbol = requireSymbol(m_output,
-            takeFunc_nn(ast()).funcFParams[0].identifier);
-        require(takeSymbol.m_type.isArray(),
+        const auto& takeSymbol = requireSymbol(
+            m_output, takeFunc_nn(ast()).funcFParams[0].identifier);
+        require(takeSymbol.isObject() && takeSymbol.object().m_type.isArray(),
             "array parameter should preserve an array semantic type");
-        require(takeSymbol.m_type.m_arrayLength == -1,
+        require(takeSymbol.isObject()
+                && takeSymbol.object().m_type.m_arrayLength == -1,
             "array parameter should preserve the unsized first dimension");
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
-        const auto varDecl_nn = extractVarDecl(extractDeclNode(
-            mainFunc_nn(ast()).body(ast()).items[0]));
+        const auto varDecl_nn = extractVarDecl(
+            extractDeclNode(mainFunc_nn(ast()).body(ast()).items[0]));
         const auto& arraySymbol
             = requireSymbol(m_output, varDecl_nn(ast()).varDef[0]);
-        require(arraySymbol.m_type.isArray(),
+        require(arraySymbol.isObject() && arraySymbol.object().m_type.isArray(),
             "local array declaration should preserve an array semantic type");
-        require(arraySymbol.m_type.m_arrayLength == 2,
+        require(arraySymbol.isObject()
+                && arraySymbol.object().m_type.m_arrayLength == 2,
             "local array declaration should preserve its constant length");
 
-        const auto returnStmt_nn = extractReturnStmt(extractStmtNode(
-            mainFunc_nn(ast()).body(ast()).items[2]));
+        const auto returnStmt_nn = extractReturnStmt(
+            extractStmtNode(mainFunc_nn(ast()).body(ast()).items[2]));
         require(requireExpValueKind(m_output, returnStmt_nn(ast()).exp.ref())
                 == ExpType::integer,
             "call through an array parameter should still produce an integer "
@@ -151,26 +150,25 @@ struct SemanticArrayTest : SemanticTestBase {
             = requireSymbol(m_output, globalConstDecl_nn(ast()).constDef[0]);
 
         const auto mainFunc_nn = requireFuncDefByName(root(), "main");
-        const auto localConstDecl_nn = extractConstDecl(extractDeclNode(
-            mainFunc_nn(ast()).body(ast()).items[3]));
+        const auto localConstDecl_nn = extractConstDecl(
+            extractDeclNode(mainFunc_nn(ast()).body(ast()).items[3]));
         const auto& localGarrSymbol
             = requireSymbol(m_output, localConstDecl_nn(ast()).constDef[0]);
         require(localGarrSymbol.m_id != globalGarrSymbol.m_id,
             "shadowed const arrays should bind distinct symbol identities");
 
-        const auto whileStmt_nn = extractWhileStmt(extractStmtNode(
-            mainFunc_nn(ast()).body(ast()).items[2]));
-        const auto whileBody_nn
-            = extractBlockStmt(whileStmt_nn(ast()).body);
-        const auto sumAssign_nn = extractAssignStmt(
-            extractStmtNode(whileBody_nn(ast()).items[0]));
+        const auto whileStmt_nn = extractWhileStmt(
+            extractStmtNode(mainFunc_nn(ast()).body(ast()).items[2]));
+        const auto whileBody_nn = extractBlockStmt(whileStmt_nn(ast()).body);
+        const auto sumAssign_nn
+            = extractAssignStmt(extractStmtNode(whileBody_nn(ast()).items[0]));
         const auto& sumBinary = requireBinaryExp(sumAssign_nn(ast()).exp);
         require(requireSymbol(m_output, sumBinary.rhs).m_id
                 == globalGarrSymbol.m_id,
             "garr[i] inside the loop should resolve to the global const array");
 
-        const auto returnStmt_nn = extractReturnStmt(extractStmtNode(
-            mainFunc_nn(ast()).body(ast()).items[4]));
+        const auto returnStmt_nn = extractReturnStmt(
+            extractStmtNode(mainFunc_nn(ast()).body(ast()).items[4]));
         const auto& returnBinary
             = requireBinaryExp(returnStmt_nn(ast()).exp.ref());
         require(requireSymbol(m_output, returnBinary.rhs).m_id
@@ -186,8 +184,7 @@ struct SemanticArrayTest : SemanticTestBase {
         require(!success(),
             "assigning through a const array element should fail semantic "
             "analysis");
-        require(
-            isDiagnostic<AssignToConstDiagnostic>(firstDiagnostic()),
+        require(isDiagnostic<AssignToConstDiagnostic>(firstDiagnostic()),
             "const array assignment should report the assign-to-const semantic "
             "label");
     }
@@ -205,36 +202,57 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto& f1ArrayParam = requireSymbol(
             m_output, funcs[0](ast()).funcFParams[1].identifier);
-        require(f1ArrayParam.m_type.isArray()
-                && f1ArrayParam.m_type.m_arrayLength == -1,
+        require(f1ArrayParam.isObject()
+                && f1ArrayParam.object().m_type.isArray()
+                && f1ArrayParam.isObject()
+                && f1ArrayParam.object().m_type.m_arrayLength == -1,
             "f1 parameter should preserve the unsized array semantic type");
-        require(f1ArrayParam.m_type.m_elementType != nullptr
-                && f1ArrayParam.m_type.m_elementType->kind
+        require(f1ArrayParam.isObject()
+                && f1ArrayParam.object().m_type.m_elementType != nullptr
+                && f1ArrayParam.isObject()
+                && f1ArrayParam.object().m_type.m_elementType->kind
                     == SemanticTypeKind::integer,
             "f1 parameter element type should be integer");
 
         const auto& f2ArrayParam = requireSymbol(
             m_output, funcs[1](ast()).funcFParams[1].identifier);
-        require(f2ArrayParam.m_type.isArray()
-                && f2ArrayParam.m_type.m_arrayLength == -1,
+        require(f2ArrayParam.isObject()
+                && f2ArrayParam.object().m_type.isArray()
+                && f2ArrayParam.isObject()
+                && f2ArrayParam.object().m_type.m_arrayLength == -1,
             "f2 parameter should preserve the unsized array semantic type");
-        require(f2ArrayParam.m_type.m_elementType != nullptr
-                && f2ArrayParam.m_type.m_elementType->isArray()
-                && f2ArrayParam.m_type.m_elementType->m_arrayLength == 10,
+        require(f2ArrayParam.isObject()
+                && f2ArrayParam.object().m_type.m_elementType != nullptr
+                && f2ArrayParam.isObject()
+                && f2ArrayParam.object().m_type.m_elementType->isArray()
+                && f2ArrayParam.isObject()
+                && f2ArrayParam.object().m_type.m_elementType->m_arrayLength
+                    == 10,
             "f2 parameter should preserve one trailing array extent");
 
         const auto& f3ArrayParam = requireSymbol(
             m_output, funcs[2](ast()).funcFParams[1].identifier);
-        require(f3ArrayParam.m_type.isArray()
-                && f3ArrayParam.m_type.m_arrayLength == -1,
+        require(f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.isArray()
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.m_arrayLength == -1,
             "f3 parameter should preserve the unsized array semantic type");
-        require(f3ArrayParam.m_type.m_elementType != nullptr
-                && f3ArrayParam.m_type.m_elementType->isArray()
-                && f3ArrayParam.m_type.m_elementType->m_arrayLength == 10
-                && f3ArrayParam.m_type.m_elementType->m_elementType != nullptr
-                && f3ArrayParam.m_type.m_elementType->m_elementType->isArray()
-                && f3ArrayParam.m_type.m_elementType->m_elementType
-                        ->m_arrayLength
+        require(f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.m_elementType != nullptr
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.m_elementType->isArray()
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.m_elementType->m_arrayLength
+                    == 10
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object().m_type.m_elementType->m_elementType
+                    != nullptr
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object()
+                    .m_type.m_elementType->m_elementType->isArray()
+                && f3ArrayParam.isObject()
+                && f3ArrayParam.object()
+                        .m_type.m_elementType->m_elementType->m_arrayLength
                     == 10,
             "f3 parameter should preserve both trailing array extents");
     }
@@ -255,18 +273,25 @@ struct SemanticArrayTest : SemanticTestBase {
 
         const auto& cSymbol
             = requireSymbol(m_output, topLevelDecl1(ast()).constDef[0]);
-        require(cSymbol.m_type.isArray() && cSymbol.m_type.m_arrayLength == 2,
+        require(cSymbol.isObject() && cSymbol.object().m_type.isArray()
+                && cSymbol.isObject()
+                && cSymbol.object().m_type.m_arrayLength == 2,
             "const array expression initializer should preserve the declared "
             "array type");
 
         const auto& dSymbol
             = requireSymbol(m_output, topLevelDecl2(ast()).varDef[0]);
-        require(dSymbol.m_type.isArray() && dSymbol.m_type.m_arrayLength == 2,
+        require(dSymbol.isObject() && dSymbol.object().m_type.isArray()
+                && dSymbol.isObject()
+                && dSymbol.object().m_type.m_arrayLength == 2,
             "mutable array expression initializer should preserve the outer "
             "array length");
-        require(dSymbol.m_type.m_elementType != nullptr
-                && dSymbol.m_type.m_elementType->isArray()
-                && dSymbol.m_type.m_elementType->m_arrayLength == 2,
+        require(dSymbol.isObject()
+                && dSymbol.object().m_type.m_elementType != nullptr
+                && dSymbol.isObject()
+                && dSymbol.object().m_type.m_elementType->isArray()
+                && dSymbol.isObject()
+                && dSymbol.object().m_type.m_elementType->m_arrayLength == 2,
             "mutable array expression initializer should preserve the inner "
             "array length");
 
@@ -296,25 +321,37 @@ struct SemanticArrayTest : SemanticTestBase {
             requireTopLevelDecl(root()(ast()).topLevelItems[1]));
         const auto& globalArraySymbol
             = requireSymbol(m_output, globalVarDecl(ast()).varDef[0]);
-        require(globalArraySymbol.m_type.isArray()
-                && globalArraySymbol.m_type.m_arrayLength == 10,
+        require(globalArraySymbol.isObject()
+                && globalArraySymbol.object().m_type.isArray()
+                && globalArraySymbol.isObject()
+                && globalArraySymbol.object().m_type.m_arrayLength == 10,
             "global array declaration should preserve the folded outer "
             "dimension");
-        require(globalArraySymbol.m_type.m_elementType != nullptr
-                && globalArraySymbol.m_type.m_elementType->isArray()
-                && globalArraySymbol.m_type.m_elementType->m_arrayLength == 10,
+        require(globalArraySymbol.isObject()
+                && globalArraySymbol.object().m_type.m_elementType != nullptr
+                && globalArraySymbol.isObject()
+                && globalArraySymbol.object().m_type.m_elementType->isArray()
+                && globalArraySymbol.isObject()
+                && globalArraySymbol.object()
+                        .m_type.m_elementType->m_arrayLength
+                    == 10,
             "global array declaration should preserve the folded inner "
             "dimension");
 
         const auto fooFunc_nn = requireFuncDefByName(root(), "foo");
-        const auto& paramSymbol = requireSymbol(m_output,
-            fooFunc_nn(ast()).funcFParams[0].identifier);
-        require(paramSymbol.m_type.isArray()
-                && paramSymbol.m_type.m_arrayLength == -1,
+        const auto& paramSymbol = requireSymbol(
+            m_output, fooFunc_nn(ast()).funcFParams[0].identifier);
+        require(paramSymbol.isObject() && paramSymbol.object().m_type.isArray()
+                && paramSymbol.isObject()
+                && paramSymbol.object().m_type.m_arrayLength == -1,
             "function parameter should preserve the unsized first dimension");
-        require(paramSymbol.m_type.m_elementType != nullptr
-                && paramSymbol.m_type.m_elementType->isArray()
-                && paramSymbol.m_type.m_elementType->m_arrayLength == 10,
+        require(paramSymbol.isObject()
+                && paramSymbol.object().m_type.m_elementType != nullptr
+                && paramSymbol.isObject()
+                && paramSymbol.object().m_type.m_elementType->isArray()
+                && paramSymbol.isObject()
+                && paramSymbol.object().m_type.m_elementType->m_arrayLength
+                    == 10,
             "function parameter trailing dimension should fold the const "
             "expression to 10");
     }
@@ -331,24 +368,34 @@ struct SemanticArrayTest : SemanticTestBase {
         const auto bDecl = extractConstDecl(
             requireTopLevelDecl(root()(ast()).topLevelItems[2]));
 
-        const auto& aSymbol
-            = requireSymbol(m_output, aDecl(ast()).varDef[0]);
-        require(aSymbol.m_type.isArray() && aSymbol.m_type.m_arrayLength == 3,
+        const auto& aSymbol = requireSymbol(m_output, aDecl(ast()).varDef[0]);
+        require(aSymbol.isObject() && aSymbol.object().m_type.isArray()
+                && aSymbol.isObject()
+                && aSymbol.object().m_type.m_arrayLength == 3,
             "mutable three-dimensional array initializer should preserve outer "
             "length");
-        require(aSymbol.m_type.m_elementType != nullptr
-                && aSymbol.m_type.m_elementType->isArray()
-                && aSymbol.m_type.m_elementType->m_arrayLength == 3
-                && aSymbol.m_type.m_elementType->m_elementType != nullptr
-                && aSymbol.m_type.m_elementType->m_elementType->isArray()
-                && aSymbol.m_type.m_elementType->m_elementType->m_arrayLength
+        require(aSymbol.isObject()
+                && aSymbol.object().m_type.m_elementType != nullptr
+                && aSymbol.isObject()
+                && aSymbol.object().m_type.m_elementType->isArray()
+                && aSymbol.isObject()
+                && aSymbol.object().m_type.m_elementType->m_arrayLength == 3
+                && aSymbol.isObject()
+                && aSymbol.object().m_type.m_elementType->m_elementType
+                    != nullptr
+                && aSymbol.isObject()
+                && aSymbol.object()
+                    .m_type.m_elementType->m_elementType->isArray()
+                && aSymbol.isObject()
+                && aSymbol.object()
+                        .m_type.m_elementType->m_elementType->m_arrayLength
                     == 3,
             "mutable three-dimensional array initializer should preserve inner "
             "lengths");
 
-        const auto& bSymbol
-            = requireSymbol(m_output, bDecl(ast()).constDef[0]);
-        require(bSymbol.m_type == aSymbol.m_type,
+        const auto& bSymbol = requireSymbol(m_output, bDecl(ast()).constDef[0]);
+        require(bSymbol.isObject() && aSymbol.isObject()
+                && bSymbol.object().m_type == aSymbol.object().m_type,
             "const three-dimensional array initializer should preserve the "
             "same folded type");
     }

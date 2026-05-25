@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "frontend/diagnostic.h"
 #include "frontend/ast.h"
 
 namespace yesod::frontend {

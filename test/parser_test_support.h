@@ -16,7 +16,7 @@
 namespace yesod::test_support::parser {
 
 using namespace yesod::frontend;
-using yesod::isDiagnostic;
+using yesod::test_support::isDiagnostic;
 
 static_assert(
     std::is_same_v<decltype(std::declval<Identifier>().name), std::string>);
@@ -84,7 +84,7 @@ public:
     Ptr<CompUnit> root() const { return m_output.m_root; }
     bool success() const { return m_output.success(); }
 
-    const yesod::Diagnostic& firstDiagnostic()
+    const Diagnostic& firstDiagnostic()
     {
         require(!m_output.m_diagnostics.empty(),
             "expected at least one diagnostic");

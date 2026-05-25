@@ -19,8 +19,7 @@ struct SemanticFunctionTest : SemanticTestBase {
 
         require(callExp.params.size() == 2,
             "call expression should preserve both arguments");
-        require(requireSymbol(m_output, callExp.funcName).kind
-                == SemanticSymbolKind::function,
+        require(requireSymbol(m_output, callExp.funcName).isFunction(),
             "call callee should bind to a function symbol");
         require(requireExpValueKind(m_output, returnStmt_nn(ast()).exp.ref())
                 == ExpType::integer,
@@ -105,8 +104,7 @@ struct SemanticFunctionTest : SemanticTestBase {
             = extractReturnStmt(mainFunc_nn(ast()).body(ast()).items.front());
         const auto& callExp = requireCallExp(returnStmt_nn(ast()).exp.ref());
 
-        require(requireSymbol(m_output, callExp.funcName).kind
-                == SemanticSymbolKind::function,
+        require(requireSymbol(m_output, callExp.funcName).isFunction(),
             "compatible redeclarations should still bind calls to the shared "
             "function symbol");
     }

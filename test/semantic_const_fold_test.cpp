@@ -24,9 +24,9 @@ struct SemanticConstFoldTest : SemanticTestBase {
 
         const auto& constSymbol = requireSymbol(
             m_output, constDecl_nn(ast()).constDef[0]);
-        require(constSymbol.m_hasConstantValue,
+        require(constSymbol.isObject() && constSymbol.object().constantValue.has_value(),
             "const declaration should cache its folded constant value");
-        require(constSymbol.m_constantValue == 42,
+        require(*constSymbol.object().constantValue == 42,
             "const declaration should expose the folded constant value");
 
         const auto varInitExp = requireScalarInitExp(

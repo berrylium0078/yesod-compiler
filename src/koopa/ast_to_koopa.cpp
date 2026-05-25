@@ -347,10 +347,10 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
     std::unordered_map<int32_t, size_t> symbolUseCount;
     std::unordered_set<int32_t> definedFunctionSymbolIds;
 
-    for (const auto& [identifier_nn, symbol] :
-        semanticInfo.m_symbolByIdentifier) {
+    for (const auto& [identifier_nn, symbolId] :
+        semanticInfo.symbolIdByIdentifier()) {
         (void)identifier_nn;
-        ++symbolUseCount[symbol.m_id];
+        ++symbolUseCount[symbolId];
     }
 
     for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
@@ -372,22 +372,19 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
             [&](const auto&) { }, );
     }
 
-    for (const auto& [identifier_nn, symbol] :
-        semanticInfo.m_symbolByIdentifier) {
-        (void)identifier_nn;
-        if (symbol.kind != SemanticSymbolKind::function) {
+    for (const auto& [symbolId, symbol] : semanticInfo.symbolById()) {
+        if (!symbol.isFunction()) {
             continue;
         }
-        if (definedFunctionSymbolIds.find(symbol.m_id)
+        if (definedFunctionSymbolIds.find(symbolId)
             != definedFunctionSymbolIds.end()) {
             continue;
         }
-        if (symbolUseCount[symbol.m_id] <= 1) {
+        if (symbolUseCount[symbolId] <= 1) {
             continue;
         }
 
-        auto [it, inserted]
-            = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
+        auto [it, inserted] = functionBySymbolId.try_emplace(symbolId, nullptr);
         if (!inserted) {
             continue;
         }
@@ -454,15 +451,16 @@ Function* Generator::createFunctionDecl(const AST& ast, Ptr<FuncDef> funcDef,
     const auto& identifier = parsedFuncDef.identifier(ast);
     const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
         semanticInfo, "function definition is missing a symbol binding");
+    // TODO
+    assert(symbol.isFunction());
+    const auto& funcInfo = symbol.function();
     std::vector<Type*> paramTypes;
-    paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
-    for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
+    paramTypes.reserve(funcInfo.m_paramTypes.size());
+    for (const auto& paramType : funcInfo.m_paramTypes) {
         paramTypes.push_back(lowerSemanticType(paramType));
     }
     auto* function = Function::create(
-        FunctionType::get(
-            lowerSemanticType(symbol.m_functionSignature.m_returnType),
-            paramTypes),
+        FunctionType::get(lowerSemanticType(funcInfo.m_returnType), paramTypes),
         makeFunctionName(identifier.name));
     for (size_t i = 0; i < parsedFuncDef.funcFParams.size(); ++i) {
         function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
@@ -474,14 +472,16 @@ Function* Generator::createExternalFunctionDecl(
     const SemanticSymbol& symbol) const
 {
     std::vector<Type*> paramTypes;
-    paramTypes.reserve(symbol.m_functionSignature.m_paramTypes.size());
-    for (const auto& paramType : symbol.m_functionSignature.m_paramTypes) {
+    // TODO
+    assert(symbol.isFunction());
+    const auto& funcInfo = symbol.function();
+
+    paramTypes.reserve(funcInfo.m_paramTypes.size());
+    for (const auto& paramType : funcInfo.m_paramTypes) {
         paramTypes.push_back(lowerSemanticType(paramType));
     }
     auto* function = Function::create(
-        FunctionType::get(
-            lowerSemanticType(symbol.m_functionSignature.m_returnType),
-            paramTypes),
+        FunctionType::get(lowerSemanticType(funcInfo.m_returnType), paramTypes),
         makeFunctionName(symbol.name));
     for (size_t i = 0; i != paramTypes.size(); ++i) {
         function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
@@ -547,14 +547,16 @@ void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
                 const auto& symbol = requireSymbolForIdentifier(
                     constDef.identifier, semanticInfo,
                     "global const is missing its symbol binding");
-                if (!symbol.m_type.isArray()) {
+                if (!symbol.isObject())
                     continue;
-                }
+                const auto& type = symbol.object().m_type;
+                if (!type.isArray())
+                    continue;
                 auto scalarExprs = flattenArrayInitializer(
-                    ast, constDef.constInitVal.ref(), symbol.m_type);
+                    ast, constDef.constInitVal.ref(), type);
                 size_t nextScalarIndex = 0;
                 Value* initValue = generateGlobalArrayInitializer(
-                    symbol.m_type, scalarExprs, nextScalarIndex, semanticInfo);
+                    type, scalarExprs, nextScalarIndex, semanticInfo);
                 auto* globalAlloc = GlobalAllocValue::get(
                     initValue, makeGlobalName(symbol.name));
                 program.pushVal(globalAlloc);
@@ -568,13 +570,15 @@ void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
                 const auto& symbol = requireSymbolForIdentifier(
                     varDef.identifier, semanticInfo,
                     "global variable is missing its symbol binding");
+                assert(symbol.isObject());
+                const auto &type = symbol.object().m_type;
                 Value* initValue = ZeroInitValue::get(
-                    lowerSemanticType(symbol.m_type, false));
-                if (symbol.m_type.isArray() && varDef.initVal) {
+                    lowerSemanticType(type, false));
+                if (type.isArray() && varDef.initVal) {
                     auto scalarExprs = flattenArrayInitializer(
-                        ast, varDef.initVal.ref(), symbol.m_type);
+                        ast, varDef.initVal.ref(), type);
                     size_t nextScalarIndex = 0;
-                    initValue = generateGlobalArrayInitializer(symbol.m_type,
+                    initValue = generateGlobalArrayInitializer(type,
                         scalarExprs, nextScalarIndex, semanticInfo);
                 } else if (varDef.initVal) {
                     const auto& initVal = varDef.initVal(ast);
@@ -636,19 +640,21 @@ void FunctionGenerator::generateDecl(Decl decl)
                 const auto& symbol = requireSymbolForIdentifier(
                     parsedConstDef.identifier, *state.m_semanticInfo,
                     "const declarator is missing its symbol binding");
+                assert(symbol.isObject());
+                const auto &type = symbol.object().m_type;
                 auto* alloc = AllocValue::get(
-                    ::yesod::koopa::lowerSemanticType(symbol.m_type, false),
+                    ::yesod::koopa::lowerSemanticType(type, false),
                     makeUniqueLocalName(symbol));
                 state.m_currentBasicBlock->pushInst(alloc);
                 state.m_storageBySymbolId[symbol.m_id] = alloc;
                 const auto& constInitVal
                     = parsedConstDef.constInitVal(state.m_ast);
-                if (symbol.m_type.isArray()) {
+                if (type.isArray()) {
                     auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                        parsedConstDef.constInitVal.ref(), symbol.m_type);
+                        parsedConstDef.constInitVal.ref(), type);
                     size_t nextScalarIndex = 0;
                     generateLocalArrayInitializer(
-                        alloc, symbol.m_type, scalarExprs, nextScalarIndex);
+                        alloc, type, scalarExprs, nextScalarIndex);
                 } else {
                     MATCH(constInitVal.kind)
                     WITH(
@@ -669,18 +675,19 @@ void FunctionGenerator::generateDecl(Decl decl)
                 const auto& symbol = requireSymbolForIdentifier(
                     resolvedVarDef.identifier, *state.m_semanticInfo,
                     "var declarator is missing its symbol binding");
+                const auto &type = symbol.object().m_type;
                 auto* alloc = AllocValue::get(
-                    ::yesod::koopa::lowerSemanticType(symbol.m_type, false),
+                    ::yesod::koopa::lowerSemanticType(type, false),
                     makeUniqueLocalName(symbol));
                 state.m_currentBasicBlock->pushInst(alloc);
                 state.m_storageBySymbolId[symbol.m_id] = alloc;
                 if (resolvedVarDef.initVal) {
-                    if (symbol.m_type.isArray()) {
+                    if (type.isArray()) {
                         auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                            resolvedVarDef.initVal.ref(), symbol.m_type);
+                            resolvedVarDef.initVal.ref(), type);
                         size_t nextScalarIndex = 0;
                         generateLocalArrayInitializer(
-                            alloc, symbol.m_type, scalarExprs, nextScalarIndex);
+                            alloc, type, scalarExprs, nextScalarIndex);
                     } else {
                         const auto& initVal
                             = resolvedVarDef.initVal(state.m_ast);
@@ -1164,7 +1171,7 @@ Value* FunctionGenerator::generateLValueAddress(const Exp::LVal& lVal)
     }
 
     auto* address = storageIt->second;
-    auto currentType = symbol.m_type;
+    auto currentType = symbol.object().m_type;
     bool indexesDecayedArrayParameter = false;
     if (currentType.isArray() && currentType.m_arrayLength == -1) {
         auto* loadedPointer

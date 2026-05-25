@@ -12,8 +12,7 @@
 namespace yesod::test_support::semantic {
 
 using namespace yesod::frontend;
-using yesod::isDiagnostic;
-
+using yesod::test_support::isDiagnostic;
 using yesod::test_support::fail;
 using yesod::test_support::OutputAstBase;
 using yesod::test_support::require;
@@ -31,7 +30,7 @@ struct SemanticTestBase : OutputAstBase<SemanticOutput>, TestBase {
         return self.m_output.m_ast;
     }
 
-    [[nodiscard]] const yesod::Diagnostic& firstDiagnostic()
+    [[nodiscard]] const Diagnostic& firstDiagnostic()
     {
         require(!m_output.m_diagnostics.empty(),
             "expected at least one semantic diagnostic");
