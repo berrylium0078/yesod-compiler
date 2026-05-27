@@ -140,6 +140,41 @@ inline Ptr<WhileStmt> requireLoop(
     return *loop;
 }
 
+inline const SemanticFunctionControlFlow& requireControlFlow(
+    const SemanticOutput& output, Ref<FuncDef> funcDef)
+{
+    const auto* controlFlow = output.m_info.findControlFlow(funcDef);
+    require(controlFlow != nullptr, "expected semantic control flow for function");
+    return *controlFlow;
+}
+
+inline const SemanticBasicBlock& requireControlFlowBlock(
+    const SemanticOutput& output, Ref<SemanticBasicBlock> block)
+{
+    return block(output.m_info.controlFlowArena());
+}
+
+inline const SemanticBranchTerminator& requireBranchTerminator(
+    const SemanticBasicBlock& block)
+{
+    require(block.terminator.has_value(), "expected basic block terminator");
+    return std::get<SemanticBranchTerminator>(*block.terminator);
+}
+
+inline const SemanticJumpTerminator& requireJumpTerminator(
+    const SemanticBasicBlock& block)
+{
+    require(block.terminator.has_value(), "expected basic block terminator");
+    return std::get<SemanticJumpTerminator>(*block.terminator);
+}
+
+inline const SemanticReturnTerminator& requireReturnTerminator(
+    const SemanticBasicBlock& block)
+{
+    require(block.terminator.has_value(), "expected basic block terminator");
+    return std::get<SemanticReturnTerminator>(*block.terminator);
+}
+
 } // namespace yesod::test_support::semantic
 
 #endif

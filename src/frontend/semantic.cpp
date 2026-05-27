@@ -2,7 +2,7 @@
 #include <utility>
 
 #include "frontend/semantic.h"
-#include "frontend/semantic_loop_impl.h"
+#include "frontend/semantic_cfg_impl.h"
 #include "frontend/semantic_symbol_impl.h"
 #include "frontend/semantic_type_impl.h"
 
@@ -89,6 +89,17 @@ std::optional<Ref<WhileStmt>> SemanticInfo::findLoop(
     return loopIt->second;
 }
 
+const SemanticFunctionControlFlow* SemanticInfo::findControlFlow(
+    Ref<FuncDef> node) const
+{
+    return m_bindingResult->findControlFlow(node);
+}
+
+const SemanticControlFlowArena& SemanticInfo::controlFlowArena() const
+{
+    return m_bindingResult->controlFlowArena();
+}
+
 bool SemanticOutput::success() const
 {
     if (!m_root) {
@@ -113,7 +124,7 @@ SemanticOutput SemanticAnalyzer::analyze(const AST& ast, Ref<CompUnit> compUnit)
         info.m_symbolResolver = std::make_unique<SemanticSymbolResolver>(ast);
         info.m_typeAnalyzer = std::make_unique<SemanticTypeAnalyzer>(
             ast, *info.m_symbolResolver);
-        info.m_loopBinder = std::make_unique<SemanticLoopBinder>(ast);
+        info.m_loopBinder = std::make_unique<SemanticCFGBuilder>(ast);
 
         info.m_symbolResolver->analyze(compUnit);
         info.m_typeAnalyzer->analyze(compUnit);

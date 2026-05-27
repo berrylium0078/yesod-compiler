@@ -4,6 +4,21 @@ using namespace yesod::test_support::koopa;
 
 namespace {
 
+size_t countBranchInstructions(const Function& function)
+{
+    size_t branchCount = 0;
+    for (size_t bbIndex = 0; bbIndex < function.getNumBBs(); ++bbIndex) {
+        const auto* basicBlock = function.getBB(bbIndex);
+        for (size_t instIndex = 0; instIndex < basicBlock->getNumInsts();
+             ++instIndex) {
+            if (basicBlock->getInst(instIndex)->isBranchValue()) {
+                ++branchCount;
+            }
+        }
+    }
+    return branchCount;
+}
+
 void testArithmeticPrecedenceLowering()
 {
     auto program = generateProgram("int main(){return 1 + 2 * 3;}");
@@ -37,9 +52,14 @@ void testLogicalOperatorsBooleanizeOperands()
     const auto* basicBlock = requireEntryBlock(*function);
     const auto* endBlock = requireEndBlock(*function);
 
-    require(basicBlock->getNumInsts() == 1,
-        "constant logical expressions should fold to a literal return");
-    requireInteger(requireReturn(basicBlock->getInst(0))->getVal(), 1);
+    require(function->getNumBBs() == 6,
+        "logical returns should lower through the semantic CFG even when the "
+        "operands are constant");
+    require(countBranchInstructions(*function) == 3,
+        "constant logical returns should preserve the expected short-circuit "
+        "branch structure");
+    require(basicBlock->getInst(basicBlock->getNumInsts() - 1)->isBranchValue(),
+        "logical return entry block should still terminate with a branch");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
@@ -49,24 +69,23 @@ void testLogicalAndShortCircuitsThroughBranchBlocks()
         = generateProgram("int main(){int a = 1; int b = 0; return a && b;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
-    const auto* trueBlock = requireBlock(*function, 1);
-    const auto* falseBlock = requireBlock(*function, 2);
-    const auto* contBlock = requireBlock(*function, 3);
-    const auto* rhsBlock = requireBlock(*function, 4);
     const auto* endBlock = requireEndBlock(*function);
+    const auto* entryBranch
+        = requireBranchValue(entryBlock->getInst(entryBlock->getNumInsts() - 1));
+    const auto* rhsBlock = entryBranch->getTrueBB();
+    const auto* falseBlock = entryBranch->getFalseBB();
+    const auto* rhsBranch
+        = requireBranchValue(rhsBlock->getInst(rhsBlock->getNumInsts() - 1));
+    const auto* trueBlock = rhsBranch->getTrueBB();
+    const auto* continuedFalseBlock = rhsBranch->getFalseBB();
 
-    require(function->getNumBBs() == 6,
-        "non-constant logical-and should materialize short-circuit "
-        "control-flow blocks");
-    (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
-        rhsBlock, falseBlock);
-    (void)requireBranch(
-        rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock, falseBlock);
-    (void)requireJump(trueBlock->getInst(1), contBlock);
-    (void)requireJump(falseBlock->getInst(1), contBlock);
-    require(contBlock->getInst(contBlock->getNumInsts() - 1)->isReturnValue(),
-        "materialized logical-and continuation should return the loaded "
-        "boolean result");
+    require(function->getNumBBs() == 5,
+        "non-constant logical-and should lower to entry, true, false, rhs, "
+        "and synthesized end blocks");
+    require(continuedFalseBlock == falseBlock,
+        "logical-and false edges should converge on the same false block");
+    requireInteger(requireReturn(trueBlock->getInst(0))->getVal(), 1);
+    requireInteger(requireReturn(falseBlock->getInst(0))->getVal(), 0);
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
@@ -76,24 +95,23 @@ void testLogicalOrShortCircuitsThroughBranchBlocks()
         = generateProgram("int main(){int a = 1; int b = 0; return a || b;}");
     const auto* function = requireOnlyFunction(*program);
     const auto* entryBlock = requireEntryBlock(*function);
-    const auto* trueBlock = requireBlock(*function, 1);
-    const auto* falseBlock = requireBlock(*function, 2);
-    const auto* contBlock = requireBlock(*function, 3);
-    const auto* rhsBlock = requireBlock(*function, 4);
     const auto* endBlock = requireEndBlock(*function);
+    const auto* entryBranch
+        = requireBranchValue(entryBlock->getInst(entryBlock->getNumInsts() - 1));
+    const auto* trueBlock = entryBranch->getTrueBB();
+    const auto* rhsBlock = entryBranch->getFalseBB();
+    const auto* rhsBranch
+        = requireBranchValue(rhsBlock->getInst(rhsBlock->getNumInsts() - 1));
+    const auto* continuedTrueBlock = rhsBranch->getTrueBB();
+    const auto* falseBlock = rhsBranch->getFalseBB();
 
-    require(function->getNumBBs() == 6,
-        "non-constant logical-or should materialize short-circuit control-flow "
-        "blocks");
-    (void)requireBranch(entryBlock->getInst(entryBlock->getNumInsts() - 1),
-        trueBlock, rhsBlock);
-    (void)requireBranch(
-        rhsBlock->getInst(rhsBlock->getNumInsts() - 1), trueBlock, falseBlock);
-    (void)requireJump(trueBlock->getInst(1), contBlock);
-    (void)requireJump(falseBlock->getInst(1), contBlock);
-    require(contBlock->getInst(contBlock->getNumInsts() - 1)->isReturnValue(),
-        "materialized logical-or continuation should return the loaded boolean "
-        "result");
+    require(function->getNumBBs() == 5,
+        "non-constant logical-or should lower to entry, true, false, rhs, "
+        "and synthesized end blocks");
+    require(continuedTrueBlock == trueBlock,
+        "logical-or true edges should converge on the same true block");
+    requireInteger(requireReturn(trueBlock->getInst(0))->getVal(), 1);
+    requireInteger(requireReturn(falseBlock->getInst(0))->getVal(), 0);
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 
@@ -110,6 +128,52 @@ void testGeneratedProgramValidatesWithKoopa()
     koopa_delete_program(koopaProgram);
 }
 
+void testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply()
+{
+    auto program = generateProgram(
+        "int main(){int b = 8, a = 1, c = 2; return b * (a || c);}");
+    const auto* function = requireOnlyFunction(*program);
+    const auto* entryBlock = requireEntryBlock(*function);
+    const auto* endBlock = requireEndBlock(*function);
+    const auto* entryBranch
+        = requireBranchValue(entryBlock->getInst(entryBlock->getNumInsts() - 1));
+    const auto* trueBlock = entryBranch->getTrueBB();
+    const auto* rhsBlock = entryBranch->getFalseBB();
+    const auto* rhsBranch
+        = requireBranchValue(rhsBlock->getInst(rhsBlock->getNumInsts() - 1));
+    const auto* falseBlock = rhsBranch->getFalseBB();
+    const auto* trueJump = requireJumpValue(trueBlock->getInst(1));
+    const auto* falseJump = requireJumpValue(falseBlock->getInst(1));
+    const auto* contBlock = trueJump->getTargetBB();
+    const auto* bAlloc = requireAlloc(entryBlock->getInst(0), "%b");
+    const auto* bLoad = requireLoad(entryBlock->getInst(6), bAlloc, "%1");
+    const auto* boolStorage = requireAlloc(entryBlock->getInst(7), "%2");
+
+    require(rhsBranch->getTrueBB() == trueBlock,
+        "logical-or used in arithmetic should preserve the true short-circuit edge");
+    require(falseJump->getTargetBB() == contBlock,
+        "logical-or false branch should join the continuation before arithmetic use");
+
+    const auto* boolLoad = requireLoad(contBlock->getInst(0), boolStorage, "%5");
+    const auto* multiply
+        = requireBinary(contBlock->getInst(1), KOOPA_RBO_MUL, "%6");
+    require(multiply->getLhs() == bLoad,
+        "multiply should consume the value loaded before short-circuit lowering");
+    require(multiply->getRhs() == boolLoad,
+        "multiply should consume the materialized logical-or result");
+    require(requireReturn(contBlock->getInst(2))->getVal() == multiply,
+        "continuation should return the multiplication result");
+    requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
+
+    auto rawProgram = Program::dumpRaw(program.get());
+    koopa_program_t koopaProgram = nullptr;
+    const auto errorCode
+        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
+    require(errorCode == KOOPA_EC_SUCCESS,
+        "logical-or arithmetic operand lowering should validate as raw Koopa");
+    koopa_delete_program(koopaProgram);
+}
+
 } // namespace
 
 int main()
@@ -120,5 +184,6 @@ int main()
     testLogicalAndShortCircuitsThroughBranchBlocks();
     testLogicalOrShortCircuitsThroughBranchBlocks();
     testGeneratedProgramValidatesWithKoopa();
+    testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply();
     return 0;
 }

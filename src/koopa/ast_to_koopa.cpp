@@ -28,6 +28,8 @@ namespace {
         int32_t m_nextBlockId = 1;
         std::unordered_map<int32_t, Value*> m_storageBySymbolId;
         std::unordered_map<int32_t, Function*> m_functionBySymbolId;
+        std::unordered_map<Ref<frontend::SemanticBasicBlock>, BasicBlock*>
+            m_basicBlockBySemanticBlock;
         std::unordered_map<Ptr<frontend::WhileStmt>, LoopBlocks>
             m_loopBlocksByWhileStmt;
         std::unordered_set<std::string> m_usedSymbolNames;
@@ -81,6 +83,12 @@ namespace {
         void generateBlock(Ptr<frontend::Block> body);
         void generateBlockItem(const frontend::BlockItem& blockItem);
         void generateDecl(frontend::Decl declNode);
+        void generateSemanticBlock(
+            const frontend::SemanticBasicBlock& semanticBlock);
+        void generateSemanticBlockItem(
+            const frontend::SemanticBlockItem& semanticBlockItem);
+        void generateSemanticTerminator(
+            const frontend::SemanticBlockTerminator& terminator);
         void generateStmt(frontend::Stmt stmtNode);
         void generateIfStmt(Ptr<frontend::IfStmt> ifStmt);
         void generateWhileStmt(Ptr<frontend::WhileStmt> whileStmt);
@@ -108,6 +116,8 @@ namespace {
             size_t& nextScalarIndex);
         [[nodiscard]] Value* generateLValueAddress(
             const frontend::Exp::LVal& lVal);
+        [[nodiscard]] Value* generateSemanticValue(
+            const frontend::SemanticValue& value);
     };
 
     size_t countScalarSlots(const SemanticType& type)
@@ -496,19 +506,36 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     Function* function_nn) const
 {
     const auto& parsedFuncDef = funcDef(ast);
+    const auto* controlFlow = semanticInfo.findControlFlow(funcDef.ref());
+    if (controlFlow == nullptr) {
+        throw std::runtime_error(
+            "function definition is missing semantic control flow");
+    }
+
     auto* function = function_nn;
-    auto* entryBlock = BasicBlock::createEntry("%entry");
-    auto* endBlock = BasicBlock::createNonEntry("%end");
-    function->pushBB(entryBlock);
     FunctionGenerator state {
         .m_ast = ast,
         .m_semanticInfo = &semanticInfo,
         .m_function = function,
-        .m_currentBasicBlock = entryBlock,
-        .m_endBlock = endBlock,
+        .m_currentBasicBlock = nullptr,
+        .m_endBlock = nullptr,
         .m_storageBySymbolId = globalStorageBySymbolId,
         .m_functionBySymbolId = functionBySymbolId,
     };
+
+    const auto& controlFlowArena = semanticInfo.controlFlowArena();
+    for (const auto semanticBlockRef : controlFlow->blocks) {
+        const auto& semanticBlock = semanticBlockRef(controlFlowArena);
+        auto* basicBlock = semanticBlockRef == controlFlow->entryBlock
+            ? BasicBlock::createEntry("%" + semanticBlock.nameHint)
+            : BasicBlock::createNonEntry("%" + semanticBlock.nameHint);
+        state.m_basicBlockBySemanticBlock[semanticBlockRef] = basicBlock;
+        function->pushBB(basicBlock);
+    }
+
+    state.m_currentBasicBlock
+        = state.m_basicBlockBySemanticBlock.at(controlFlow->entryBlock);
+    auto* entryBlock = state.m_currentBasicBlock;
     for (size_t i = 0; i < parsedFuncDef.funcFParams.size(); ++i) {
         const auto& funcFParam = parsedFuncDef.funcFParams[i];
         const auto& symbol = requireSymbolForIdentifier(funcFParam.identifier,
@@ -519,19 +546,88 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         entryBlock->pushInst(StoreValue::get(function->getParam(i), alloc));
         state.m_storageBySymbolId[symbol.m_id] = alloc;
     }
-    state.generateBlock(parsedFuncDef.body);
-    state.finalizeBasicBlock(*state.m_currentBasicBlock, *endBlock);
-    if (parsedFuncDef.m_funcType == FuncTypeKeyword::voidKeyword) {
-        endBlock->pushInst(ReturnValue::get(nullptr));
-    } else {
-        endBlock->pushInst(ReturnValue::get(IntegerValue::get(0)));
+
+    for (const auto semanticBlockRef : controlFlow->blocks) {
+        state.m_currentBasicBlock
+            = state.m_basicBlockBySemanticBlock.at(semanticBlockRef);
+        state.generateSemanticBlock(semanticBlockRef(controlFlowArena));
     }
-    function->pushBB(endBlock);
+
     for (auto* basicBlock : function->bbs()) {
         basicBlock->validate();
     }
     function->validate();
     return function;
+}
+
+void FunctionGenerator::generateSemanticBlock(
+    const frontend::SemanticBasicBlock& semanticBlock)
+{
+    for (const auto& item : semanticBlock.items) {
+        generateSemanticBlockItem(item);
+    }
+    if (!semanticBlock.terminator.has_value()) {
+        throw std::runtime_error("semantic basic block is missing terminator");
+    }
+    generateSemanticTerminator(*semanticBlock.terminator);
+}
+
+void FunctionGenerator::generateSemanticBlockItem(
+    const frontend::SemanticBlockItem& semanticBlockItem)
+{
+    MATCH(semanticBlockItem)
+    WITH([&](frontend::Decl decl) { generateDecl(decl); },
+        [&](Ref<AssignStmt> assignStmt) { generateAssignStmt(assignStmt.ptr()); },
+        [&](Ref<ExpStmt> expStmt) { generateExpStmt(expStmt.ptr()); });
+}
+
+void FunctionGenerator::generateSemanticTerminator(
+    const frontend::SemanticBlockTerminator& terminator)
+{
+    auto& state = *this;
+    MATCH(terminator)
+    WITH(
+        [&](const frontend::SemanticJumpTerminator& jump) {
+            state.m_currentBasicBlock->pushInst(JumpValue::get(
+                state.m_basicBlockBySemanticBlock.at(jump.target), { }));
+        },
+        [&](const frontend::SemanticBranchTerminator& branch) {
+            if (const auto constantValue
+                = state.m_semanticInfo->findConstantValue(branch.condition);
+                constantValue.has_value()) {
+                state.m_currentBasicBlock->pushInst(BranchValue::get(
+                    IntegerValue::get(*constantValue),
+                    state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
+                    { },
+                    state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
+                    { }));
+                return;
+            }
+
+            auto* conditionValue = generateExp(branch.condition);
+            state.m_currentBasicBlock->pushInst(BranchValue::get(
+                conditionValue,
+                state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
+                { },
+                state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
+                { }));
+        },
+        [&](const frontend::SemanticReturnTerminator& returnTerminator) {
+            auto* value = returnTerminator.value.has_value()
+                ? generateSemanticValue(*returnTerminator.value)
+                : nullptr;
+            state.m_currentBasicBlock->pushInst(ReturnValue::get(value));
+        });
+}
+
+Value* FunctionGenerator::generateSemanticValue(
+    const frontend::SemanticValue& value)
+{
+    return MATCH(value.kind) WITH(
+        [&](int32_t constantValue) -> Value* {
+            return IntegerValue::get(constantValue);
+        },
+        [&](Ref<Exp> exp) -> Value* { return generateExp(exp); });
 }
 
 void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
@@ -853,9 +949,10 @@ ReturnValue* FunctionGenerator::generateReturnStmt(Ptr<ReturnStmt> returnStmt)
     auto& state = *this;
     const auto& parsedReturnStmt
         = node(returnStmt, state, "return statement is null");
-    auto* returnValue = ReturnValue::get(parsedReturnStmt.exp
-            ? generateExp(parsedReturnStmt.exp.ref())
-            : nullptr);
+    auto* value = parsedReturnStmt.exp
+        ? generateExp(parsedReturnStmt.exp.ref())
+        : nullptr;
+    auto* returnValue = ReturnValue::get(value);
     state.m_currentBasicBlock->pushInst(returnValue);
     return returnValue;
 }

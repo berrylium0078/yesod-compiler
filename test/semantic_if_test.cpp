@@ -66,6 +66,44 @@ struct SemanticIfTest : SemanticTestBase {
             "constant logical conditions should record their folded truth "
             "value");
     }
+
+    void testIfElseBuildsSemanticControlFlowBlocks()
+    {
+        m_output = analyzeRoot(
+            "int main(){int a; if (a) return 1; else return 0;}");
+
+        const auto funcDef_nn = firstFuncDef();
+        const auto& controlFlow = requireControlFlow(m_output, funcDef_nn);
+        require(controlFlow.blocks.size() == 5,
+            "if-else semantic CFG should include entry, then, else, join, and end blocks");
+
+        const auto& entryBlock
+            = requireControlFlowBlock(m_output, controlFlow.entryBlock);
+        const auto& thenBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[1]);
+        const auto& elseBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[2]);
+        const auto& joinBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[3]);
+        const auto& endBlock
+            = requireControlFlowBlock(m_output, controlFlow.endBlock);
+
+        const auto& entryTerminator = requireBranchTerminator(entryBlock);
+        require(entryTerminator.trueTarget == controlFlow.blocks[1],
+            "if entry block should branch to the then block on true");
+        require(entryTerminator.falseTarget == controlFlow.blocks[2],
+            "if entry block should branch to the else block on false");
+        require(requireReturnTerminator(thenBlock).value.has_value(),
+            "then block should terminate with a return");
+        require(requireReturnTerminator(elseBlock).value.has_value(),
+            "else block should terminate with a return");
+        require(requireJumpTerminator(joinBlock).target == controlFlow.endBlock,
+            "if join block should jump to the synthesized end block");
+        require(!requireReturnTerminator(endBlock).value.has_value()
+                || std::holds_alternative<int32_t>(
+                    requireReturnTerminator(endBlock).value->kind),
+            "synthesized end block should carry the default return value");
+    }
 };
 
 } // namespace
@@ -76,5 +114,6 @@ int main()
     test.testIfConditionMarksPlainValueAsBooleanContext();
     test.testMixedArithmeticAndLogicalSubexpressionsKeepDistinctKinds();
     test.testLogicalConditionRecordsFoldedBooleanConstant();
+    test.testIfElseBuildsSemanticControlFlowBlocks();
     return 0;
 }

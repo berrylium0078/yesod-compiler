@@ -1,28 +1,35 @@
 #ifndef _YESOD_FRONTEND_LOOP_IMPL_H_
 #define _YESOD_FRONTEND_LOOP_IMPL_H_
 
-#include "frontend/semantic_loop.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
-#include <optional>
+
+#include "frontend/semantic_cfg.h"
 
 namespace yesod::frontend::detail {
-class SemanticLoopBinderImpl : private AstVisitor,
-                               public SemanticLoopBindingResult {
+class SemanticCFGBuilderImpl : public SemanticCFG {
 public:
-    explicit SemanticLoopBinderImpl(const AST& ast);
-    ~SemanticLoopBinderImpl() = default;
+    explicit SemanticCFGBuilderImpl(const AST& ast);
+    ~SemanticCFGBuilderImpl() = default;
     void analyze(Ref<CompUnit> compUnit);
 
-protected:
-    void visitWhileStmt(Ref<WhileStmt> whileStmt) override;
-    void visitBreakStmt(Ref<BreakStmt> breakStmt) override;
-    void visitContinueStmt(Ref<ContinueStmt> continueStmt) override;
-
 private:
-    [[nodiscard]] std::optional<Ref<WhileStmt>> currentLoop() const;
+    struct LoopContext {
+        Ref<WhileStmt> whileStmt;
+        Ref<SemanticBasicBlock> condBlock;
+        Ref<SemanticBasicBlock> endBlock;
+    };
+
+    class FunctionBuilder;
+
+    [[nodiscard]] std::optional<LoopContext> currentLoop() const;
+    void buildFunctionControlFlow(Ref<FuncDef> funcDef);
+    void bindBreakStmt(Ref<BreakStmt> breakStmt);
+    void bindContinueStmt(Ref<ContinueStmt> continueStmt);
 
     template <typename T>
     void recordDiagnostic(int32_t offset, std::string message,
@@ -39,7 +46,8 @@ private:
         return std::make_unique<T>(offset, std::move(message), severity);
     }
 
-    std::vector<Ref<WhileStmt>> m_loopStack;
+    std::vector<LoopContext> m_loopStack;
+    int32_t m_nextGeneratedBlockId = 1;
 };
 
 } // namespace yesod::frontend::detail

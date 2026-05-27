@@ -209,37 +209,39 @@ void testLogicalAndShortCircuitKeepsDivisionCallOnRhsPath()
     const auto* mainFunction = requireFunctionByName(*program, "@main");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
-    const auto* trueBlock = requireBlock(*mainFunction, 1);
-    const auto* falseBlock = requireBlock(*mainFunction, 2);
-    const auto* contBlock = requireBlock(*mainFunction, 3);
-    const auto* rhsBlock = requireBlock(*mainFunction, 4);
     const auto* endBlock = requireEndBlock(*mainFunction);
+    const auto* entryBranch
+        = requireBranchValue(mainEntry->getInst(mainEntry->getNumInsts() - 1));
+    const auto* rhsBlock = entryBranch->getTrueBB();
+    const auto* falseBlock = entryBranch->getFalseBB();
+    const auto* rhsBranch
+        = requireBranchValue(rhsBlock->getInst(rhsBlock->getNumInsts() - 1));
+    const auto* trueBlock = rhsBranch->getTrueBB();
+    const auto* continuedFalseBlock = rhsBranch->getFalseBB();
 
-    require(mainFunction->getNumBBs() == 6,
-        "logical-and short-circuit lowering should introduce rhs, true, false, and continuation blocks");
-    require(mainEntry->getNumInsts() == 11,
-        "main entry should initialize locals and branch on the lhs before evaluating the rhs call");
+    require(mainFunction->getNumBBs() == 5,
+        "logical-and return lowering should introduce rhs, true, false, and synthesized end blocks");
+    require(mainEntry->getNumInsts() >= 8,
+        "main entry should initialize locals, compare the lhs, and branch before evaluating the rhs call");
     require(countCallsToCallee(*mainEntry, *divFunction) == 0,
         "division call must not be emitted before the lhs short-circuit check");
     require(countCallsToCallee(*mainEntry, *idFunction) == 2,
         "both id initializers should remain in the entry body");
     (void)requireCall(mainEntry->getInst(1), idFunction);
     (void)requireCall(mainEntry->getInst(4), idFunction);
-    (void)requireBranch(mainEntry->getInst(10), rhsBlock, falseBlock);
 
     require(rhsBlock->getNumInsts() == 4,
         "rhs body should load both operands, call div, and branch on its result");
     const auto* divCall = requireCall(rhsBlock->getInst(2), divFunction);
     require(divCall->getNumArgs() == 2,
         "div call should preserve both arguments on the rhs path");
-    (void)requireBranch(rhsBlock->getInst(3), trueBlock, falseBlock);
 
     require(countCallsToCallee(*rhsBlock, *divFunction) == 1,
         "division call should appear exactly once on the rhs path");
-    (void)requireJump(trueBlock->getInst(1), contBlock);
-    (void)requireJump(falseBlock->getInst(1), contBlock);
-    require(requireReturn(contBlock->getInst(1))->getVal() == contBlock->getInst(0),
-        "continuation body should return the loaded short-circuit result");
+    require(continuedFalseBlock == falseBlock,
+        "logical-and false edges should converge on the same false return block");
+    requireInteger(requireReturn(trueBlock->getInst(0))->getVal(), 1);
+    requireInteger(requireReturn(falseBlock->getInst(0))->getVal(), 0);
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 }
 

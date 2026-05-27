@@ -143,12 +143,17 @@ inline const BasicBlock* requireEndBlock(const Function& function)
 {
     require(function.getNumBBs() >= 2,
         "expected entry body plus synthesized guard end body");
-    const auto* basicBlock = function.getBB(function.getNumBBs() - 1);
-    require(!basicBlock->isEntry(),
-        "guard end body should not be the entry body");
-    require(basicBlock->getName() == "%end",
-        "guard end body should use the documented label");
-    return basicBlock;
+    for (size_t index = 0; index < function.getNumBBs(); ++index) {
+        const auto* basicBlock = function.getBB(index);
+        if (basicBlock->getName() != "%end") {
+            continue;
+        }
+        require(!basicBlock->isEntry(),
+            "guard end body should not be the entry body");
+        return basicBlock;
+    }
+
+    fail("expected basic body named '%end'");
 }
 
 inline const BasicBlock* requireBlock(const Function& function, size_t index)
@@ -244,35 +249,47 @@ inline const CallValue* requireCall(
     return callValue;
 }
 
-inline const JumpValue* requireJump(
-    const Value* value, const BasicBlock* expectedTarget)
+inline const JumpValue* requireJumpValue(const Value* value)
 {
     require(value != nullptr, "expected jump value");
     require(value->isJumpValue(), "expected jump instruction");
     const auto* jumpValue = dynamic_cast<const JumpValue*>(value);
     require(jumpValue != nullptr, "expected jump instruction cast");
-    require(jumpValue->getTargetBB() == expectedTarget,
-        "jump instruction should target the expected basic body");
     require(jumpValue->getNumArgs() == 0,
         "current subset should not emit body arguments on jumps");
     return jumpValue;
 }
 
-inline const BranchValue* requireBranch(const Value* value,
-    const BasicBlock* expectedTrueTarget, const BasicBlock* expectedFalseTarget)
+inline const JumpValue* requireJump(
+    const Value* value, const BasicBlock* expectedTarget)
+{
+    const auto* jumpValue = requireJumpValue(value);
+    require(jumpValue->getTargetBB() == expectedTarget,
+        "jump instruction should target the expected basic body");
+    return jumpValue;
+}
+
+inline const BranchValue* requireBranchValue(const Value* value)
 {
     require(value != nullptr, "expected branch value");
     require(value->isBranchValue(), "expected branch instruction");
     const auto* branchValue = dynamic_cast<const BranchValue*>(value);
     require(branchValue != nullptr, "expected branch instruction cast");
-    require(branchValue->getTrueBB() == expectedTrueTarget,
-        "branch instruction should target the expected true basic body");
-    require(branchValue->getFalseBB() == expectedFalseTarget,
-        "branch instruction should target the expected false basic body");
     require(branchValue->getNumTrueArgs() == 0,
         "current subset should not emit body arguments on true branches");
     require(branchValue->getNumFalseArgs() == 0,
         "current subset should not emit body arguments on false branches");
+    return branchValue;
+}
+
+inline const BranchValue* requireBranch(const Value* value,
+    const BasicBlock* expectedTrueTarget, const BasicBlock* expectedFalseTarget)
+{
+    const auto* branchValue = requireBranchValue(value);
+    require(branchValue->getTrueBB() == expectedTrueTarget,
+        "branch instruction should target the expected true basic body");
+    require(branchValue->getFalseBB() == expectedFalseTarget,
+        "branch instruction should target the expected false basic body");
     return branchValue;
 }
 

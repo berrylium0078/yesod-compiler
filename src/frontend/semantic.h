@@ -13,7 +13,7 @@
 
 #include "frontend/ast.h"
 #include "frontend/diagnostic.h"
-#include "frontend/semantic_loop.h"
+#include "frontend/semantic_cfg.h"
 #include "frontend/semantic_symbol.h"
 #include "frontend/semantic_type.h"
 #include "utils.h"
@@ -32,19 +32,21 @@ public:
     std::optional<SemanticType> findExpType(Ref<Exp> node) const;
     std::optional<Ref<WhileStmt>> findLoop(Ref<BreakStmt> node) const;
     std::optional<Ref<WhileStmt>> findLoop(Ref<ContinueStmt> node) const;
+    const SemanticFunctionControlFlow* findControlFlow(Ref<FuncDef> node) const;
+    const SemanticControlFlowArena& controlFlowArena() const;
 
     const std::unordered_map<Ref<Identifier>, int32_t>&
     symbolIdByIdentifier() const;
     const std::unordered_map<int32_t, SemanticSymbol>& symbolById() const;
 
 private:
-    SemanticLoopBindingResult *m_bindingResult;
+    SemanticCFG *m_bindingResult;
     SemanticTypeAnalysisResult *m_typeResult;
     SymbolResolutionResult *m_symbolResult;
 
     std::unique_ptr<SemanticSymbolResolver> m_symbolResolver;
     std::unique_ptr<SemanticTypeAnalyzer> m_typeAnalyzer;
-    std::unique_ptr<SemanticLoopBinder> m_loopBinder;
+    std::unique_ptr<SemanticCFGBuilder> m_loopBinder;
 };
 
 struct SemanticOutput {

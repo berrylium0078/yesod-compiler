@@ -100,6 +100,38 @@ struct SemanticWhileTest : SemanticTestBase {
             "continue outside while should use the dedicated semantic "
             "diagnostic");
     }
+
+    void testWhileBuildsSemanticControlFlowBlocks()
+    {
+        m_output = analyzeRoot(
+            "int main(){while (1) {continue;} return 0;}");
+
+        const auto funcDef_nn = firstFuncDef();
+        const auto& controlFlow = requireControlFlow(m_output, funcDef_nn);
+        require(controlFlow.blocks.size() == 5,
+            "while semantic CFG should include entry, condition, body, exit, and end blocks");
+
+        const auto& entryBlock
+            = requireControlFlowBlock(m_output, controlFlow.entryBlock);
+        const auto& condBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[1]);
+        const auto& bodyBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[2]);
+        const auto& whileEndBlock
+            = requireControlFlowBlock(m_output, controlFlow.blocks[3]);
+
+        require(requireJumpTerminator(entryBlock).target == controlFlow.blocks[1],
+            "while entry block should jump to the loop condition");
+        const auto& condTerminator = requireBranchTerminator(condBlock);
+        require(condTerminator.trueTarget == controlFlow.blocks[2],
+            "while condition true edge should jump to the body block");
+        require(condTerminator.falseTarget == controlFlow.blocks[3],
+            "while condition false edge should jump to the loop exit block");
+        require(requireJumpTerminator(bodyBlock).target == controlFlow.blocks[1],
+            "continue-only while body should jump back to the condition block");
+        require(requireReturnTerminator(whileEndBlock).value.has_value(),
+            "loop exit block should carry the explicit return terminator");
+    }
 };
 
 } // namespace
@@ -112,5 +144,6 @@ int main()
     test.testLoopControlInsideWhileIfBindsContainingWhile();
     test.testBreakOutsideWhileReportsSemanticError();
     test.testContinueOutsideWhileReportsSemanticError();
+    test.testWhileBuildsSemanticControlFlowBlocks();
     return 0;
 }
