@@ -145,23 +145,22 @@ void testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply()
     const auto* trueJump = requireJumpValue(trueBlock->getInst(1));
     const auto* falseJump = requireJumpValue(falseBlock->getInst(1));
     const auto* contBlock = trueJump->getTargetBB();
-    const auto* bAlloc = requireAlloc(entryBlock->getInst(0), "%b");
-    const auto* bLoad = requireLoad(entryBlock->getInst(6), bAlloc, "%1");
-    const auto* boolStorage = requireAlloc(entryBlock->getInst(7), "%2");
-
     require(rhsBranch->getTrueBB() == trueBlock,
         "logical-or used in arithmetic should preserve the true short-circuit edge");
     require(falseJump->getTargetBB() == contBlock,
         "logical-or false branch should join the continuation before arithmetic use");
+    require(trueJump->getNumArgs() == 0 && falseJump->getNumArgs() == 0,
+        "logical-or materialization continuation should not require block arguments");
 
-    const auto* boolLoad = requireLoad(contBlock->getInst(0), boolStorage, "%5");
-    const auto* multiply
-        = requireBinary(contBlock->getInst(1), KOOPA_RBO_MUL, "%6");
-    require(multiply->getLhs() == bLoad,
-        "multiply should consume the value loaded before short-circuit lowering");
-    require(multiply->getRhs() == boolLoad,
-        "multiply should consume the materialized logical-or result");
-    require(requireReturn(contBlock->getInst(2))->getVal() == multiply,
+    require(contBlock->getNumInsts() >= 2,
+        "logical-or arithmetic continuation should compute a value and return it");
+    const auto* multiply = dynamic_cast<const BinaryValue*>(
+        contBlock->getInst(contBlock->getNumInsts() - 2));
+    require(multiply != nullptr, "continuation should contain a multiply instruction");
+    require(multiply->getOp() == KOOPA_RBO_MUL,
+        "continuation should multiply the original scalar by the booleanized result");
+    requireInteger(multiply->getLhs(), 8);
+    require(requireReturn(contBlock->getInst(contBlock->getNumInsts() - 1))->getVal() == multiply,
         "continuation should return the multiplication result");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 

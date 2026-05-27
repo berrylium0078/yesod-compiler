@@ -3,6 +3,7 @@
 
 #include "frontend/semantic.h"
 #include "frontend/semantic_cfg_impl.h"
+#include "frontend/semantic_ssa.h"
 #include "frontend/semantic_symbol_impl.h"
 #include "frontend/semantic_type_impl.h"
 
@@ -95,9 +96,26 @@ const SemanticFunctionControlFlow* SemanticInfo::findControlFlow(
     return m_bindingResult->findControlFlow(node);
 }
 
+const SemanticFunctionSSA* SemanticInfo::findSSA(Ref<FuncDef> node) const
+{
+    return m_ssaResult->findFunction(node);
+}
+
 const SemanticControlFlowArena& SemanticInfo::controlFlowArena() const
 {
     return m_bindingResult->controlFlowArena();
+}
+
+std::optional<SemanticSsaAlias> SemanticInfo::findAlias(
+    Ref<Identifier> identifier) const
+{
+    return m_ssaResult->findAlias(identifier);
+}
+
+const std::unordered_map<Ref<Identifier>, SemanticSsaAlias>&
+SemanticInfo::aliasByIdentifier() const
+{
+    return m_ssaResult->aliasByIdentifier();
 }
 
 bool SemanticOutput::success() const
@@ -129,13 +147,19 @@ SemanticOutput SemanticAnalyzer::analyze(const AST& ast, Ref<CompUnit> compUnit)
         info.m_symbolResolver->analyze(compUnit);
         info.m_typeAnalyzer->analyze(compUnit);
         info.m_loopBinder->analyze(compUnit);
+        info.m_ssaAnalyzer = std::make_unique<SemanticSSAAnalyzer>(ast,
+            *info.m_loopBinder->operator->(), *info.m_symbolResolver->operator->(),
+            *info.m_typeAnalyzer->operator->());
+        info.m_ssaAnalyzer->analyze(compUnit);
         
         auto typeAnalyzer = info.m_typeAnalyzer.get();
         auto symbolResolver = info.m_symbolResolver.get();
         auto loopBinder = info.m_loopBinder.get();
-        info.m_symbolResult = symbolResolver->m_impl.get();
-        info.m_typeResult = typeAnalyzer->m_impl.get();
-        info.m_bindingResult = loopBinder->m_impl.get();
+        auto ssaAnalyzer = info.m_ssaAnalyzer.get();
+        info.m_symbolResult = symbolResolver->operator->();
+        info.m_typeResult = typeAnalyzer->operator->();
+        info.m_bindingResult = loopBinder->operator->();
+        info.m_ssaResult = ssaAnalyzer->operator->();
 
         diagnostics.reserve((*symbolResolver)->diagnostics().size()
             + (*typeAnalyzer)->diagnostics().size()

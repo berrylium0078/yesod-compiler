@@ -151,17 +151,14 @@ void testVoidCallBeforeIntegerReturnCallLowering()
 
     const auto* halfEntry = requireEntryBlock(*halfFunction);
     const auto* halfEnd = requireEndBlock(*halfFunction);
-    require(halfEntry->getNumInsts() == 5,
-        "half should emit alloc/store/load/div/return for its parameter");
-    const auto* halfAlloc = requireAlloc(halfEntry->getInst(0), "%x");
-    (void)requireStore(halfEntry->getInst(1), halfAlloc);
-    const auto* halfLoad = requireLoad(halfEntry->getInst(2), halfAlloc, "%1");
+    require(halfEntry->getNumInsts() == 2,
+        "half should lower its scalar parameter directly in SSA form");
     const auto* halfDiv
-        = requireBinary(halfEntry->getInst(3), KOOPA_RBO_DIV, "%2");
-    require(halfDiv->getLhs() == halfLoad,
-        "half should divide the loaded parameter value");
+        = requireBinary(halfEntry->getInst(0), KOOPA_RBO_DIV, "%1");
+    require(halfDiv->getLhs() == halfFunction->getParam(0),
+        "half should divide the incoming parameter value directly");
     requireInteger(halfDiv->getRhs(), 2);
-    require(requireReturn(halfEntry->getInst(4))->getVal() == halfDiv,
+    require(requireReturn(halfEntry->getInst(1))->getVal() == halfDiv,
         "half should return the division result");
     requireInteger(requireReturn(halfEnd->getInst(0))->getVal(), 0);
 
@@ -221,18 +218,18 @@ void testLogicalAndShortCircuitKeepsDivisionCallOnRhsPath()
 
     require(mainFunction->getNumBBs() == 5,
         "logical-and return lowering should introduce rhs, true, false, and synthesized end blocks");
-    require(mainEntry->getNumInsts() >= 8,
-        "main entry should initialize locals, compare the lhs, and branch before evaluating the rhs call");
+    require(mainEntry->getNumInsts() >= 4,
+        "main entry should initialize the two call results, compare the lhs, and branch before evaluating the rhs call");
     require(countCallsToCallee(*mainEntry, *divFunction) == 0,
         "division call must not be emitted before the lhs short-circuit check");
     require(countCallsToCallee(*mainEntry, *idFunction) == 2,
         "both id initializers should remain in the entry body");
+    (void)requireCall(mainEntry->getInst(0), idFunction);
     (void)requireCall(mainEntry->getInst(1), idFunction);
-    (void)requireCall(mainEntry->getInst(4), idFunction);
 
-    require(rhsBlock->getNumInsts() == 4,
-        "rhs body should load both operands, call div, and branch on its result");
-    const auto* divCall = requireCall(rhsBlock->getInst(2), divFunction);
+    require(rhsBlock->getNumInsts() >= 2,
+        "rhs body should contain the division call and branch on its result");
+    const auto* divCall = requireCall(rhsBlock->getInst(0), divFunction);
     require(divCall->getNumArgs() == 2,
         "div call should preserve both arguments on the rhs path");
 
@@ -273,43 +270,34 @@ void testWideArityCallsLowerAllArguments()
 
     const auto* sumEntry = requireEntryBlock(*sumFunction);
     const auto* sum2Entry = requireEntryBlock(*sum2Function);
-    require(sumEntry->getNumInsts() == 32,
-        "sum should lower eight parameters into alloc/store/load/add chains");
-    require(sum2Entry->getNumInsts() == 64,
-        "sum2 should lower sixteen parameters into alloc/store/load/add chains");
+    require(sumEntry->getNumInsts() == 8,
+        "sum should lower eight parameters into a direct add chain under SSA");
+    require(sum2Entry->getNumInsts() == 16,
+        "sum2 should lower sixteen parameters into a direct add chain under SSA");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     const auto* mainEnd = requireEndBlock(*mainFunction);
-    require(mainEntry->getNumInsts() == 10,
-        "main should allocate x and y, call both helpers, and return x + y");
+    require(mainEntry->getNumInsts() == 4,
+        "main should emit two calls, one add, and one return under SSA");
 
-    const auto* xAlloc = requireAlloc(mainEntry->getInst(0), "%x");
-    const auto* sumCall = requireCall(mainEntry->getInst(1), sumFunction);
+    const auto* sumCall = requireCall(mainEntry->getInst(0), sumFunction);
     require(sumCall->getNumArgs() == 8,
         "sum call should preserve all eight arguments");
     requireInteger(sumCall->getArg(0), 1);
     requireInteger(sumCall->getArg(7), 8);
-    require(requireStore(mainEntry->getInst(2), xAlloc)->getVal() == sumCall,
-        "x initializer should store the sum call result");
 
-    const auto* yAlloc = requireAlloc(mainEntry->getInst(3), "%y");
-    const auto* sum2Call = requireCall(mainEntry->getInst(4), sum2Function);
+    const auto* sum2Call = requireCall(mainEntry->getInst(1), sum2Function);
     require(sum2Call->getNumArgs() == 16,
         "sum2 call should preserve all sixteen arguments");
     requireInteger(sum2Call->getArg(0), 1);
     requireInteger(sum2Call->getArg(15), 16);
-    require(requireStore(mainEntry->getInst(5), yAlloc)->getVal() == sum2Call,
-        "y initializer should store the sum2 call result");
-
-    const auto* xLoad = requireLoad(mainEntry->getInst(6), xAlloc, "%3");
-    const auto* yLoad = requireLoad(mainEntry->getInst(7), yAlloc, "%4");
     const auto* addValue
-        = requireBinary(mainEntry->getInst(8), KOOPA_RBO_ADD, "%5");
-    require(addValue->getLhs() == xLoad,
-        "final addition should consume the loaded x value");
-    require(addValue->getRhs() == yLoad,
-        "final addition should consume the loaded y value");
-    require(requireReturn(mainEntry->getInst(9))->getVal() == addValue,
+        = requireBinary(mainEntry->getInst(2), KOOPA_RBO_ADD, "%3");
+    require(addValue->getLhs() == sumCall,
+        "final addition should consume the first call result directly");
+    require(addValue->getRhs() == sum2Call,
+        "final addition should consume the second call result directly");
+    require(requireReturn(mainEntry->getInst(3))->getVal() == addValue,
         "main should return the sum of x and y");
     requireInteger(requireReturn(mainEnd->getInst(0))->getVal(), 0);
 }

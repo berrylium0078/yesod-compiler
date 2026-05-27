@@ -27,6 +27,8 @@ namespace {
         int32_t m_nextTempId = 1;
         int32_t m_nextBlockId = 1;
         std::unordered_map<int32_t, Value*> m_storageBySymbolId;
+        const frontend::SemanticFunctionSSA* m_ssa = nullptr;
+        std::unordered_map<int64_t, Value*> m_valueByAliasKey;
         std::unordered_map<int32_t, Function*> m_functionBySymbolId;
         std::unordered_map<Ref<frontend::SemanticBasicBlock>, BasicBlock*>
             m_basicBlockBySemanticBlock;
@@ -79,15 +81,23 @@ namespace {
             BasicBlock& basicBlock, BasicBlock& endBlock) const;
         [[nodiscard]] std::string makeUniqueLocalName(
             const frontend::SemanticSymbol& symbol);
+        [[nodiscard]] static int64_t aliasKey(
+            const frontend::SemanticSsaAlias& alias);
+        void bindAlias(Ref<frontend::Identifier> identifier, Value* value);
+        [[nodiscard]] Value* requireAliasValue(
+            Ref<frontend::Identifier> identifier, const char* message) const;
+        [[nodiscard]] std::vector<Value*> edgeArgs(
+            Ref<frontend::SemanticBasicBlock> source,
+            Ref<frontend::SemanticBasicBlock> target) const;
 
         void generateBlock(Ptr<frontend::Block> body);
         void generateBlockItem(const frontend::BlockItem& blockItem);
         void generateDecl(frontend::Decl declNode);
-        void generateSemanticBlock(
-            const frontend::SemanticBasicBlock& semanticBlock);
+        void generateSemanticBlock(Ref<frontend::SemanticBasicBlock> semanticBlock);
         void generateSemanticBlockItem(
             const frontend::SemanticBlockItem& semanticBlockItem);
         void generateSemanticTerminator(
+            Ref<frontend::SemanticBasicBlock> source,
             const frontend::SemanticBlockTerminator& terminator);
         void generateStmt(frontend::Stmt stmtNode);
         void generateIfStmt(Ptr<frontend::IfStmt> ifStmt);
@@ -513,6 +523,10 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     }
 
     auto* function = function_nn;
+    const auto* ssa = semanticInfo.findSSA(funcDef.ref());
+    if (ssa == nullptr) {
+        throw std::runtime_error("function definition is missing semantic SSA");
+    }
     FunctionGenerator state {
         .m_ast = ast,
         .m_semanticInfo = &semanticInfo,
@@ -520,6 +534,7 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         .m_currentBasicBlock = nullptr,
         .m_endBlock = nullptr,
         .m_storageBySymbolId = globalStorageBySymbolId,
+        .m_ssa = ssa,
         .m_functionBySymbolId = functionBySymbolId,
     };
 
@@ -529,6 +544,19 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         auto* basicBlock = semanticBlockRef == controlFlow->entryBlock
             ? BasicBlock::createEntry("%" + semanticBlock.nameHint)
             : BasicBlock::createNonEntry("%" + semanticBlock.nameHint);
+        const auto ssaBlockIt = ssa->m_blockInfoByBlock.find(semanticBlockRef);
+        if (ssaBlockIt == ssa->m_blockInfoByBlock.end()) {
+            throw std::runtime_error("semantic basic block is missing SSA info");
+        }
+        for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
+            const auto& param = ssaBlockIt->second.m_params[i];
+            const auto* symbol = semanticInfo.findSymbolById(param.m_symbolId);
+            if (symbol == nullptr || !symbol->isObject()) {
+                throw std::runtime_error("basic block parameter is missing object type");
+            }
+            basicBlock->pushParam(BlockArgRefValue::get(i,
+                lowerSemanticType(symbol->object().m_type, false)));
+        }
         state.m_basicBlockBySemanticBlock[semanticBlockRef] = basicBlock;
         function->pushBB(basicBlock);
     }
@@ -540,6 +568,10 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         const auto& funcFParam = parsedFuncDef.funcFParams[i];
         const auto& symbol = requireSymbolForIdentifier(funcFParam.identifier,
             semanticInfo, "function parameter is missing a symbol binding");
+        if (semanticInfo.findAlias(funcFParam.identifier).has_value()) {
+            state.bindAlias(funcFParam.identifier, function->getParam(i));
+            continue;
+        }
         auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
             state.makeUniqueLocalName(symbol));
         entryBlock->pushInst(alloc);
@@ -550,7 +582,7 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     for (const auto semanticBlockRef : controlFlow->blocks) {
         state.m_currentBasicBlock
             = state.m_basicBlockBySemanticBlock.at(semanticBlockRef);
-        state.generateSemanticBlock(semanticBlockRef(controlFlowArena));
+        state.generateSemanticBlock(semanticBlockRef);
     }
 
     for (auto* basicBlock : function->bbs()) {
@@ -561,15 +593,28 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
 }
 
 void FunctionGenerator::generateSemanticBlock(
-    const frontend::SemanticBasicBlock& semanticBlock)
+    Ref<frontend::SemanticBasicBlock> semanticBlockRef)
 {
+    const auto& semanticBlock = semanticBlockRef(m_semanticInfo->controlFlowArena());
+    const auto ssaBlockIt = m_ssa->m_blockInfoByBlock.find(semanticBlockRef);
+    if (ssaBlockIt == m_ssa->m_blockInfoByBlock.end()) {
+        throw std::runtime_error("semantic basic block is missing SSA info");
+    }
+    if (ssaBlockIt->second.m_params.size() != m_currentBasicBlock->getNumParams()) {
+        throw std::runtime_error(
+            "basic block parameter count should match SSA parameters");
+    }
+    for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
+        auto* blockArg = m_currentBasicBlock->getParam(i);
+        m_valueByAliasKey[aliasKey(ssaBlockIt->second.m_params[i].m_alias)] = blockArg;
+    }
     for (const auto& item : semanticBlock.items) {
         generateSemanticBlockItem(item);
     }
     if (!semanticBlock.terminator.has_value()) {
         throw std::runtime_error("semantic basic block is missing terminator");
     }
-    generateSemanticTerminator(*semanticBlock.terminator);
+    generateSemanticTerminator(semanticBlockRef, *semanticBlock.terminator);
 }
 
 void FunctionGenerator::generateSemanticBlockItem(
@@ -582,6 +627,7 @@ void FunctionGenerator::generateSemanticBlockItem(
 }
 
 void FunctionGenerator::generateSemanticTerminator(
+    Ref<frontend::SemanticBasicBlock> source,
     const frontend::SemanticBlockTerminator& terminator)
 {
     auto& state = *this;
@@ -589,18 +635,21 @@ void FunctionGenerator::generateSemanticTerminator(
     WITH(
         [&](const frontend::SemanticJumpTerminator& jump) {
             state.m_currentBasicBlock->pushInst(JumpValue::get(
-                state.m_basicBlockBySemanticBlock.at(jump.target), { }));
+                state.m_basicBlockBySemanticBlock.at(jump.target),
+                state.edgeArgs(source, jump.target)));
         },
         [&](const frontend::SemanticBranchTerminator& branch) {
+            const auto trueArgs = state.edgeArgs(source, branch.trueTarget);
+            const auto falseArgs = state.edgeArgs(source, branch.falseTarget);
             if (const auto constantValue
                 = state.m_semanticInfo->findConstantValue(branch.condition);
                 constantValue.has_value()) {
                 state.m_currentBasicBlock->pushInst(BranchValue::get(
                     IntegerValue::get(*constantValue),
                     state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
-                    { },
+                    trueArgs,
                     state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
-                    { }));
+                    falseArgs));
                 return;
             }
 
@@ -608,9 +657,9 @@ void FunctionGenerator::generateSemanticTerminator(
             state.m_currentBasicBlock->pushInst(BranchValue::get(
                 conditionValue,
                 state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
-                { },
+                trueArgs,
                 state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
-                { }));
+                falseArgs));
         },
         [&](const frontend::SemanticReturnTerminator& returnTerminator) {
             auto* value = returnTerminator.value.has_value()
@@ -738,6 +787,22 @@ void FunctionGenerator::generateDecl(Decl decl)
                     "const declarator is missing its symbol binding");
                 assert(symbol.isObject());
                 const auto &type = symbol.object().m_type;
+                if (state.m_semanticInfo->findAlias(parsedConstDef.identifier)
+                        .has_value()
+                    && type.isScalar()) {
+                    const auto& constInitVal = parsedConstDef.constInitVal(state.m_ast);
+                    MATCH(constInitVal.kind)
+                    WITH(
+                        [&](Ref<Exp> initAlt) {
+                            state.bindAlias(parsedConstDef.identifier,
+                                generateExp(initAlt));
+                        },
+                        [&](const auto&) {
+                            throw std::runtime_error(
+                                "scalar const initializer should be a scalar expression");
+                        });
+                    continue;
+                }
                 auto* alloc = AllocValue::get(
                     ::yesod::koopa::lowerSemanticType(type, false),
                     makeUniqueLocalName(symbol));
@@ -772,6 +837,28 @@ void FunctionGenerator::generateDecl(Decl decl)
                     resolvedVarDef.identifier, *state.m_semanticInfo,
                     "var declarator is missing its symbol binding");
                 const auto &type = symbol.object().m_type;
+                if (state.m_semanticInfo->findAlias(resolvedVarDef.identifier)
+                        .has_value()
+                    && type.isScalar()) {
+                    if (resolvedVarDef.initVal) {
+                        const auto& initVal = resolvedVarDef.initVal(state.m_ast);
+                        MATCH(initVal.kind)
+                        WITH(
+                            [&](Ref<Exp> initAlt) {
+                                state.bindAlias(resolvedVarDef.identifier,
+                                    generateExp(initAlt));
+                            },
+                            [&](const auto&) {
+                                throw std::runtime_error(
+                                    "scalar var initializer should be a scalar expression");
+                            });
+                    } else {
+                        state.bindAlias(resolvedVarDef.identifier,
+                            UndefValue::get(
+                                ::yesod::koopa::lowerSemanticType(type, false)));
+                    }
+                    continue;
+                }
                 auto* alloc = AllocValue::get(
                     ::yesod::koopa::lowerSemanticType(type, false),
                     makeUniqueLocalName(symbol));
@@ -923,6 +1010,11 @@ void FunctionGenerator::generateAssignStmt(Ptr<AssignStmt> assignStmt)
     MATCH(lValExp.kind)
     WITH(
         [&](Exp::LVal expAlt) {
+            if (state.m_semanticInfo->findAlias(expAlt.identifier).has_value()
+                && expAlt.indices.empty()) {
+                state.bindAlias(expAlt.identifier, generateExp(parsedAssignStmt.exp));
+                return;
+            }
             auto* address = generateLValueAddress(expAlt);
             auto* value = generateExp(parsedAssignStmt.exp);
             state.m_currentBasicBlock->pushInst(
@@ -1003,6 +1095,11 @@ Value* FunctionGenerator::generateExp(Ref<Exp> exp)
             return callValue;
         },
         [&](Exp::LVal expAlt) -> Value* {
+            if (state.m_semanticInfo->findAlias(expAlt.identifier).has_value()
+                && expAlt.indices.empty()) {
+                return state.requireAliasValue(expAlt.identifier,
+                    "scalar lvalue is missing an SSA alias value");
+            }
             auto* address = generateLValueAddress(expAlt);
             const auto expType = state.m_semanticInfo->findExpType(exp);
             if (expType.has_value() && expType->isArray()) {
@@ -1348,6 +1445,60 @@ std::string FunctionGenerator::makeUniqueLocalName(const SemanticSymbol& symbol)
             return candidate;
         }
     }
+}
+
+int64_t FunctionGenerator::aliasKey(const frontend::SemanticSsaAlias& alias)
+{
+    return (static_cast<int64_t>(alias.m_symbolId) << 32)
+        ^ static_cast<uint32_t>(alias.m_version);
+}
+
+void FunctionGenerator::bindAlias(
+    Ref<frontend::Identifier> identifier, Value* value)
+{
+    const auto alias = m_semanticInfo->findAlias(identifier);
+    if (!alias.has_value()) {
+        throw std::runtime_error("identifier is missing semantic SSA alias");
+    }
+    m_valueByAliasKey[aliasKey(*alias)] = value;
+}
+
+Value* FunctionGenerator::requireAliasValue(
+    Ref<frontend::Identifier> identifier, const char* message) const
+{
+    const auto alias = m_semanticInfo->findAlias(identifier);
+    if (!alias.has_value()) {
+        throw std::runtime_error(message);
+    }
+    const auto valueIt = m_valueByAliasKey.find(aliasKey(*alias));
+    if (valueIt == m_valueByAliasKey.end()) {
+        throw std::runtime_error(message);
+    }
+    return valueIt->second;
+}
+
+std::vector<Value*> FunctionGenerator::edgeArgs(
+    Ref<frontend::SemanticBasicBlock> source,
+    Ref<frontend::SemanticBasicBlock> target) const
+{
+    const auto sourceIt = m_ssa->m_blockInfoByBlock.find(source);
+    if (sourceIt == m_ssa->m_blockInfoByBlock.end()) {
+        throw std::runtime_error("source block is missing SSA info");
+    }
+    const auto argsIt = sourceIt->second.m_outgoingArgsByTarget.find(target);
+    if (argsIt == sourceIt->second.m_outgoingArgsByTarget.end()) {
+        return { };
+    }
+    std::vector<Value*> values;
+    values.reserve(argsIt->second.size());
+    for (const auto& alias : argsIt->second) {
+        const auto valueIt = m_valueByAliasKey.find(aliasKey(alias));
+        if (valueIt == m_valueByAliasKey.end()) {
+            throw std::runtime_error("SSA edge argument is missing a value binding");
+        }
+        values.push_back(valueIt->second);
+    }
+    return values;
 }
 
 } // namespace yesod::koopa

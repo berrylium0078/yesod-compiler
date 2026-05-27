@@ -51,6 +51,7 @@ namespace {
     using yesod::koopa::ArrayType;
     using yesod::koopa::BasicBlock;
     using yesod::koopa::BinaryValue;
+    using yesod::koopa::BlockArgRefValue;
     using yesod::koopa::BranchValue;
     using yesod::koopa::CallValue;
     using yesod::koopa::FuncArgRefValue;
@@ -176,6 +177,7 @@ namespace {
             if (m_savesReturnAddress) {
                 emitStoreToStackSlot("ra", m_savedRaOffset);
             }
+            spillFunctionParams(function);
 
             for (const BasicBlock* basicBlock : function.bbs()) {
                 emitBasicBlock(*basicBlock);
@@ -250,7 +252,15 @@ namespace {
                 = static_cast<int>(maxCallArgs > 8 ? (maxCallArgs - 8) * 4 : 0);
 
             int nextOffset = m_outgoingArgAreaSize;
+            for (const Value* param : function.params()) {
+                m_stackSlots.emplace(param, nextOffset);
+                nextOffset += valueStorageSize(*param);
+            }
             for (const BasicBlock* basicBlock : function.bbs()) {
+                for (const Value* param : basicBlock->params()) {
+                    m_stackSlots.emplace(param, nextOffset);
+                    nextOffset += valueStorageSize(*param);
+                }
                 for (const Value* instruction : basicBlock->insts()) {
                     if (needsStackSlot(*instruction)) {
                         m_stackSlots.emplace(instruction, nextOffset);
@@ -366,6 +376,20 @@ namespace {
             }
         }
 
+        void spillFunctionParams(const Function& function)
+        {
+            for (size_t i = 0; i < function.getNumParams(); ++i) {
+                const Value& param = *function.getParam(i);
+                if (i < 8) {
+                    emitStoreToStackSlot("a" + std::to_string(i), stackOffset(param));
+                    continue;
+                }
+                const int incomingOffset = m_frameSize + static_cast<int>((i - 8) * 4);
+                emitLoadFromStackSlot(incomingOffset, "t0");
+                emitStoreToStackSlot("t0", stackOffset(param));
+            }
+        }
+
         void emitInstruction(const Value& instruction)
         {
             if (instruction.isAllocValue()) {
@@ -422,6 +446,25 @@ namespace {
                 "unsupported Koopa instruction in RISC-V backend");
         }
 
+        void emitEdgeArgumentStores(
+            const BasicBlock& target, const std::vector<Value*>& args)
+        {
+            if (target.getNumParams() != args.size()) {
+                throw std::runtime_error(
+                    "RISC-V backend received mismatched body argument arity");
+            }
+            for (size_t i = 0; i < args.size(); ++i) {
+                loadValueToRegister(*args[i], "t0");
+                emitStoreToStackSlot("t0", stackOffset(*target.getParam(i)));
+            }
+        }
+
+        void emitJumpEdge(const BasicBlock& target, const std::vector<Value*>& args)
+        {
+            emitEdgeArgumentStores(target, args);
+            m_output << "  j " << blockLabel(target) << "\n";
+        }
+
         void loadPointerValueToRegister(
             const Value& value, const std::string& targetRegister)
         {
@@ -437,20 +480,12 @@ namespace {
             }
 
             if (value.isFuncArgRefValue()) {
-                const auto& funcArgRef
-                    = dynamic_cast<const FuncArgRefValue&>(value);
-                if (funcArgRef.getIndex() < 8) {
-                    const std::string sourceRegister
-                        = "a" + std::to_string(funcArgRef.getIndex());
-                    if (sourceRegister != targetRegister) {
-                        m_output << "  mv " << targetRegister << ", "
-                                 << sourceRegister << "\n";
-                    }
-                } else {
-                    const int offset = m_frameSize
-                        + static_cast<int>((funcArgRef.getIndex() - 8) * 4);
-                    emitLoadFromStackSlot(offset, targetRegister);
-                }
+                emitLoadFromStackSlot(stackOffset(value), targetRegister);
+                return;
+            }
+
+            if (value.isBlockArgRefValue()) {
+                emitLoadFromStackSlot(stackOffset(value), targetRegister);
                 return;
             }
 
@@ -473,20 +508,12 @@ namespace {
             }
 
             if (value.isFuncArgRefValue()) {
-                const auto& funcArgRef
-                    = dynamic_cast<const FuncArgRefValue&>(value);
-                if (funcArgRef.getIndex() < 8) {
-                    const std::string sourceRegister
-                        = "a" + std::to_string(funcArgRef.getIndex());
-                    if (sourceRegister != targetRegister) {
-                        m_output << "  mv " << targetRegister << ", "
-                                 << sourceRegister << "\n";
-                    }
-                } else {
-                    const int offset = m_frameSize
-                        + static_cast<int>((funcArgRef.getIndex() - 8) * 4);
-                    emitLoadFromStackSlot(offset, targetRegister);
-                }
+                emitLoadFromStackSlot(stackOffset(value), targetRegister);
+                return;
+            }
+
+            if (value.isBlockArgRefValue()) {
+                emitLoadFromStackSlot(stackOffset(value), targetRegister);
                 return;
             }
 
@@ -620,27 +647,32 @@ namespace {
 
         void emitBranch(const BranchValue& branchValue)
         {
-            if (branchValue.getNumTrueArgs() != 0
-                || branchValue.getNumFalseArgs() != 0) {
-                throw std::runtime_error(
-                    "RISC-V backend does not support body arguments yet");
+            loadValueToRegister(*branchValue.getCondition(), "t0");
+            if (branchValue.getNumTrueArgs() == 0
+                && branchValue.getNumFalseArgs() == 0) {
+                std::string label = m_parent->genLabel("_local");
+                m_output << "  bnez t0, " << label << "\n";
+                m_output << "  j " << blockLabel(*branchValue.getFalseBB()) << "\n";
+                m_output << label << ":\n";
+                m_output << "  j " << blockLabel(*branchValue.getTrueBB()) << "\n";
+                return;
             }
 
-            loadValueToRegister(*branchValue.getCondition(), "t0");
-            std::string label = m_parent->genLabel("_local");
-            m_output << "  bnez t0, " << label << "\n";
-            m_output << "  j " << blockLabel(*branchValue.getFalseBB()) << "\n";
-            m_output << label << ":\n";
-            m_output << "  j " << blockLabel(*branchValue.getTrueBB()) << "\n";
+            const std::string trueEdgeLabel
+                = m_parent->genLabel(blockLabel(*branchValue.getTrueBB()) + "_args");
+            const std::string falseEdgeLabel
+                = m_parent->genLabel(blockLabel(*branchValue.getFalseBB()) + "_args");
+            m_output << "  bnez t0, " << trueEdgeLabel << "\n";
+            m_output << "  j " << falseEdgeLabel << "\n";
+            m_output << trueEdgeLabel << ":\n";
+            emitJumpEdge(*branchValue.getTrueBB(), branchValue.trueArgs());
+            m_output << falseEdgeLabel << ":\n";
+            emitJumpEdge(*branchValue.getFalseBB(), branchValue.falseArgs());
         }
 
         void emitJump(const JumpValue& jumpValue)
         {
-            if (jumpValue.getNumArgs() != 0) {
-                throw std::runtime_error(
-                    "RISC-V backend does not support body arguments yet");
-            }
-            m_output << "  j " << blockLabel(*jumpValue.getTargetBB()) << "\n";
+            emitJumpEdge(*jumpValue.getTargetBB(), jumpValue.args());
         }
 
         void emitReturn(const ReturnValue& returnValue)

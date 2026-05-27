@@ -109,6 +109,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_link_libraries(semantic_function_test core)
   add_test(NAME semantic_function_test COMMAND semantic_function_test)
 
+  add_executable(semantic_ssa_test test/semantic_ssa_test.cpp)
+  target_link_libraries(semantic_ssa_test core)
+  add_test(NAME semantic_ssa_test COMMAND semantic_ssa_test)
+
   add_executable(semantic_array_test test/semantic_array_test.cpp)
   target_link_libraries(semantic_array_test core)
   add_test(NAME semantic_array_test COMMAND semantic_array_test)
@@ -140,6 +144,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_executable(koopa_function_test test/koopa_function_test.cpp)
   target_link_libraries(koopa_function_test core)
   add_test(NAME koopa_function_test COMMAND koopa_function_test)
+
+  add_executable(koopa_ssa_test test/koopa_ssa_test.cpp)
+  target_link_libraries(koopa_ssa_test core)
+  add_test(NAME koopa_ssa_test COMMAND koopa_ssa_test)
 
   add_executable(koopa_array_test test/koopa_array_test.cpp)
   target_link_libraries(koopa_array_test core)

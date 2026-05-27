@@ -255,8 +255,6 @@ inline const JumpValue* requireJumpValue(const Value* value)
     require(value->isJumpValue(), "expected jump instruction");
     const auto* jumpValue = dynamic_cast<const JumpValue*>(value);
     require(jumpValue != nullptr, "expected jump instruction cast");
-    require(jumpValue->getNumArgs() == 0,
-        "current subset should not emit body arguments on jumps");
     return jumpValue;
 }
 
@@ -275,10 +273,6 @@ inline const BranchValue* requireBranchValue(const Value* value)
     require(value->isBranchValue(), "expected branch instruction");
     const auto* branchValue = dynamic_cast<const BranchValue*>(value);
     require(branchValue != nullptr, "expected branch instruction cast");
-    require(branchValue->getNumTrueArgs() == 0,
-        "current subset should not emit body arguments on true branches");
-    require(branchValue->getNumFalseArgs() == 0,
-        "current subset should not emit body arguments on false branches");
     return branchValue;
 }
 

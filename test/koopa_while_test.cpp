@@ -18,49 +18,57 @@ void testWhileLoopAccumulatorLowersAndValidates()
     require(function->getNumBBs() == 5,
         "while lowering should add condition, body, and loop-exit blocks");
 
-    const auto* xAlloc = requireAlloc(entryBlock->getInst(0), "%x");
-    const auto* xInitStore = requireStore(entryBlock->getInst(1), xAlloc);
-    requireInteger(xInitStore->getVal(), 0);
-    const auto* yAlloc = requireAlloc(entryBlock->getInst(2), "%y");
-    const auto* yInitStore = requireStore(entryBlock->getInst(3), yAlloc);
-    requireInteger(yInitStore->getVal(), 0);
-    (void)requireJump(entryBlock->getInst(4), condBlock);
+    const auto* entryJump = requireJumpValue(entryBlock->getInst(0));
+    require(entryJump->getTargetBB() == condBlock,
+        "entry block should jump to the loop condition block");
+    require(entryJump->getNumArgs() == 2,
+        "entry block should seed x and y into the loop header");
+    requireInteger(entryJump->getArg(0), 0);
+    requireInteger(entryJump->getArg(1), 0);
+    require(condBlock->getNumParams() == 2,
+        "loop header should expose x and y as block parameters");
 
-    const auto* condLoad = requireLoad(condBlock->getInst(0), xAlloc, "%1");
     const auto* condValue
-        = requireBinary(condBlock->getInst(1), KOOPA_RBO_LE, "%2");
-    require(condValue->getLhs() == condLoad,
-        "while condition should compare the loaded x value");
+        = requireBinary(condBlock->getInst(0), KOOPA_RBO_LE, "%1");
+    require(condValue->getLhs() == condBlock->getParam(0),
+        "while condition should compare the current x block parameter");
     requireInteger(condValue->getRhs(), 10);
-    (void)requireBranch(condBlock->getInst(2), bodyBlock, whileEndBlock);
+    const auto* condBranch = requireBranchValue(condBlock->getInst(1));
+    require(condBranch->getTrueBB() == bodyBlock,
+        "true branch should enter the loop body");
+    require(condBranch->getFalseBB() == whileEndBlock,
+        "false branch should exit the loop");
+    require(condBranch->getNumTrueArgs() == 0,
+        "loop body should not need block parameters");
+    require(condBranch->getNumFalseArgs() == 0,
+        "loop exit should not need block arguments when it is dominated by the header");
+    require(whileEndBlock->getNumParams() == 0,
+        "loop exit block should not expose block parameters for dominated values");
 
-    const auto* yLoad = requireLoad(bodyBlock->getInst(0), yAlloc, "%3");
-    const auto* xLoadForY = requireLoad(bodyBlock->getInst(1), xAlloc, "%4");
     const auto* addY
-        = requireBinary(bodyBlock->getInst(2), KOOPA_RBO_ADD, "%5");
-    require(addY->getLhs() == yLoad,
-        "accumulator update should use the current y value");
-    require(addY->getRhs() == xLoadForY,
-        "accumulator update should add the current x value");
-    const auto* yStore = requireStore(bodyBlock->getInst(3), yAlloc);
-    require(yStore->getVal() == addY,
-        "accumulator update should store the computed y temporary");
-
-    const auto* xLoadForInc = requireLoad(bodyBlock->getInst(4), xAlloc, "%6");
+        = requireBinary(bodyBlock->getInst(0), KOOPA_RBO_ADD, "%2");
+    require(addY->getLhs() == condBlock->getParam(1),
+        "accumulator update should use the current y header parameter");
+    require(addY->getRhs() == condBlock->getParam(0),
+        "accumulator update should add the current x header parameter");
     const auto* addX
-        = requireBinary(bodyBlock->getInst(5), KOOPA_RBO_ADD, "%7");
-    require(addX->getLhs() == xLoadForInc,
-        "loop increment should use the current x value");
+        = requireBinary(bodyBlock->getInst(1), KOOPA_RBO_ADD, "%3");
+    require(addX->getLhs() == condBlock->getParam(0),
+        "loop increment should use the current x header parameter");
     requireInteger(addX->getRhs(), 1);
-    const auto* xStore = requireStore(bodyBlock->getInst(6), xAlloc);
-    require(xStore->getVal() == addX,
-        "loop increment should store the incremented x temporary");
-    (void)requireJump(bodyBlock->getInst(7), condBlock);
+    const auto* backedge = requireJumpValue(bodyBlock->getInst(2));
+    require(backedge->getTargetBB() == condBlock,
+        "loop body should jump back to the condition block");
+    require(backedge->getNumArgs() == 2,
+        "backedge should forward updated x and y values");
+    require(backedge->getArg(0) == addX,
+        "backedge should pass the incremented x value first");
+    require(backedge->getArg(1) == addY,
+        "backedge should pass the updated y value second");
 
-    const auto* returnLoad
-        = requireLoad(whileEndBlock->getInst(0), yAlloc, "%8");
-    require(requireReturn(whileEndBlock->getInst(1))->getVal() == returnLoad,
-        "loop exit should return the final accumulated y value");
+    require(requireReturn(whileEndBlock->getInst(0))->getVal()
+            == condBlock->getParam(1),
+        "loop exit should return the dominated y header parameter directly");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 
     auto rawProgram = Program::dumpRaw(program.get());

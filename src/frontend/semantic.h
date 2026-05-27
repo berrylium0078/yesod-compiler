@@ -14,6 +14,7 @@
 #include "frontend/ast.h"
 #include "frontend/diagnostic.h"
 #include "frontend/semantic_cfg.h"
+#include "frontend/semantic_ssa.h"
 #include "frontend/semantic_symbol.h"
 #include "frontend/semantic_type.h"
 #include "utils.h"
@@ -33,20 +34,27 @@ public:
     std::optional<Ref<WhileStmt>> findLoop(Ref<BreakStmt> node) const;
     std::optional<Ref<WhileStmt>> findLoop(Ref<ContinueStmt> node) const;
     const SemanticFunctionControlFlow* findControlFlow(Ref<FuncDef> node) const;
+    const SemanticFunctionSSA* findSSA(Ref<FuncDef> node) const;
     const SemanticControlFlowArena& controlFlowArena() const;
+    std::optional<SemanticSsaAlias> findAlias(Ref<Identifier> identifier) const;
+
+    const std::unordered_map<Ref<Identifier>, SemanticSsaAlias>&
+    aliasByIdentifier() const;
 
     const std::unordered_map<Ref<Identifier>, int32_t>&
     symbolIdByIdentifier() const;
     const std::unordered_map<int32_t, SemanticSymbol>& symbolById() const;
 
 private:
-    SemanticCFG *m_bindingResult;
-    SemanticTypeAnalysisResult *m_typeResult;
-    SymbolResolutionResult *m_symbolResult;
+    const SemanticCFG *m_bindingResult;
+    const SemanticSSA *m_ssaResult;
+    const SemanticTypeAnalysisResult *m_typeResult;
+    const SymbolResolutionResult *m_symbolResult;
 
     std::unique_ptr<SemanticSymbolResolver> m_symbolResolver;
     std::unique_ptr<SemanticTypeAnalyzer> m_typeAnalyzer;
     std::unique_ptr<SemanticCFGBuilder> m_loopBinder;
+    std::unique_ptr<SemanticSSAAnalyzer> m_ssaAnalyzer;
 };
 
 struct SemanticOutput {
