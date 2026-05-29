@@ -60,6 +60,7 @@ struct ExpressionWalker {
                 walkExp(binaryExp.rhs);
             },
             [&](const Exp::Unary& unaryExp) { walkExp(unaryExp.lhs); },
+            [&](const Exp::Cast& castExp) { walkExp(castExp.value); },
             [&](const Exp::Number&) {},
             [&](const Exp::Call& funcCall) {
                 for (auto arg : funcCall.params) {

@@ -181,6 +181,7 @@ void AstVisitor::visitExp(Ref<Exp> exp_ref)
     MATCH(exp.kind)
     WITH([&](const Exp::Binary& binary) { visitBinaryExp(exp, binary); },
         [&](const Exp::Unary& unary) { visitUnaryExp(exp, unary); },
+    [&](const Exp::Cast& cast) { visitCastExp(exp, cast); },
         [&](const Exp::Call& call) { visitCallExp(exp, call); },
         [&](const Exp::LVal& lVal) { visitLValExp(exp, lVal); },
         [&](const Exp::Number& number) { visitNumberExp(exp, number); });
@@ -195,6 +196,11 @@ void AstVisitor::visitBinaryExp(const Exp&, const Exp::Binary& binary)
 void AstVisitor::visitUnaryExp(const Exp&, const Exp::Unary& unary)
 {
     visitExp(unary.lhs);
+}
+
+void AstVisitor::visitCastExp(const Exp&, const Exp::Cast& cast)
+{
+    visitExp(cast.value);
 }
 
 void AstVisitor::visitCallExp(const Exp&, const Exp::Call& call)

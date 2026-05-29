@@ -59,6 +59,16 @@ Ref<Exp> makeUnaryExp(
         } });
 }
 
+Ref<Exp> makeCastExp(AST& ast, int32_t startOffset, BTypeKeyword targetType,
+    Ref<Exp> value)
+{
+    return ast.alloc<Exp>(startOffset,
+        Exp::Kind { Exp::Cast {
+            .targetType = targetType,
+            .value = value,
+        } });
+}
+
 Ref<Exp> makeBinaryRoot(AST& ast, int32_t startOffset, BinaryOpKeyword op,
     Ref<Exp> lhs_nn, Ref<Exp> rhs_nn)
 {
@@ -375,6 +385,45 @@ ParseResult<CompUnit> ParserImpl::parseCompUnit(int32_t offset)
             continue;
         }
 
+        const auto mintKeyword = matchKeyword(currentOffset, "mint");
+        if (mintKeyword.success) {
+            const auto identifier = parseIdent(mintKeyword.nextOffset);
+            if (!identifier.value) {
+                break;
+            }
+
+            const auto openParen = matchSymbol(identifier.nextOffset, '(');
+            if (openParen.success) {
+                const auto funcDef = parseFuncDef(currentOffset);
+                if (!funcDef.value) {
+                    const auto failure = ParseResult<CompUnit> {
+
+                        .nextOffset = funcDef.nextOffset,
+                        .value = { },
+                    };
+                    m_compUnitMemo.emplace(offset, failure);
+                    return failure;
+                }
+                topLevelItems.emplace_back(funcDef.value.ref());
+                nextOffset = funcDef.nextOffset;
+                continue;
+            }
+
+            const auto decl = parseDecl(currentOffset);
+            if (!decl.value) {
+                const auto failure = ParseResult<CompUnit> {
+
+                    .nextOffset = decl.nextOffset,
+                    .value = { },
+                };
+                m_compUnitMemo.emplace(offset, failure);
+                return failure;
+            }
+            topLevelItems.emplace_back(decl.value.value());
+            nextOffset = decl.nextOffset;
+            continue;
+        }
+
         const auto intKeyword = matchKeyword(currentOffset, "int");
         if (!intKeyword.success) {
             break;
@@ -623,9 +672,20 @@ ParseResult<FuncTypeKeyword> ParserImpl::parseFuncType(int32_t offset)
     }
 
     const auto intKeyword = matchKeyword(offset, "int");
-    if (!intKeyword.success) {
+    if (intKeyword.success) {
+        const auto result = ParseResult<FuncTypeKeyword> {
+
+            .nextOffset = intKeyword.nextOffset,
+            .value = FuncTypeKeyword::intKeyword,
+        };
+        m_funcTypeMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto mintKeyword = matchKeyword(offset, "mint");
+    if (!mintKeyword.success) {
         recordFailure<ExpectedKeywordDiagnostic>(
-            skipTrivia(offset), "expected 'void' or 'int'");
+            skipTrivia(offset), "expected 'void', 'int', or 'mint'");
         const auto failure = ParseResult<FuncTypeKeyword> {
 
             .nextOffset = skipTrivia(offset),
@@ -637,8 +697,8 @@ ParseResult<FuncTypeKeyword> ParserImpl::parseFuncType(int32_t offset)
 
     const auto result = ParseResult<FuncTypeKeyword> {
 
-        .nextOffset = intKeyword.nextOffset,
-        .value = FuncTypeKeyword::intKeyword,
+        .nextOffset = mintKeyword.nextOffset,
+        .value = FuncTypeKeyword::mintKeyword,
     };
     m_funcTypeMemo.emplace(offset, result);
     return result;
@@ -902,6 +962,20 @@ ParseResult<VarDecl> ParserImpl::parseVarDecl(int32_t offset)
     std::vector<Ref<VarDef>> varDefs;
     auto nextOffset = bType.nextOffset;
 
+    const auto firstVarDefHead = parseIdent(nextOffset);
+    if (!firstVarDefHead.value) {
+        const auto afterType = skipTrivia(nextOffset);
+        if (!isAtEnd(afterType) && m_source[afterType] == '(') {
+            const auto failure = ParseResult<VarDecl> {
+
+                .nextOffset = normalizedOffset,
+                .value = { },
+            };
+            m_varDeclMemo.emplace(offset, failure);
+            return failure;
+        }
+    }
+
     const auto firstVarDef = parseVarDef(nextOffset);
     if (firstVarDef.value) {
         varDefs.push_back(firstVarDef.value.ref());
@@ -970,8 +1044,19 @@ ParseResult<BTypeKeyword> ParserImpl::parseBType(int32_t offset)
         return memoIt->second;
     }
 
-    const auto keyword = matchKeyword(offset, "int");
-    if (!keyword.success) {
+    const auto intKeyword = matchKeyword(offset, "int");
+    if (intKeyword.success) {
+        const auto result = ParseResult<BTypeKeyword> {
+
+            .nextOffset = intKeyword.nextOffset,
+            .value = BTypeKeyword::intKeyword,
+        };
+        m_bTypeMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto mintKeyword = matchKeyword(offset, "mint");
+    if (!mintKeyword.success) {
         const auto failure = ParseResult<BTypeKeyword> {
 
             .nextOffset = skipTrivia(offset),
@@ -983,8 +1068,8 @@ ParseResult<BTypeKeyword> ParserImpl::parseBType(int32_t offset)
 
     const auto result = ParseResult<BTypeKeyword> {
 
-        .nextOffset = keyword.nextOffset,
-        .value = BTypeKeyword::intKeyword,
+        .nextOffset = mintKeyword.nextOffset,
+        .value = BTypeKeyword::mintKeyword,
     };
     m_bTypeMemo.emplace(offset, result);
     return result;
@@ -1614,7 +1699,9 @@ ParseResult<IfStmt> ParserImpl::parseIfStmt(int32_t offset)
             }
 
             if (isDiagnostic<IntegerOutOfRangeDiagnostic>(*diagnostic)
-                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)) {
+                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)
+                || isDiagnostic<MalformedCastValueDiagnostic>(*diagnostic)
+                || isDiagnostic<MissingCastRParenDiagnostic>(*diagnostic)) {
                 keepInnerDiagnostic = true;
                 break;
             }
@@ -1737,7 +1824,9 @@ ParseResult<WhileStmt> ParserImpl::parseWhileStmt(int32_t offset)
             }
 
             if (isDiagnostic<IntegerOutOfRangeDiagnostic>(*diagnostic)
-                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)) {
+                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)
+                || isDiagnostic<MalformedCastValueDiagnostic>(*diagnostic)
+                || isDiagnostic<MissingCastRParenDiagnostic>(*diagnostic)) {
                 keepInnerDiagnostic = true;
                 break;
             }
@@ -1928,7 +2017,9 @@ ParseResult<AssignStmt> ParserImpl::parseAssignStmt(int32_t offset)
             }
 
             if (isDiagnostic<IntegerOutOfRangeDiagnostic>(*diagnostic)
-                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)) {
+                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)
+                || isDiagnostic<MalformedCastValueDiagnostic>(*diagnostic)
+                || isDiagnostic<MissingCastRParenDiagnostic>(*diagnostic)) {
                 keepInnerDiagnostic = true;
                 break;
             }
@@ -2078,7 +2169,9 @@ ParseResult<ReturnStmt> ParserImpl::parseReturnStmt(int32_t offset)
             }
 
             if (isDiagnostic<IntegerOutOfRangeDiagnostic>(*diagnostic)
-                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)) {
+                || isDiagnostic<MalformedPrimaryExpDiagnostic>(*diagnostic)
+                || isDiagnostic<MalformedCastValueDiagnostic>(*diagnostic)
+                || isDiagnostic<MissingCastRParenDiagnostic>(*diagnostic)) {
                 keepInnerDiagnostic = true;
                 break;
             }
@@ -2480,6 +2573,10 @@ ParseResult<Exp> ParserImpl::parsePrimaryExp(int32_t offset)
 
                 if (isDiagnostic<IntegerOutOfRangeDiagnostic>(*diagnostic)
                     || isDiagnostic<MalformedPrimaryExpDiagnostic>(
+                        *diagnostic)
+                    || isDiagnostic<MalformedCastValueDiagnostic>(
+                        *diagnostic)
+                    || isDiagnostic<MissingCastRParenDiagnostic>(
                         *diagnostic)) {
                     keepInnerDiagnostic = true;
                     break;
@@ -2584,6 +2681,57 @@ ParseResult<Exp> ParserImpl::parseUnaryExp(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
+    const auto castType = parseBType(normalizedOffset);
+    if (castType.value) {
+        const auto openParen = matchSymbol(castType.nextOffset, '(');
+        if (openParen.success) {
+            const auto castValue = parseExp(openParen.nextOffset);
+            if (!castValue.value) {
+                recordCommittedFailure<MalformedCastValueDiagnostic>(
+                    skipTrivia(openParen.nextOffset),
+                    "malformed cast expression");
+                auto recoveredOffset = recoverToExprRParen(openParen.nextOffset);
+                const auto recoveredResult = ParseResult<Exp> {
+
+                    .nextOffset = recoveredOffset,
+                    .value = { },
+                };
+                m_unaryExpMemo.emplace(offset, recoveredResult);
+                return recoveredResult;
+            }
+
+            const auto closeParen = matchSymbol(castValue.nextOffset, ')');
+            if (!closeParen.success) {
+                recordCommittedFailure<MissingCastRParenDiagnostic>(
+                    skipTrivia(castValue.nextOffset),
+                    "missing ')' after cast expression");
+                auto recoveredOffset = recoverToExprRParen(castValue.nextOffset);
+                const auto recoveredParen = matchSymbol(recoveredOffset, ')');
+                if (recoveredParen.success) {
+                    recoveredOffset = recoveredParen.nextOffset;
+                }
+
+                const auto recoveredResult = ParseResult<Exp> {
+
+                    .nextOffset = recoveredOffset,
+                    .value = makeCastExp(m_ast, normalizedOffset,
+                        *castType.value, castValue.value.ref()),
+                };
+                m_unaryExpMemo.emplace(offset, recoveredResult);
+                return recoveredResult;
+            }
+
+            const auto result = ParseResult<Exp> {
+
+                .nextOffset = closeParen.nextOffset,
+                .value = makeCastExp(m_ast, normalizedOffset, *castType.value,
+                    castValue.value.ref()),
+            };
+            m_unaryExpMemo.emplace(offset, result);
+            return result;
+        }
+    }
+
     if (!isAtEnd(normalizedOffset)
         && isIdentifierStart(m_source[normalizedOffset])) {
         const auto identifier = parseIdent(normalizedOffset);
@@ -3345,7 +3493,9 @@ int32_t ParserImpl::recoverToIfStmtHead(int32_t offset) const
             || matchKeyword(normalizedOffset, "break").success
             || matchKeyword(normalizedOffset, "continue").success
             || matchKeyword(normalizedOffset, "else").success
-            || matchKeyword(normalizedOffset, "return").success) {
+            || matchKeyword(normalizedOffset, "return").success
+            || matchKeyword(normalizedOffset, "int").success
+            || matchKeyword(normalizedOffset, "mint").success) {
             return normalizedOffset;
         }
         nextOffset = normalizedOffset + 1;
@@ -3411,6 +3561,7 @@ int32_t ParserImpl::recoverToBlockItemBoundary(int32_t offset) const
             || isIdentifierStart(m_source[normalizedOffset])
             || matchKeyword(normalizedOffset, "const").success
             || matchKeyword(normalizedOffset, "int").success
+            || matchKeyword(normalizedOffset, "mint").success
             || matchKeyword(normalizedOffset, "if").success
             || matchKeyword(normalizedOffset, "while").success
             || matchKeyword(normalizedOffset, "break").success

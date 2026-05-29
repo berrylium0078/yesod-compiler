@@ -14,6 +14,144 @@ using namespace frontend;
 
 namespace {
 
+    std::string makeFunctionName(const std::string& identifier);
+
+    constexpr int32_t kMintMod = 998244353;
+    constexpr uint32_t kMintR = 301989884u;
+    constexpr uint32_t kMintR2 = 932051910u;
+    constexpr uint32_t kMintNegInv = 998244351u;
+
+    enum class MintHelper {
+        add,
+        sub,
+        mul,
+        div,
+        fromInt,
+        toInt,
+    };
+
+    [[nodiscard]] bool isMintType(const SemanticType& type)
+    {
+        return type.kind == SemanticTypeKind::mint;
+    }
+
+    [[nodiscard]] uint32_t normalizeMintConstant(int32_t value)
+    {
+        int64_t normalized = static_cast<int64_t>(value) % kMintMod;
+        if (normalized < 0) {
+            normalized += kMintMod;
+        }
+        return static_cast<uint32_t>(normalized);
+    }
+
+    [[nodiscard]] uint32_t montgomeryReduce(uint64_t value)
+    {
+        const uint32_t factor = static_cast<uint32_t>(value) * kMintNegInv;
+        uint64_t reduced
+            = (value + static_cast<uint64_t>(factor) * kMintMod) >> 32;
+        if (reduced >= static_cast<uint64_t>(kMintMod)) {
+            reduced -= kMintMod;
+        }
+        return static_cast<uint32_t>(reduced);
+    }
+
+    [[nodiscard]] uint32_t encodeMintConstant(int32_t value)
+    {
+        return montgomeryReduce(
+            static_cast<uint64_t>(normalizeMintConstant(value)) * kMintR2);
+    }
+
+    [[nodiscard]] const char* mintHelperName(MintHelper helper)
+    {
+        switch (helper) {
+        case MintHelper::add:
+            return "__yesod_mint_add";
+        case MintHelper::sub:
+            return "__yesod_mint_sub";
+        case MintHelper::mul:
+            return "__yesod_mint_mul";
+        case MintHelper::div:
+            return "__yesod_mint_div";
+        case MintHelper::fromInt:
+            return "__yesod_mint_from_int";
+        case MintHelper::toInt:
+            return "__yesod_mint_to_int";
+        }
+
+        throw std::runtime_error("unknown mint helper kind");
+    }
+
+    [[nodiscard]] Function* createMintHelperDecl(MintHelper helper)
+    {
+        const size_t paramCount = helper == MintHelper::fromInt
+                || helper == MintHelper::toInt
+            ? 1
+            : 2;
+        std::vector<Type*> paramTypes(paramCount, Int32Type::get());
+        auto* function = Function::create(
+            FunctionType::get(Int32Type::get(), paramTypes),
+            makeFunctionName(mintHelperName(helper)));
+        for (size_t index = 0; index < paramTypes.size(); ++index) {
+            function->pushParam(FuncArgRefValue::get(index, paramTypes[index]));
+        }
+        return function;
+    }
+
+    class MintRuntimeUseVisitor : public AstVisitor {
+    public:
+        explicit MintRuntimeUseVisitor(const AST& ast)
+            : AstVisitor(ast)
+        {
+        }
+
+        [[nodiscard]] bool usesMintRuntime() const { return m_usesMintRuntime; }
+
+    protected:
+        void visitFuncDef(Ref<FuncDef> funcDef) override
+        {
+            if (funcDef(m_ast).m_funcType == FuncTypeKeyword::mintKeyword) {
+                m_usesMintRuntime = true;
+            }
+            AstVisitor::visitFuncDef(funcDef);
+        }
+
+        void visitFuncFParam(const FuncFParam& funcFParam) override
+        {
+            if (funcFParam.bType == BTypeKeyword::mintKeyword) {
+                m_usesMintRuntime = true;
+            }
+            AstVisitor::visitFuncFParam(funcFParam);
+        }
+
+        void visitConstDecl(Ref<ConstDecl> constDecl) override
+        {
+            if (constDecl(m_ast).bType == BTypeKeyword::mintKeyword) {
+                m_usesMintRuntime = true;
+            }
+            AstVisitor::visitConstDecl(constDecl);
+        }
+
+        void visitVarDecl(Ref<VarDecl> varDecl) override
+        {
+            if (varDecl(m_ast).bType == BTypeKeyword::mintKeyword) {
+                m_usesMintRuntime = true;
+            }
+            AstVisitor::visitVarDecl(varDecl);
+        }
+
+        void visitCastExp(const Exp& exp, const Exp::Cast& cast) override
+        {
+            (void)exp;
+            if (cast.targetType == BTypeKeyword::mintKeyword) {
+                m_usesMintRuntime = true;
+            }
+            AstVisitor::visitCastExp(exp, cast);
+        }
+
+    private:
+        bool m_usesMintRuntime = false;
+    };
+
     struct FunctionGenerator {
         struct LoopBlocks {
             BasicBlock* m_condBlock_nn;
@@ -35,6 +173,8 @@ namespace {
         std::unordered_map<Ptr<frontend::WhileStmt>, LoopBlocks>
             m_loopBlocksByWhileStmt;
         std::unordered_set<std::string> m_usedSymbolNames;
+        std::unordered_map<std::string, Function*> m_mintHelperByName;
+        SemanticType m_functionReturnType = SemanticType::makeVoid();
 
         template <typename T>
         [[nodiscard]] const T& node(Ptr<T> handle, const char* message) const
@@ -89,6 +229,9 @@ namespace {
         [[nodiscard]] std::vector<Value*> edgeArgs(
             Ref<frontend::SemanticBasicBlock> source,
             Ref<frontend::SemanticBasicBlock> target) const;
+        [[nodiscard]] Function* requireMintHelper(MintHelper helper) const;
+        [[nodiscard]] Value* emitCall(Function* callee,
+            std::vector<Value*> args);
 
         void generateBlock(Ptr<frontend::Block> body);
         void generateBlockItem(const frontend::BlockItem& blockItem);
@@ -295,6 +438,7 @@ namespace {
     {
         switch (semanticType.kind) {
         case SemanticTypeKind::integer:
+        case SemanticTypeKind::mint:
         case SemanticTypeKind::boolean:
             return Int32Type::get();
         case SemanticTypeKind::voidType:
@@ -364,8 +508,21 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
     const auto& parsedCompUnit = compUnit(ast);
     std::unordered_map<int32_t, Value*> globalStorageBySymbolId;
     std::unordered_map<int32_t, Function*> functionBySymbolId;
+    std::unordered_map<std::string, Function*> mintHelperByName;
     std::unordered_map<int32_t, size_t> symbolUseCount;
     std::unordered_set<int32_t> definedFunctionSymbolIds;
+
+    MintRuntimeUseVisitor mintRuntimeUseVisitor(ast);
+    mintRuntimeUseVisitor.traverse(compUnit.ref());
+    if (mintRuntimeUseVisitor.usesMintRuntime()) {
+        for (const auto helper : { MintHelper::add, MintHelper::sub,
+                 MintHelper::mul, MintHelper::div, MintHelper::fromInt,
+                 MintHelper::toInt }) {
+            auto* helperDecl = createMintHelperDecl(helper);
+            mintHelperByName.emplace(mintHelperName(helper), helperDecl);
+            program->pushFunc(helperDecl);
+        }
+    }
 
     for (const auto& [identifier_nn, symbolId] :
         semanticInfo.symbolIdByIdentifier()) {
@@ -456,6 +613,7 @@ Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
                 }
                 (void)generateFuncDef(ast, topLevelAlt.ptr(), semanticInfo,
                     globalStorageBySymbolId, functionBySymbolId,
+                    mintHelperByName,
                     functionIt->second);
             },
             [&](const auto&) { }, );
@@ -513,6 +671,7 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     const SemanticInfo& semanticInfo,
     const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
     const std::unordered_map<int32_t, Function*>& functionBySymbolId,
+    const std::unordered_map<std::string, Function*>& mintHelperByName,
     Function* function_nn) const
 {
     const auto& parsedFuncDef = funcDef(ast);
@@ -523,6 +682,8 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
     }
 
     auto* function = function_nn;
+    const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
+        semanticInfo, "function definition is missing a symbol binding");
     const auto* ssa = semanticInfo.findSSA(funcDef.ref());
     if (ssa == nullptr) {
         throw std::runtime_error("function definition is missing semantic SSA");
@@ -536,6 +697,8 @@ Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
         .m_storageBySymbolId = globalStorageBySymbolId,
         .m_ssa = ssa,
         .m_functionBySymbolId = functionBySymbolId,
+        .m_mintHelperByName = mintHelperByName,
+        .m_functionReturnType = symbol.function().m_returnType,
     };
 
     const auto& controlFlowArena = semanticInfo.controlFlowArena();
@@ -674,9 +837,34 @@ Value* FunctionGenerator::generateSemanticValue(
 {
     return MATCH(value.kind) WITH(
         [&](int32_t constantValue) -> Value* {
+            if (isMintType(m_functionReturnType)) {
+                return IntegerValue::get(
+                    static_cast<int32_t>(encodeMintConstant(constantValue)));
+            }
             return IntegerValue::get(constantValue);
         },
         [&](Ref<Exp> exp) -> Value* { return generateExp(exp); });
+}
+
+Function* FunctionGenerator::requireMintHelper(MintHelper helper) const
+{
+    const auto helperIt = m_mintHelperByName.find(mintHelperName(helper));
+    if (helperIt == m_mintHelperByName.end()) {
+        throw std::runtime_error("mint helper is missing a lowered declaration");
+    }
+    return helperIt->second;
+}
+
+Value* FunctionGenerator::emitCall(Function* callee, std::vector<Value*> args)
+{
+    const auto* functionType
+        = dynamic_cast<FunctionType*>(callee->getFuncType());
+    const std::string callName = functionType->getResultType()->isUnitType()
+        ? std::string { }
+        : makeTempName(m_nextTempId);
+    auto* callValue = CallValue::get(callee, std::move(args), callName);
+    m_currentBasicBlock->pushInst(callValue);
+    return callValue;
 }
 
 void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
@@ -737,7 +925,10 @@ void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
                                     "global variable initializer must be "
                                     "constant");
                             }
-                            initValue = IntegerValue::get(*constantValue);
+                                initValue = IntegerValue::get(isMintType(type)
+                                    ? static_cast<int32_t>(
+                                        encodeMintConstant(*constantValue))
+                                    : *constantValue);
                         },
                         [&](const auto&) { }, );
                 }
@@ -1054,7 +1245,11 @@ Value* FunctionGenerator::generateExp(Ref<Exp> exp)
     auto& state = *this;
     if (const auto constantValue = state.m_semanticInfo->findConstantValue(exp);
         constantValue.has_value()) {
-        return IntegerValue::get(*constantValue);
+        const auto semanticType = state.m_semanticInfo->findExpType(exp);
+        return IntegerValue::get(semanticType.has_value()
+                    && isMintType(*semanticType)
+                ? static_cast<int32_t>(encodeMintConstant(*constantValue))
+                : *constantValue);
     }
     const auto& parsedExp = exp(state.m_ast);
     return MATCH(parsedExp.kind) WITH(
@@ -1067,6 +1262,24 @@ Value* FunctionGenerator::generateExp(Ref<Exp> exp)
         },
         [&](Exp::Unary expAlt) -> Value* {
             return generateUnaryExpValue(expAlt);
+        },
+        [&](Exp::Cast expAlt) -> Value* {
+            auto* value = generateExp(expAlt.value);
+            const auto operandType = state.m_semanticInfo->findExpType(expAlt.value);
+            if (!operandType.has_value() || operandType->kind == SemanticTypeKind::array
+                || operandType->kind == SemanticTypeKind::voidType) {
+                return value;
+            }
+            const bool targetIsMint = expAlt.targetType == BTypeKeyword::mintKeyword;
+            if (targetIsMint && operandType->kind == SemanticTypeKind::integer) {
+                return state.emitCall(
+                    state.requireMintHelper(MintHelper::fromInt), { value });
+            }
+            if (!targetIsMint && operandType->kind == SemanticTypeKind::mint) {
+                return state.emitCall(
+                    state.requireMintHelper(MintHelper::toInt), { value });
+            }
+            return value;
         },
         [&](Exp::Call expAlt) -> Value* {
             const auto& symbol = requireSymbolForIdentifier(expAlt.funcName,
@@ -1083,16 +1296,7 @@ Value* FunctionGenerator::generateExp(Ref<Exp> exp)
             for (const auto arg_nn : expAlt.params) {
                 args.push_back(generateExp(arg_nn));
             }
-            const auto* functionType = dynamic_cast<FunctionType*>(
-                functionIt->second->getFuncType());
-            const std::string callName
-                = functionType->getResultType()->isUnitType()
-                ? std::string { }
-                : makeTempName(state.m_nextTempId);
-            auto* callValue
-                = CallValue::get(functionIt->second, std::move(args), callName);
-            state.m_currentBasicBlock->pushInst(callValue);
-            return callValue;
+            return state.emitCall(functionIt->second, std::move(args));
         },
         [&](Exp::LVal expAlt) -> Value* {
             if (state.m_semanticInfo->findAlias(expAlt.identifier).has_value()
@@ -1127,6 +1331,42 @@ Value* FunctionGenerator::generateBinaryExpValue(const Exp::Binary& binaryExp)
     auto& state = *this;
     auto* lhs = generateExp(binaryExp.lhs);
     auto* rhs = generateExp(binaryExp.rhs);
+    const auto lhsType = state.m_semanticInfo->findExpType(binaryExp.lhs);
+    if (lhsType.has_value() && isMintType(*lhsType)) {
+        switch (binaryExp.op) {
+        case BinaryOpKeyword::plus:
+            return state.emitCall(
+                state.requireMintHelper(MintHelper::add), { lhs, rhs });
+        case BinaryOpKeyword::minus:
+            return state.emitCall(
+                state.requireMintHelper(MintHelper::sub), { lhs, rhs });
+        case BinaryOpKeyword::star:
+            return state.emitCall(
+                state.requireMintHelper(MintHelper::mul), { lhs, rhs });
+        case BinaryOpKeyword::slash:
+            return state.emitCall(
+                state.requireMintHelper(MintHelper::div), { lhs, rhs });
+        case BinaryOpKeyword::less:
+        case BinaryOpKeyword::greater:
+        case BinaryOpKeyword::lessEqual:
+        case BinaryOpKeyword::greaterEqual:
+        case BinaryOpKeyword::equal:
+        case BinaryOpKeyword::notEqual:
+            lhs = state.emitCall(
+                state.requireMintHelper(MintHelper::toInt), { lhs });
+            rhs = state.emitCall(
+                state.requireMintHelper(MintHelper::toInt), { rhs });
+            break;
+        case BinaryOpKeyword::percent:
+            throw std::runtime_error(
+                "mint modulo expressions should be rejected semantically");
+        case BinaryOpKeyword::andAnd:
+        case BinaryOpKeyword::orOr:
+            throw std::runtime_error("short-circuit binary expression should lower "
+                                     "through boolean branching");
+        }
+    }
+
     koopa_raw_binary_op op = KOOPA_RBO_ADD;
     switch (binaryExp.op) {
     case BinaryOpKeyword::star:
@@ -1175,6 +1415,20 @@ Value* FunctionGenerator::generateUnaryExpValue(const Exp::Unary& unaryExp)
 {
     auto& state = *this;
     auto* operand = generateExp(unaryExp.lhs);
+    const auto operandType = state.m_semanticInfo->findExpType(unaryExp.lhs);
+    if (operandType.has_value() && isMintType(*operandType)) {
+        switch (unaryExp.op) {
+        case UnaryOpKeyword::plus:
+            return operand;
+        case UnaryOpKeyword::minus:
+            return state.emitCall(state.requireMintHelper(MintHelper::sub),
+                { IntegerValue::get(0), operand });
+        case UnaryOpKeyword::bang:
+            return generateBinaryValue(KOOPA_RBO_EQ, IntegerValue::get(0),
+                operand, *state.m_currentBasicBlock, state.m_nextTempId);
+        }
+    }
+
     switch (unaryExp.op) {
     case UnaryOpKeyword::plus:
         return generateBinaryValue(KOOPA_RBO_ADD, IntegerValue::get(0), operand,
@@ -1297,7 +1551,9 @@ Value* Generator::generateGlobalArrayInitializer(const SemanticType& type,
             throw std::runtime_error(
                 "global array initializer element must be constant");
         }
-        return IntegerValue::get(*constantValue);
+        return IntegerValue::get(isMintType(type)
+            ? static_cast<int32_t>(encodeMintConstant(*constantValue))
+            : *constantValue);
     }
 
     if (type.m_elementType == nullptr) {

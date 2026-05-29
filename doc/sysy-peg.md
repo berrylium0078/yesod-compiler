@@ -1,6 +1,6 @@
 # SysY PEG Grammar
 
-This document describes the current PEG-oriented grammar for the SysY frontend in this repository. The source-language reference remains [doc/sysy.md](doc/sysy.md). This file presents the grammar in its final integrated form, including arrays in declarations, lvalues, function parameters, brace initializers, and top-level function declarations.
+This document describes the current PEG-oriented grammar for the SysY frontend in this repository. The source-language reference remains [doc/sysy.md](doc/sysy.md). This file presents the grammar in its final integrated form, including arrays in declarations, lvalues, function parameters, brace initializers, top-level function declarations, the finite-field base type `mint`, and explicit type conversions written as `BType ( Exp )`.
 
 ## 1. Source Grammar Notes
 
@@ -11,7 +11,7 @@ CompUnit      ::= {Decl | FuncItem};
 
 ConstDecl     ::= "const" BType ConstDef {"," ConstDef} ";";
 VarDecl       ::= BType VarDef {"," VarDef} ";";
-BType         ::= "int";
+BType         ::= "int" | "mint";
 
 ConstDef      ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
 VarDef        ::= IDENT {"[" ConstExp "]"}
@@ -23,7 +23,7 @@ InitVal       ::= Exp | "{" [InitVal {"," InitVal}] "}";
 FuncItem      ::= FuncDef | FuncDecl;
 FuncDef       ::= FuncType IDENT "(" [FuncFParams] ")" Block;
 FuncDecl      ::= FuncType IDENT "(" [FuncFParams] ")" ";";
-FuncType      ::= "void" | "int";
+FuncType      ::= "void" | "int" | "mint";
 FuncFParams   ::= FuncFParam {"," FuncFParam};
 FuncFParam    ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
 
@@ -43,6 +43,11 @@ ExpStmt       ::= [Exp] ";";
 Exp           ::= LOrExp;
 ConstExp      ::= Exp;
 LVal          ::= IDENT {"[" Exp "]"};
+PrimaryExp    ::= "(" Exp ")" | LVal | Number;
+Number        ::= INT_CONST;
+UnaryExp      ::= BType "(" Exp ")" | PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
+UnaryOp       ::= "+" | "-" | "!";
+FuncRParams   ::= Exp {"," Exp};
 ```
 
 Assumptions carried by the PEG form:
@@ -51,16 +56,17 @@ Assumptions carried by the PEG form:
 - expression precedence remains the standard SysY ladder from `LOrExp` down to `UnaryExp`, `PrimaryExp`, `LVal`, and `Number`
 - whitespace and comments are handled by the token layer through `Spacing`
 - `[` and `]` are first-class tokens because array declarators and subscripts are part of the grammar
+- the token layer gains one new keyword token, `KW_MINT`, but is otherwise unchanged
 - the compilation pipeline prepends builtin library declarations to the translation unit source before parsing; builtin names are not synthesized later during semantic analysis
 
 ## 2. Baseline Delta
 
-Compared with the previous baseline, arrays, statements, expressions, and initializer rules stay unchanged.
+This is an incremental extension of the existing PEG design in this file.
 
-- top-level function syntax now admits both a definition form and a declaration form with the same header
-- the `FuncDef` PEG rule is refactored into a shared header plus a body-or-semicolon tail
-- the token layer is unchanged
-- existing recovery around function headers remains valid, but the post-header recovery target now has to accept either `;` or a block start
+- unchanged rules: array declarators, initializer rules, lvalues, statement forms, operator-precedence tiers above `UnaryExp`, and function-header factoring through `FuncItem`/`FuncTail`
+- refactored rules: `BType`, `FuncType`, and `UnaryExp`; the recovery helpers that enumerate declaration or expression starts also need to recognize `mint`
+- token-layer delta: add `KW_MINT`; all delimiters, operators, identifier rules, and literal rules stay unchanged
+- existing recovery around declarations, function headers, and statement boundaries remains valid; only the synchronization sets that mention type keywords or expression starters need to admit `KW_MINT`, and the unary-expression recovery needs one cast-specific `)` diagnostic
 
 ## 3. Runtime AST Mapping
 
@@ -75,17 +81,19 @@ The PEG grammar is not a one-to-one dump of runtime node types. The current AST 
 - Top-level function items continue to use one runtime node type, `FuncDef`. The `body` field is `Ptr<Block>` and is null for declarations.
 - `Decl`, `Stmt`, and `CompUnit::Item` are `std::variant` values whose alternatives are `Ref<...>` handles, not `Ptr<...>` handles.
 - `IfStmt` stores both `thenBody` and `elseBody` as `Stmt`. The parser always synthesizes an `elseBody`; when the source omits `else`, the parser inserts an empty `Block`.
+- The explicit conversion syntax `BType ( Exp )` is still a grammar-level unary construct. If the runtime AST stays flattened, the parser should lower it as part of the `Exp` family rather than introducing a separate precedence layer; `ConstExp` remains a grammar alias and constantness is still discovered during semantic analysis.
 
 Those choices drive a few grammar-to-AST mismatches intentionally:
 
 - grammar precedence layers such as `AddExp`, `MulExp`, and `UnaryExp` explain parse structure, but all lower to the single `Exp` runtime node type
 - brace initializers are grammar rules with their own list helpers, but runtime storage is recursive through `ConstInitVal::List` and `InitVal::List`
 - function array parameters encode the unsized first dimension separately from the trailing constant dimensions because the AST needs to preserve `int a[]` distinctly from `int a`
+- explicit conversions sit at the `UnaryExp` layer in the grammar; they should lower either to a dedicated cast payload or to an extended unary payload, but not to a new expression-precedence family
 - `ConstExp` remains a grammar alias only. Constant-expression validity is discovered later by semantic analysis and constant folding, not by introducing a separate AST node.
 
 ## 4. Left-Recursion Elimination
 
-The expression ladder uses standard PEG-friendly repetition instead of left recursion. Arrays and recursive initializers add list and suffix forms but do not introduce any new left-recursive rule.
+The expression ladder uses standard PEG-friendly repetition instead of left recursion. Arrays, recursive initializers, and the new explicit-conversion prefix form add list, suffix, and keyword-led unary forms without introducing any new left-recursive rule.
 
 | Original shape | Rewritten PEG shape | Why it preserves the parse |
 |---|---|---|
@@ -95,6 +103,7 @@ The expression ladder uses standard PEG-friendly repetition instead of left recu
 | `InitVal ::= Exp | "{" [InitVal {"," InitVal}] "}"` | `InitVal <- Exp / LBRACE InitValList? RBRACE` and `InitValList <- InitVal (COMMA InitVal)*` | preserves scalar initializers and recursive brace forms |
 | `LVal ::= IDENT {"[" Exp "]"}` | `LVal <- IDENT LValIndices` with `LValIndices <- (LBRACK Exp RBRACK)*` | preserves a base identifier followed by zero or more subscripts |
 | `FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}]` | `FuncFParam <- BType IDENT ParamArraySuffix?` with `ParamArraySuffix <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*` | preserves the SysY rule that only the first parameter dimension may be unsized |
+| `UnaryExp ::= BType "(" Exp ")" | IDENT "(" [FuncRParams] ")" | PrimaryExp | UnaryOp UnaryExp` | `UnaryExp <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp` with `CastExp <- BType LPAREN Exp RPAREN` | makes the new conversion form explicit and keeps it at unary precedence without interfering with identifier-led calls or primary expressions |
 | `FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block` and `FuncDecl ::= FuncType IDENT "(" [FuncFParams] ")" ";"` | `FuncItem <- FuncType IDENT LPAREN FuncFParams? RPAREN FuncTail` with `FuncTail <- Block / SEMI` | factors the shared function header while preserving the distinction between a declaration tail and a definition tail |
 
 The existing rewrites for `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, and `LOrExp` are unchanged.
@@ -107,7 +116,7 @@ TopLevelItem       <- ConstDecl / FuncItem / VarDecl
 
 FuncItem           <- FuncType IDENT LPAREN FuncFParams? RPAREN FuncTail
 FuncTail           <- Block / SEMI
-FuncType           <- KW_VOID / KW_INT
+FuncType           <- KW_VOID / BType
 FuncFParams        <- FuncFParam (COMMA FuncFParam)*
 FuncFParam         <- BType IDENT ParamArraySuffix?
 ParamArraySuffix   <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*
@@ -118,7 +127,7 @@ BlockItem          <- Decl / Stmt
 Decl               <- ConstDecl / VarDecl
 ConstDecl          <- KW_CONST BType ConstDef (COMMA ConstDef)* SEMI
 VarDecl            <- BType VarDef (COMMA VarDef)* SEMI
-BType              <- KW_INT
+BType              <- KW_INT / KW_MINT
 ConstDef           <- IDENT ArrayConstDims ASSIGN ConstInitVal
 VarDef             <- IDENT ArrayConstDims (ASSIGN InitVal)?
 ArrayConstDims     <- (LBRACK ConstExp RBRACK)*
@@ -144,7 +153,8 @@ EqExp              <- RelExp (EqOp RelExp)*
 RelExp             <- AddExp (RelOp AddExp)*
 AddExp             <- MulExp (AddOp MulExp)*
 MulExp             <- UnaryExp (MulOp UnaryExp)*
-UnaryExp           <- CallExp / PrimaryExp / UnaryOp UnaryExp
+UnaryExp           <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
+CastExp            <- BType LPAREN Exp RPAREN
 CallExp            <- IDENT LPAREN FuncRParams? RPAREN
 FuncRParams        <- Exp (COMMA Exp)*
 PrimaryExp         <- LPAREN Exp RPAREN / LVal / Number
@@ -176,6 +186,7 @@ KW_CONTINUE        <- "continue" !IdentifierContinue Spacing
 KW_ELSE            <- "else" !IdentifierContinue Spacing
 KW_IF              <- "if" !IdentifierContinue Spacing
 KW_INT             <- "int" !IdentifierContinue Spacing
+KW_MINT            <- "mint" !IdentifierContinue Spacing
 KW_RETURN          <- "return" !IdentifierContinue Spacing
 KW_VOID            <- "void" !IdentifierContinue Spacing
 KW_WHILE           <- "while" !IdentifierContinue Spacing
@@ -232,7 +243,7 @@ FuncItem                   <- FuncType IDENT LPAREN ^
                               / Throw<MalformedFuncParam> RecoverToFuncHeaderEnd)
                               FuncTail
 FuncTail                   <- Block / SEMI
-FuncType                   <- KW_VOID / KW_INT
+FuncType                   <- KW_VOID / BType
 FuncFParams                <- FuncFParam
                               (COMMA (FuncFParam / Throw<MalformedFuncParam> RecoverToParamBoundary))*
 FuncFParam                 <- BType IDENT ParamArraySuffix?
@@ -253,14 +264,16 @@ ConstDecl                  <- KW_CONST ^
                               (ConstDef / Throw<MalformedDeclItem> RecoverToDeclBoundary)
                               (COMMA (ConstDef / Throw<MalformedDeclItem> RecoverToDeclBoundary))*
                               (SEMI / Throw<MissingDeclSemicolon> RecoverToDeclBoundary)
-VarDecl                    <- BType ^
-                              (VarDef / Throw<MalformedDeclItem> RecoverToDeclBoundary)
-                              (COMMA (VarDef / Throw<MalformedDeclItem> RecoverToDeclBoundary))*
+VarDecl                    <- BType
+                              (IDENT VarDefTail
+                              / Throw<MalformedDeclItem> RecoverToDeclBoundary)
+                              (COMMA ((IDENT VarDefTail) / Throw<MalformedDeclItem> RecoverToDeclBoundary))*
                               (SEMI / Throw<MissingDeclSemicolon> RecoverToDeclBoundary)
-BType                      <- KW_INT
+BType                      <- KW_INT / KW_MINT
 ConstDef                   <- IDENT ArrayConstDims ASSIGN ^
                               (ConstInitVal / Throw<MalformedConstInitializer> RecoverToDeclBoundary)
-VarDef                     <- IDENT ArrayConstDims
+VarDef                     <- IDENT VarDefTail
+VarDefTail                 <- ArrayConstDims
                               (ASSIGN ^
                                 (InitVal / Throw<MalformedInitializer> RecoverToDeclBoundary))?
 ArrayConstDims             <- (LBRACK ^
@@ -317,7 +330,10 @@ EqExp                      <- RelExp (EqOp RelExp)*
 RelExp                     <- AddExp (RelOp AddExp)*
 AddExp                     <- MulExp (AddOp MulExp)*
 MulExp                     <- UnaryExp (MulOp UnaryExp)*
-UnaryExp                   <- CallExp / PrimaryExp / UnaryOp UnaryExp
+UnaryExp                   <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
+CastExp                    <- BType LPAREN ^
+                              (Exp / Throw<MalformedCastValue> RecoverToExprRParen)
+                              (RPAREN / Throw<MissingCastRParen> RecoverToExprRParen)
 CallExp                    <- IDENT LPAREN ^
                               (RPAREN
                               / FuncRParams
@@ -360,6 +376,7 @@ KW_CONTINUE                <- "continue" !IdentifierContinue Spacing
 KW_ELSE                    <- "else" !IdentifierContinue Spacing
 KW_IF                      <- "if" !IdentifierContinue Spacing
 KW_INT                     <- "int" !IdentifierContinue Spacing
+KW_MINT                    <- "mint" !IdentifierContinue Spacing
 KW_RETURN                  <- "return" !IdentifierContinue Spacing
 KW_VOID                    <- "void" !IdentifierContinue Spacing
 KW_WHILE                   <- "while" !IdentifierContinue Spacing
@@ -394,8 +411,8 @@ LineComment                <- "//" (!EndOfLine .)* EndOfLine?
 BlockComment               <- "/*" (!"*/" .)* "*/"
 EndOfLine                  <- "\r\n" / "\n" / "\r"
 
-RecoverToTopLevelBoundary  <- (!KW_CONST !KW_INT !KW_VOID !EOF .)*
-                              (&KW_CONST / &KW_INT / &KW_VOID / EOF)
+RecoverToTopLevelBoundary  <- (!KW_CONST !KW_INT !KW_MINT !KW_VOID !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_MINT / &KW_VOID / EOF)
 RecoverToFuncHeaderEnd     <- (!")" !"{" !EOF .)* (RPAREN / &LBRACE / EOF)
 RecoverToParamBoundary     <- (!"," !")" !EOF .)* (COMMA / RPAREN / EOF)
 RecoverToCallEnd           <- (!")" !";" !"}" !"," !EOF .)* (RPAREN / &SEMI / &RBRACE / &COMMA / EOF)
@@ -403,15 +420,15 @@ RecoverToArgBoundary       <- (!"," !")" !";" !"}" !EOF .)* (COMMA / RPAREN / &S
 RecoverToExprRParen        <- (!")" !";" !"}" !EOF .)* (RPAREN / &SEMI / &RBRACE / EOF)
 RecoverToRBracket          <- (!"]" !"," !")" !"}" !";" !EOF .)* (RBRACK / &COMMA / &RPAREN / &RBRACE / &SEMI / EOF)
 RecoverToInitBoundary      <- (!"," !"}" !";" !EOF .)* (&COMMA / &RBRACE / &SEMI / EOF)
-RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
-RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
 RecoverToStmtBoundary      <- (!";" !"}" !KW_ELSE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !EOF .)*
                               (SEMI / &RBRACE / &KW_ELSE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / EOF)
 RecoverToDeclBoundary      <- (!"," !";" !"}" !EOF .)* (COMMA / SEMI / &RBRACE / EOF)
-RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
-                              (&KW_CONST / &KW_INT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
+RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_MINT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_MINT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
 RecoverToBlockEnd          <- (!"}" !EOF .)* (RBRACE / EOF)
 
 Digit                      <- [0-9]
@@ -453,6 +470,8 @@ EOF                        <- !.
 | `MalformedReturnValue` | `ReturnStmt` after `return` when `;` is not next | return expression is malformed or missing | `RecoverToStmtBoundary` |
 | `MissingReturnSemicolon` | `ReturnStmt` after a parsed return expression | return statement is missing `;` | `RecoverToStmtBoundary` |
 | `MissingSemicolon` | `ExpStmt` after an expression | expression statement is missing `;` | `RecoverToStmtBoundary` |
+| `MalformedCastValue` | `CastExp` after `BType (` | explicit conversion has a malformed or missing inner expression | `RecoverToExprRParen` |
+| `MissingCastRParen` | `CastExp` after the converted expression | explicit conversion is missing `)` | `RecoverToExprRParen` |
 | `MissingCallRParen` | `CallExp` after the optional argument list | function call is missing `)` | `RecoverToCallEnd` |
 | `MalformedCallArg` | `FuncRParams` after `,` | call argument is malformed or missing | `RecoverToArgBoundary` |
 | `MalformedPrimaryExp` | `PrimaryExp` after `(` | parenthesized expression has no valid inner expression | `RecoverToExprRParen` |
@@ -468,7 +487,7 @@ EOF                        <- !.
 TopLevelItem <- ConstDecl / FuncItem / VarDecl
 ```
 
-`ConstDecl` is safe first because `const` is prefix-distinct. `FuncItem` must stay before `VarDecl` so both `int f(...);` and `int f(...) { ... }` are recognized as function headers rather than being consumed as the start of a variable declaration.
+`ConstDecl` is safe first because `const` is prefix-distinct. `FuncItem` must stay before `VarDecl` so both `int f(...);`, `mint f(...);`, and their definition forms are recognized as function headers rather than being consumed as the start of a variable declaration.
 
 No additional cut is needed after the header beyond the existing cut after `(`. Once the parser has consumed `FuncType IDENT (`, it is committed to a function item; the only remaining choice is whether the tail is `;` or a block.
 
@@ -483,10 +502,12 @@ Stmt <- IfStmt / WhileStmt / BreakStmt / ContinueStmt / AssignStmt / Block / Ret
 3. `UnaryExp`
 
 ```peg
-UnaryExp <- CallExp / PrimaryExp / UnaryOp UnaryExp
+UnaryExp <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
 ```
 
-`CallExp` must remain before `PrimaryExp` because both start with `IDENT`. Otherwise `foo(1)` would be consumed as an `LVal` and leave the call suffix stranded.
+`CastExp` must come first because both `int(expr)` and `mint(expr)` are now legal unary-expression prefixes. `CallExp` must remain before `PrimaryExp` because both start with `IDENT`. Otherwise `foo(1)` would be consumed as an `LVal` and leave the call suffix stranded.
+
+The cut belongs inside `CastExp`, after `BType LPAREN`. Before that point, a leading `BType` may still be the start of a declaration in a recovery-annotated block item. After `(`, the parse is decisively an explicit conversion and should report only cast-local errors.
 
 4. `PrimaryExp`
 
@@ -504,7 +525,18 @@ RelOp <- LE / GE / LT / GT
 
 Longer operators must precede shorter prefix-sharing operators.
 
-6. `IntegerConst`
+6. `VarDecl` in the recovery grammar
+
+```peg
+VarDecl <- BType
+           (IDENT VarDefTail / Throw<MalformedDeclItem> RecoverToDeclBoundary)
+           (COMMA ((IDENT VarDefTail) / Throw<MalformedDeclItem> RecoverToDeclBoundary))*
+           (SEMI / Throw<MissingDeclSemicolon> RecoverToDeclBoundary)
+```
+
+The recovery form delays commitment until `IDENT` appears after `BType`. That is necessary because `int(` and `mint(` can now begin a cast expression inside `Stmt`; cutting immediately after `BType` would misclassify those statements as broken declarations.
+
+7. `IntegerConst`
 
 ```peg
 IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
@@ -516,9 +548,11 @@ The initializer rules are not branch-order-sensitive because brace initializers 
 
 ## 9. Short Design Rationale
 
-This grammar stays close to the SysY source rules while keeping the parser implementation local and predictable. Function declarations are added as the smallest coherent delta: a shared function header with a `Block / SEMI` tail, no token-layer change, and no rework of the existing expression or declaration subgrammars.
+This grammar stays close to the SysY source rules while keeping the parser implementation local and predictable. The `mint` extension is a minimal coherent delta: one new keyword in the token layer, `BType` reused wherever finite-field values are legal, `FuncType` widened in the same way, and a single new unary-production branch for explicit conversions.
 
-The recovery grammar stays intentionally narrow. The only function-specific adjustment is that recovery after a malformed function header now synchronizes to a point where either `)` plus `;` or `)` plus `{` can resume parsing.
+Recovery remains intentionally sparse. Declaration and top-level synchronizers only gain `KW_MINT`, while expression-oriented recovery gains one cast-specific pair of diagnostics and treats both `KW_INT` and `KW_MINT` as valid expression starters because conversions are now keyword-led unary expressions.
+
+The only structural recovery adjustment beyond the new cast rule is delaying declaration commitment until an identifier appears after `BType`. That keeps recovery-compatible block parsing from misclassifying `int(expr);` or `mint(expr);` as malformed declarations.
 
 The runtime AST is flatter and more normalized than the grammar:
 

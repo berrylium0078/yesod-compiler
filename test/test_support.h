@@ -106,6 +106,19 @@ struct AstTestHelperBase {
     }
 
     template <class Self>
+    [[nodiscard]] const Exp::Cast& requireCastExp(
+        this Self& self, const Ref<Exp>& exp_nn)
+    {
+        const auto castExp = MATCH(exp_nn(self.ast()).kind)
+            WITH([](const Exp::Cast& castExp) { return &castExp; },
+                [](const auto&) {
+                    return static_cast<const Exp::Cast*>(nullptr);
+                }, );
+        require(castExp != nullptr, "expected cast expression root");
+        return *castExp;
+    }
+
+    template <class Self>
     [[nodiscard]] const LVal& requireLVal(
         this Self& self, const Ref<Exp>& exp_nn)
     {
@@ -316,6 +329,9 @@ struct AstTestHelperBase {
                 [](const LVal&) -> int32_t {
                     fail("cannot evaluate lvalue expression");
                     std::unreachable();
+                },
+                [&](const Exp::Cast& cast) -> int32_t {
+                    return self.evaluateExp(cast.value);
                 },
                 [](const Exp::Call&) -> int32_t {
                     fail("cannot evaluate call expression");

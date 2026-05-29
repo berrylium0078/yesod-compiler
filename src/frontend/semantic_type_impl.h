@@ -44,12 +44,14 @@ private:
         const Exp& exp, const Exp::Binary& binary);
     [[nodiscard]] AnalyzedExp analyzeUnaryExp(
         const Exp& exp, const Exp::Unary& unary);
+    [[nodiscard]] AnalyzedExp analyzeCastExp(
+        const Exp& exp, const Exp::Cast& cast);
     [[nodiscard]] AnalyzedExp analyzeCallExp(
         const Exp& exp, const Exp::Call& call);
     [[nodiscard]] AnalyzedExp analyzeLValExp(
         const Exp& exp, const Exp::LVal& lVal);
     [[nodiscard]] AnalyzedExp analyzeCondExp(Ref<Exp> exp);
-    [[nodiscard]] SemanticType analyzeObjectType(
+    [[nodiscard]] SemanticType analyzeObjectType(BTypeKeyword bType,
         const std::vector<Ref<Exp>>& dimensions, int32_t offset,
         bool allowUnsizedFirstDimension = false);
     [[nodiscard]] AnalyzedExp analyzeConstInitVal(

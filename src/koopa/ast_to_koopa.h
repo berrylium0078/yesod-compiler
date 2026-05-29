@@ -32,6 +32,7 @@ private:
         const frontend::SemanticInfo& semanticInfo,
         const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
         const std::unordered_map<int32_t, Function*>& functionBySymbolId,
+        const std::unordered_map<std::string, Function*>& mintHelperByName,
         Function* function_nn) const;
     void generateGlobalDecl(frontend::Decl declNode, Program& program,
         const frontend::AST& ast, const frontend::SemanticInfo& semanticInfo,

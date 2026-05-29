@@ -1,9 +1,14 @@
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <algorithm>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #include "backend/riscv.h"
@@ -15,6 +20,87 @@
 namespace {
 using namespace yesod::koopa;
 
+constexpr std::string_view kMintRuntimeSource = R"(typedef unsigned int u32;
+typedef unsigned long long u64;
+typedef int i32;
+
+static const u32 MOD = 998244353u;
+static const u32 R = 301989884u;
+static const u32 R2 = 932051910u;
+static const u32 NEG_INV = 998244351u;
+
+static u32 normalize_signed(i32 x) {
+    i32 remainder = x % (i32)MOD;
+    return (u32)(remainder < 0 ? remainder + (i32)MOD : remainder);
+}
+
+static u32 mont_reduce(u64 x) {
+    u32 q = (u32)x * NEG_INV;
+    u64 t = (x + (u64)q * MOD) >> 32;
+    if (t >= MOD) {
+        t -= MOD;
+    }
+    return (u32)t;
+}
+
+static u32 mont_mul(u32 a, u32 b) {
+    return mont_reduce((u64)a * (u64)b);
+}
+
+static u32 mint_pow(u32 base, u32 exp) {
+    u32 result = R;
+    while (exp != 0u) {
+        if ((exp & 1u) != 0u) {
+            result = mont_mul(result, base);
+        }
+        base = mont_mul(base, base);
+        exp >>= 1u;
+    }
+    return result;
+}
+
+static u32 mint_inv(u32 value) {
+    return mint_pow(value, MOD - 2u);
+}
+
+int __yesod_mint_from_int(int x) {
+    return (int)mont_mul(normalize_signed(x), R2);
+}
+
+int __yesod_mint_to_int(int x) {
+    return (int)mont_reduce((u32)x);
+}
+
+int __yesod_mint_add(int a, int b) {
+    u32 sum = (u32)a + (u32)b;
+    if (sum >= MOD) {
+        sum -= MOD;
+    }
+    return (int)sum;
+}
+
+int __yesod_mint_sub(int a, int b) {
+    return (int)((u32)a >= (u32)b ? (u32)a - (u32)b : (u32)a + MOD - (u32)b);
+}
+
+int __yesod_mint_mul(int a, int b) {
+    return (int)mont_mul((u32)a, (u32)b);
+}
+
+int __yesod_mint_div(int a, int b) {
+    return (int)mont_mul((u32)a, mint_inv((u32)b));
+}
+ )";
+
+constexpr std::string_view kMintHelperNames[] = {
+    "@__yesod_mint_add",
+    "@__yesod_mint_sub",
+    "@__yesod_mint_mul",
+    "@__yesod_mint_div",
+    "@__yesod_mint_from_int",
+    "@__yesod_mint_to_int",
+};
+
 std::string readTextFile(const std::string& path)
 {
     std::ifstream inputStream(path);
@@ -25,6 +111,175 @@ std::string readTextFile(const std::string& path)
     std::ostringstream buffer;
     buffer << inputStream.rdbuf();
     return buffer.str();
+}
+
+bool writeTextFile(const std::string& path, const std::string& contents)
+{
+    std::ofstream outputStream(path);
+    if (!outputStream) {
+        return false;
+    }
+
+    outputStream << contents;
+    return outputStream.good();
+}
+
+struct TempFile {
+    explicit TempFile(const std::string& suffix)
+    {
+        std::string pattern = "/tmp/yesod_compiler_XXXXXX" + suffix;
+        std::vector<char> buffer(pattern.begin(), pattern.end());
+        buffer.push_back('\0');
+
+        const int fd
+            = ::mkstemps(buffer.data(), static_cast<int>(suffix.size()));
+        if (fd == -1) {
+            throw std::runtime_error("failed to create temporary file");
+        }
+        ::close(fd);
+        m_path = buffer.data();
+    }
+
+    TempFile(const TempFile&) = delete;
+    TempFile& operator=(const TempFile&) = delete;
+
+    ~TempFile()
+    {
+        if (!m_path.empty()) {
+            std::remove(m_path.c_str());
+        }
+    }
+
+    [[nodiscard]] const std::string& path() const { return m_path; }
+
+private:
+    std::string m_path;
+};
+
+bool runCommand(const std::string& command)
+{
+    const int status = std::system(command.c_str());
+    return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+bool programUsesMintRuntime(const Program& program)
+{
+    for (const auto* function : program.funcs()) {
+        for (const auto helperName : kMintHelperNames) {
+            if (function->getName() == helperName) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::string extractLlvmFunctionDefinitions(const std::string& llvmModule)
+{
+    std::istringstream input(llvmModule);
+    std::ostringstream output;
+    std::string line;
+    bool inFunction = false;
+    int braceDepth = 0;
+    std::vector<std::string> trailingRecords;
+
+    while (std::getline(input, line)) {
+        if (!inFunction) {
+            if (line.rfind("attributes #", 0) == 0
+                || line.rfind("!llvm.", 0) == 0
+                || (!line.empty() && line.front() == '!')) {
+                trailingRecords.push_back(line);
+            }
+            if (line.rfind("define ", 0) != 0
+                && line.rfind("define dso_local ", 0) != 0) {
+                continue;
+            }
+            inFunction = true;
+        }
+
+        output << line << '\n';
+        braceDepth += static_cast<int>(std::count(line.begin(), line.end(), '{'));
+        braceDepth -= static_cast<int>(std::count(line.begin(), line.end(), '}'));
+        if (inFunction && braceDepth == 0) {
+            output << '\n';
+            inFunction = false;
+        }
+    }
+
+    if (!trailingRecords.empty()) {
+        for (const auto& record : trailingRecords) {
+            output << record << '\n';
+        }
+    }
+
+    return output.str();
+}
+
+std::string insertLlvmPrelude(
+    const std::string& llvmModule, const std::string& prelude)
+{
+    const auto insertPos = llvmModule.find("\n\n");
+    if (insertPos == std::string::npos) {
+        return prelude + "\n" + llvmModule;
+    }
+    return llvmModule.substr(0, insertPos + 2) + prelude
+        + llvmModule.substr(insertPos + 2);
+}
+
+std::string stripMintHelperDeclarations(const std::string& llvmModule)
+{
+    std::istringstream input(llvmModule);
+    std::ostringstream output;
+    std::string line;
+
+    while (std::getline(input, line)) {
+        bool isMintHelperDeclaration = false;
+        if (line.rfind("declare ", 0) == 0) {
+            for (const auto helperName : kMintHelperNames) {
+                if (line.find(helperName) != std::string::npos) {
+                    isMintHelperDeclaration = true;
+                    break;
+                }
+            }
+        }
+        if (!isMintHelperDeclaration) {
+            output << line << '\n';
+        }
+    }
+
+    return output.str();
+}
+
+bool buildMintRuntimeLlvmPrelude(std::string& prelude)
+{
+    TempFile runtimeSource(".c");
+    TempFile runtimeLlvm(".ll");
+    if (!writeTextFile(runtimeSource.path(), std::string(kMintRuntimeSource))) {
+        return false;
+    }
+    if (!runCommand("clang -S -emit-llvm -O0 -target "
+            "riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32 "
+            + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
+        return false;
+    }
+    prelude = extractLlvmFunctionDefinitions(readTextFile(runtimeLlvm.path()));
+    return !prelude.empty();
+}
+
+bool buildMintRuntimeRiscvPrelude(std::string& prelude)
+{
+    TempFile runtimeSource(".c");
+    TempFile runtimeAsm(".S");
+    if (!writeTextFile(runtimeSource.path(), std::string(kMintRuntimeSource))) {
+        return false;
+    }
+    if (!runCommand("clang -S -O2 -target riscv32-unknown-linux-elf "
+            "-march=rv32im -mabi=ilp32 "
+            + runtimeSource.path() + " -o " + runtimeAsm.path())) {
+        return false;
+    }
+    prelude = readTextFile(runtimeAsm.path());
+    return !prelude.empty();
 }
 
 struct DiagInfo {
@@ -105,7 +360,32 @@ bool writeKoopaProgramToFile(const Program& program, const std::string& path)
     return dumpResult == KOOPA_EC_SUCCESS;
 }
 
-bool writeRiscvProgramToFile(const Program& program, const std::string& path)
+bool writeLlvmProgramToFile(const Program& program, const std::string& path)
+{
+    TempFile koopaFile(".koopa");
+    TempFile llvmFile(".ll");
+    if (!writeKoopaProgramToFile(program, koopaFile.path())) {
+        return false;
+    }
+    if (!runCommand(
+            "koopac " + koopaFile.path() + " -o " + llvmFile.path())) {
+        return false;
+    }
+
+    auto llvmModule = readTextFile(llvmFile.path());
+    if (programUsesMintRuntime(program)) {
+        std::string runtimePrelude;
+        if (!buildMintRuntimeLlvmPrelude(runtimePrelude)) {
+            return false;
+        }
+        llvmModule = insertLlvmPrelude(
+            stripMintHelperDeclarations(llvmModule), runtimePrelude);
+    }
+    return writeTextFile(path, llvmModule);
+}
+
+bool writePlainRiscvProgramToFile(
+    const Program& program, const std::string& path)
 {
     std::ofstream outputStream(path);
     if (!outputStream) {
@@ -115,6 +395,25 @@ bool writeRiscvProgramToFile(const Program& program, const std::string& path)
     yesod::backend::RiscvGenerator generator;
     generator.generate(program, outputStream);
     return outputStream.good();
+}
+
+bool writeRiscvProgramToFile(const Program& program, const std::string& path)
+{
+    if (!programUsesMintRuntime(program)) {
+        return writePlainRiscvProgramToFile(program, path);
+    }
+
+    TempFile generatedAsm(".S");
+    if (!writePlainRiscvProgramToFile(program, generatedAsm.path())) {
+        return false;
+    }
+
+    std::string runtimePrelude;
+    if (!buildMintRuntimeRiscvPrelude(runtimePrelude)) {
+        return false;
+    }
+    return writeTextFile(
+        path, runtimePrelude + "\n" + readTextFile(generatedAsm.path()));
 }
 
 } // namespace
@@ -131,7 +430,7 @@ int main(int argc, const char* argv[])
     const std::string inputPath = argv[2];
     const std::string outputPath = argv[4];
 
-    if (mode != "-koopa" && mode != "-riscv") {
+    if (mode != "-koopa" && mode != "-riscv" && mode != "-llvm") {
         std::cerr << "unsupported mode: " << mode << std::endl;
         return 1;
     }
@@ -175,6 +474,11 @@ int main(int argc, const char* argv[])
         if (mode == "-koopa") {
             if (!writeKoopaProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate koopa IR" << std::endl;
+                return 1;
+            }
+        } else if (mode == "-llvm") {
+            if (!writeLlvmProgramToFile(*program, outputPath)) {
+                std::cerr << "failed to generate LLVM IR" << std::endl;
                 return 1;
             }
         } else {

@@ -43,7 +43,7 @@ static_assert(std::is_enum_v<BinaryOpKeyword>);
 static_assert(std::variant_size_v<Decl> == 2);
 static_assert(std::variant_size_v<Stmt> == 8);
 static_assert(std::variant_size_v<BlockItem> == 2);
-static_assert(std::variant_size_v<Exp::Kind> == 5);
+static_assert(std::variant_size_v<Exp::Kind> == 6);
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -113,6 +113,12 @@ public:
         const auto* unaryExp = std::get_if<Exp::Unary>(&exp_nn(ast()).kind);
         require(unaryExp != nullptr, "expected unary expression root");
         return *unaryExp;
+    }
+    const Exp::Cast& requireCastExp(const Ref<Exp>& exp_nn)
+    {
+        const auto* castExp = std::get_if<Exp::Cast>(&exp_nn(ast()).kind);
+        require(castExp != nullptr, "expected cast expression root");
+        return *castExp;
     }
     const LVal& requireLVal(const Ref<Exp>& exp_nn)
     {
@@ -213,6 +219,9 @@ public:
             WITH([](const Number& number) -> int32_t { return number.value; },
                 [](const LVal& lval) -> int32_t {
                     fail("cannot evaluate lvalue expression");
+                },
+                [&](const Exp::Cast& cast) -> int32_t {
+                    return evaluateExp(cast.value);
                 },
                 [](const Exp::Call& call) -> int32_t {
                     fail("cannot evaluate call expression");

@@ -23,6 +23,7 @@ YESOD_DECLARE_DIAGNOSTIC(ReturnTypeMismatchDiagnostic)
 
 enum class ExpType {
     integer,
+    mint,
     boolean,
     voidType,
     array,
@@ -30,6 +31,7 @@ enum class ExpType {
 
 enum class SemanticTypeKind {
     integer,
+    mint,
     boolean,
     voidType,
     array,
@@ -42,6 +44,16 @@ struct SemanticType {
     std::shared_ptr<SemanticType> m_elementType;
 
     [[nodiscard]] static SemanticType makeInteger() { return SemanticType { }; }
+
+    [[nodiscard]] static SemanticType makeMint()
+    {
+        return SemanticType {
+            .kind = SemanticTypeKind::mint,
+            .m_size = 4,
+            .m_arrayLength = 0,
+            .m_elementType = nullptr,
+        };
+    }
 
     [[nodiscard]] static SemanticType makeBoolean()
     {
@@ -93,7 +105,14 @@ struct SemanticType {
     [[nodiscard]] bool isScalar() const
     {
         return kind == SemanticTypeKind::integer
+            || kind == SemanticTypeKind::mint
             || kind == SemanticTypeKind::boolean;
+    }
+
+    [[nodiscard]] bool isNumeric() const
+    {
+        return kind == SemanticTypeKind::integer
+            || kind == SemanticTypeKind::mint;
     }
 
     [[nodiscard]] bool isVoid() const
@@ -106,6 +125,8 @@ struct SemanticType {
         switch (kind) {
         case SemanticTypeKind::integer:
             return ExpType::integer;
+        case SemanticTypeKind::mint:
+            return ExpType::mint;
         case SemanticTypeKind::boolean:
             return ExpType::boolean;
         case SemanticTypeKind::voidType:

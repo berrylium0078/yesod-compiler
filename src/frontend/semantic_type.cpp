@@ -44,10 +44,33 @@ const SemanticSymbol* SemanticTypeAnalysisResult::findSymbolById(
 
 namespace {
 
+    constexpr int32_t kMintMod = 998244353;
+
+    [[nodiscard]] int32_t normalizeMintValue(int64_t value)
+    {
+        value %= kMintMod;
+        if (value < 0) {
+            value += kMintMod;
+        }
+        return static_cast<int32_t>(value);
+    }
+
     [[nodiscard]] bool isScalarTypeImpl(const SemanticType& type)
     {
         return type.kind == SemanticTypeKind::integer
+            || type.kind == SemanticTypeKind::mint
             || type.kind == SemanticTypeKind::boolean;
+    }
+
+    [[nodiscard]] SemanticType lowerBType(BTypeKeyword bType)
+    {
+        switch (bType) {
+        case BTypeKeyword::intKeyword:
+            return SemanticType::makeInteger();
+        case BTypeKeyword::mintKeyword:
+            return SemanticType::makeMint();
+        }
+        throw std::runtime_error("unsupported base type keyword");
     }
 
     [[nodiscard]] bool typesMatchExactly(
@@ -124,6 +147,38 @@ namespace {
         }
     }
 
+    [[nodiscard]] std::optional<int32_t> applyMintArithmeticOp(
+        BinaryOpKeyword op, int32_t lhs, int32_t rhs)
+    {
+        switch (op) {
+        case BinaryOpKeyword::plus:
+            return normalizeMintValue(static_cast<int64_t>(lhs) + rhs);
+        case BinaryOpKeyword::minus:
+            return normalizeMintValue(static_cast<int64_t>(lhs) - rhs);
+        case BinaryOpKeyword::star:
+            return normalizeMintValue(static_cast<int64_t>(lhs) * rhs);
+        case BinaryOpKeyword::slash:
+            if (rhs == 0) {
+                return std::nullopt;
+            }
+            {
+                int64_t base = rhs;
+                int64_t exponent = kMintMod - 2;
+                int64_t inverse = 1;
+                while (exponent > 0) {
+                    if ((exponent & 1) != 0) {
+                        inverse = (inverse * base) % kMintMod;
+                    }
+                    base = (base * base) % kMintMod;
+                    exponent >>= 1;
+                }
+                return normalizeMintValue(static_cast<int64_t>(lhs) * inverse);
+            }
+        default:
+            return std::nullopt;
+        }
+    }
+
     [[nodiscard]] int32_t applyRelOp(
         BinaryOpKeyword op, int32_t lhs, int32_t rhs)
     {
@@ -173,6 +228,8 @@ namespace {
             return SemanticType::makeVoid();
         case FuncTypeKeyword::intKeyword:
             return SemanticType::makeInteger();
+        case FuncTypeKeyword::mintKeyword:
+            return SemanticType::makeMint();
         }
         throw std::runtime_error("unsupported function type keyword");
     }
@@ -230,7 +287,7 @@ namespace detail {
         std::vector<SemanticType> paramTypes;
         paramTypes.reserve(funcDef.funcFParams.size());
         for (const auto& funcFParam : funcDef.funcFParams) {
-            auto paramType = analyzeObjectType(
+            auto paramType = analyzeObjectType(funcFParam.bType,
                 funcFParam.shape, funcFParam.sourcePos.m_offset);
             if (funcFParam.m_isArray) {
                 paramType = SemanticType::makeUnsizedArray(paramType);
@@ -309,7 +366,7 @@ namespace detail {
     {
         for (const auto constDef : constDecl(m_ast).constDef) {
             const auto& parsedConstDef = constDef(m_ast);
-            const auto objectType = analyzeObjectType(
+            const auto objectType = analyzeObjectType(constDecl(m_ast).bType,
                 parsedConstDef.shape, parsedConstDef.sourcePos.m_offset);
 
             size_t nextIndex = 0;
@@ -325,7 +382,7 @@ namespace detail {
                 if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         parsedConstDef.sourcePos.m_offset,
-                        "const initializer must produce an integer value");
+                        "const initializer must produce a scalar value");
                 }
                 if (!analyzedInit.m_isConstant) {
                     recordDiagnostic<NonConstantConstInitializerDiagnostic>(
@@ -352,7 +409,7 @@ namespace detail {
     {
         for (const auto varDef : varDecl(m_ast).varDef) {
             const auto& parsedVarDef = varDef(m_ast);
-            const auto objectType = analyzeObjectType(
+            const auto objectType = analyzeObjectType(varDecl(m_ast).bType,
                 parsedVarDef.shape, parsedVarDef.sourcePos.m_offset);
             if (parsedVarDef.initVal != nullptr) {
                 size_t nextIndex = 0;
@@ -399,7 +456,7 @@ namespace detail {
                     const auto& identifier = lVal.identifier(m_ast);
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         identifier.sourcePos.m_offset,
-                        "assignment target must designate an integer object");
+                        "assignment target must designate a scalar object");
                 }
 
                 const auto* objectInfo
@@ -416,7 +473,7 @@ namespace detail {
                                                          : SemanticType::makeInteger();
                 for (const auto index : lVal.indices) {
                     const auto analyzedIndex = analyzeExp(index);
-                    if (!isScalarTypeImpl(analyzedIndex.m_type)) {
+                    if (analyzedIndex.m_type.kind != SemanticTypeKind::integer) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             index(m_ast).sourcePos.m_offset,
                             "array subscript must produce an integer value");
@@ -434,7 +491,7 @@ namespace detail {
                     const auto& identifier = lVal.identifier(m_ast);
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         identifier.sourcePos.m_offset,
-                        "assignment target must designate an integer object");
+                        "assignment target must designate a scalar object");
                 }
             },
             [&](const auto&) {
@@ -447,8 +504,41 @@ namespace detail {
             || analyzedExp.m_valueKind == ExpType::array) {
             recordDiagnostic<TypeMismatchDiagnostic>(
                 assignStmt(m_ast).sourcePos.m_offset,
-                "assignment rhs must produce an integer value");
+                "assignment rhs must produce a scalar value");
+            return;
         }
+
+        MATCH(lValExp.kind)
+        WITH(
+            [&](const Exp::LVal& lVal) {
+                const auto boundSymbolId = resolvedSymbolId(lVal.identifier);
+                const auto* symbol = boundSymbolId.has_value()
+                    ? findSymbolById(*boundSymbolId)
+                    : nullptr;
+                const auto* objectInfo
+                    = symbol != nullptr && symbol->isObject() ? &symbol->object()
+                                                              : nullptr;
+                if (objectInfo == nullptr) {
+                    return;
+                }
+
+                auto targetType = objectInfo->m_type;
+                for (size_t i = 0; i < lVal.indices.size(); ++i) {
+                    if (!targetType.isArray() || targetType.m_elementType == nullptr) {
+                        break;
+                    }
+                    targetType = *targetType.m_elementType;
+                }
+                if (targetType.isArray()) {
+                    return;
+                }
+                if (targetType != analyzedExp.m_type) {
+                    recordDiagnostic<TypeMismatchDiagnostic>(
+                        assignStmt(m_ast).sourcePos.m_offset,
+                        "assignment rhs type does not match lhs type; use an explicit cast for int/mint conversion");
+                }
+            },
+            [&](const auto&) { });
     }
 
     void SemanticTypeAnalyzerImpl::visitExpStmt(Ref<ExpStmt> expStmt)
@@ -471,7 +561,7 @@ namespace detail {
         if (expr == nullptr) {
             if (m_currentFuncReturnType->kind != SemanticTypeKind::voidType) {
                 recordDiagnostic<ReturnTypeMismatchDiagnostic>(
-                    offset, "non-void function must return an integer value");
+                    offset, "non-void function must return a value");
             }
             return;
         }
@@ -485,7 +575,12 @@ namespace detail {
         if (analyzedExp.m_valueKind == ExpType::voidType
             || analyzedExp.m_valueKind == ExpType::array) {
             recordDiagnostic<ReturnTypeMismatchDiagnostic>(
-                offset, "return expression must produce an integer value");
+                offset, "return expression must produce a scalar value");
+            return;
+        }
+        if (*m_currentFuncReturnType != analyzedExp.m_type) {
+            recordDiagnostic<ReturnTypeMismatchDiagnostic>(offset,
+                "return expression type does not match function return type; use an explicit cast for int/mint conversion");
         }
     }
 
@@ -509,7 +604,7 @@ namespace detail {
 
         if (!isScalarTypeImpl(lhs.m_type) || !isScalarTypeImpl(rhs.m_type)) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                "binary operator requires integer operands");
+                "binary operator requires scalar operands");
             return binaryExp;
         }
 
@@ -540,6 +635,11 @@ namespace detail {
         case BinaryOpKeyword::notEqual:
             lhs = normalizeToArithmetic(std::move(lhs));
             rhs = normalizeToArithmetic(std::move(rhs));
+            if (lhs.m_type != rhs.m_type) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "comparison operands must have the same type; use an explicit cast for int/mint conversion");
+                break;
+            }
             binaryExp.m_type = SemanticType::makeBoolean();
             binaryExp.m_valueKind = ExpType::boolean;
             if (lhs.m_isConstant && rhs.m_isConstant) {
@@ -554,6 +654,11 @@ namespace detail {
         case BinaryOpKeyword::greaterEqual:
             lhs = normalizeToArithmetic(std::move(lhs));
             rhs = normalizeToArithmetic(std::move(rhs));
+            if (lhs.m_type != rhs.m_type) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "comparison operands must have the same type; use an explicit cast for int/mint conversion");
+                break;
+            }
             binaryExp.m_type = SemanticType::makeBoolean();
             binaryExp.m_valueKind = ExpType::boolean;
             if (lhs.m_isConstant && rhs.m_isConstant) {
@@ -569,9 +674,25 @@ namespace detail {
         case BinaryOpKeyword::minus:
             lhs = normalizeToArithmetic(std::move(lhs));
             rhs = normalizeToArithmetic(std::move(rhs));
+            if (lhs.m_type != rhs.m_type) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "arithmetic operands must have the same type; use an explicit cast for int/mint conversion");
+                break;
+            }
+            binaryExp.m_type = lhs.m_type;
+            binaryExp.m_valueKind = lhs.m_type.valueKind();
+            if (lhs.m_type.kind == SemanticTypeKind::mint
+                && binary.op == BinaryOpKeyword::percent) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "operator '%' is not supported for mint values");
+                break;
+            }
             if (lhs.m_isConstant && rhs.m_isConstant) {
-                const auto folded = applyArithmeticOp(
-                    binary.op, lhs.m_constantValue, rhs.m_constantValue);
+                const auto folded = lhs.m_type.kind == SemanticTypeKind::mint
+                    ? applyMintArithmeticOp(
+                          binary.op, lhs.m_constantValue, rhs.m_constantValue)
+                    : applyArithmeticOp(
+                          binary.op, lhs.m_constantValue, rhs.m_constantValue);
                 if (folded.has_value()) {
                     binaryExp.m_isConstant = true;
                     binaryExp.m_constantValue = *folded;
@@ -589,7 +710,7 @@ namespace detail {
         auto operand = analyzeExp(unary.lhs);
         if (!isScalarTypeImpl(operand.m_type)) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                "unary operator requires an integer value operand");
+                "unary operator requires a scalar operand");
             return AnalyzedExp {
                 .m_type = unary.op == UnaryOpKeyword::bang
                     ? SemanticType::makeBoolean()
@@ -611,24 +732,67 @@ namespace detail {
                 return AnalyzedExp {
                     .m_type = unary.op == UnaryOpKeyword::bang
                         ? SemanticType::makeBoolean()
-                        : SemanticType::makeInteger(),
+                        : operand.m_type,
                     .m_valueKind = unary.op == UnaryOpKeyword::bang
                         ? ExpType::boolean
-                        : ExpType::integer,
+                        : operand.m_type.valueKind(),
                     .m_isConstant = true,
-                    .m_constantValue = *folded,
+                    .m_constantValue = unary.op == UnaryOpKeyword::minus
+                            && operand.m_type.kind == SemanticTypeKind::mint
+                        ? normalizeMintValue(-static_cast<int64_t>(operand.m_constantValue))
+                        : *folded,
                 };
             }
         }
         return AnalyzedExp {
             .m_type = unary.op == UnaryOpKeyword::bang
                 ? SemanticType::makeBoolean()
-                : SemanticType::makeInteger(),
+                : operand.m_type,
             .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
-                                                            : ExpType::integer,
+                                                            : operand.m_type.valueKind(),
             .m_isConstant = false,
             .m_constantValue = 0,
         };
+    }
+
+    SemanticTypeAnalyzerImpl::AnalyzedExp
+    SemanticTypeAnalyzerImpl::analyzeCastExp(
+        const Exp& exp, const Exp::Cast& cast)
+    {
+        auto operand = analyzeExp(cast.value);
+        if (operand.m_valueKind == ExpType::voidType
+            || operand.m_valueKind == ExpType::array) {
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "explicit casts only support scalar int/mint values; arrays must be converted element by element");
+            return AnalyzedExp {
+                .m_type = lowerBType(cast.targetType),
+                .m_valueKind = lowerBType(cast.targetType).valueKind(),
+                .m_isConstant = false,
+                .m_constantValue = 0,
+            };
+        }
+
+        operand = normalizeToArithmetic(std::move(operand));
+        const auto targetType = lowerBType(cast.targetType);
+        if (operand.m_type.kind != SemanticTypeKind::integer
+            && operand.m_type.kind != SemanticTypeKind::mint) {
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "explicit casts only support int and mint operands");
+        }
+
+        AnalyzedExp result {
+            .m_type = targetType,
+            .m_valueKind = targetType.valueKind(),
+            .m_isConstant = operand.m_isConstant,
+            .m_constantValue = operand.m_constantValue,
+        };
+        if (!result.m_isConstant) {
+            return result;
+        }
+        if (targetType.kind == SemanticTypeKind::mint) {
+            result.m_constantValue = normalizeMintValue(result.m_constantValue);
+        }
+        return result;
     }
 
     SemanticTypeAnalyzerImpl::AnalyzedExp
@@ -646,7 +810,7 @@ namespace detail {
                 const auto analyzedArg = analyzeExp(arg);
                 if (analyzedArg.m_valueKind == ExpType::voidType) {
                     recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                        "call arguments must produce integer values");
+                        "call arguments must produce scalar values");
                 }
             }
             return AnalyzedExp {
@@ -672,14 +836,14 @@ namespace detail {
             const auto analyzedArg = analyzeExp(call.params[i]);
             if (analyzedArg.m_valueKind == ExpType::voidType) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "call arguments must produce integer values");
+                    "call arguments must produce scalar values");
             }
             if (calleeSymbol != nullptr && calleeSymbol->isFunction()
                 && i < calleeSymbol->function().m_paramTypes.size()
                 && !typesMatchForCall(
                     calleeSymbol->function().m_paramTypes[i], analyzedArg.m_type)) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "call argument type does not match parameter type");
+                    "call argument type does not match parameter type; use an explicit cast for int/mint conversion");
             }
         }
 
@@ -718,7 +882,7 @@ namespace detail {
                                              : SemanticType::makeInteger();
         for (const auto index : lVal.indices) {
             const auto analyzedIndex = analyzeExp(index);
-            if (!isScalarTypeImpl(analyzedIndex.m_type)) {
+            if (analyzedIndex.m_type.kind != SemanticTypeKind::integer) {
                 recordDiagnostic<TypeMismatchDiagnostic>(
                     index(m_ast).sourcePos.m_offset,
                     "array subscript must produce an integer value");
@@ -759,6 +923,7 @@ namespace detail {
                 return analyzeBinaryExp(exp, binary);
             },
             [&](const Exp::Unary& unary) { return analyzeUnaryExp(exp, unary); },
+            [&](const Exp::Cast& cast) { return analyzeCastExp(exp, cast); },
             [&](const Exp::Call& call) { return analyzeCallExp(exp, call); },
             [&](const Exp::LVal& lVal) { return analyzeLValExp(exp, lVal); },
             [&](const Exp::Number& number) {
@@ -783,7 +948,8 @@ namespace detail {
     {
         auto analyzedExp = analyzeExp(exp);
         if (analyzedExp.m_valueKind == ExpType::voidType
-            || analyzedExp.m_valueKind == ExpType::array) {
+            || analyzedExp.m_valueKind == ExpType::array
+            || analyzedExp.m_valueKind == ExpType::mint) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp(m_ast).sourcePos.m_offset,
                 "condition expression must produce an integer value");
             analyzedExp.m_type = SemanticType::makeBoolean();
@@ -796,14 +962,15 @@ namespace detail {
         return analyzedExp;
     }
 
-    SemanticType SemanticTypeAnalyzerImpl::analyzeObjectType(
+    SemanticType SemanticTypeAnalyzerImpl::analyzeObjectType(BTypeKeyword bType,
         const std::vector<Ref<Exp>>& dimensions, int32_t offset,
         bool allowUnsizedFirstDimension)
     {
-        auto objectType = SemanticType::makeInteger();
+        auto objectType = lowerBType(bType);
         for (auto dimIt = dimensions.rbegin(); dimIt != dimensions.rend(); ++dimIt) {
             const auto analyzedDim = analyzeExp(*dimIt);
-            if (!isScalarTypeImpl(analyzedDim.m_type) || !analyzedDim.m_isConstant) {
+            if (analyzedDim.m_type.kind != SemanticTypeKind::integer
+                || !analyzedDim.m_isConstant) {
                 recordDiagnostic<TypeMismatchDiagnostic>(offset,
                     "array dimension must be a constant integer expression");
                 objectType = SemanticType::makeArray(objectType, 0);
@@ -848,7 +1015,11 @@ namespace detail {
                     if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
-                            "const initializer must produce an integer value");
+                            "const initializer must produce a scalar value");
+                    } else if (analyzedInit.m_type != expectedType) {
+                        recordDiagnostic<TypeMismatchDiagnostic>(
+                            init.sourcePos.m_offset,
+                            "const initializer type does not match declaration type; use an explicit cast for int/mint conversion");
                     }
                     if (!analyzedInit.m_isConstant) {
                         recordDiagnostic<NonConstantConstInitializerDiagnostic>(
@@ -970,7 +1141,11 @@ namespace detail {
                     if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
-                            "variable initializer must produce an integer value");
+                            "variable initializer must produce a scalar value");
+                    } else if (analyzedInit.m_type != expectedType) {
+                        recordDiagnostic<TypeMismatchDiagnostic>(
+                            init.sourcePos.m_offset,
+                            "variable initializer type does not match declaration type; use an explicit cast for int/mint conversion");
                     }
                     if (isGlobal && !analyzedInit.m_isConstant) {
                         recordDiagnostic<NonConstantGlobalInitializerDiagnostic>(
@@ -1110,7 +1285,8 @@ namespace detail {
     {
         if (analyzedExp.m_valueKind == ExpType::voidType
             || analyzedExp.m_valueKind == ExpType::array
-            || analyzedExp.m_valueKind == ExpType::integer) {
+            || analyzedExp.m_valueKind == ExpType::integer
+            || analyzedExp.m_valueKind == ExpType::mint) {
             return analyzedExp;
         }
 

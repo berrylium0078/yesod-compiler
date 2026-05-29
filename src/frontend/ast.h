@@ -32,10 +32,12 @@ struct SourcePos {
 enum class FuncTypeKeyword {
     voidKeyword,
     intKeyword,
+    mintKeyword,
 };
 
 enum class BTypeKeyword {
     intKeyword,
+    mintKeyword,
 };
 
 enum class UnaryOpKeyword {
@@ -93,6 +95,11 @@ struct Exp {
         UnaryOpKeyword op;
     };
 
+    struct Cast {
+        BTypeKeyword targetType;
+        Ref<Exp> value;
+    };
+
     struct Call {
         Ref<Identifier> funcName;
         std::vector<Ref<Exp>> params;
@@ -104,7 +111,7 @@ struct Exp {
         Ref<Identifier> identifier;
         std::vector<Ref<Exp>> indices;
     };
-    using Kind = std::variant<Binary, Unary, Call, LVal, Number>;
+    using Kind = std::variant<Binary, Unary, Cast, Call, LVal, Number>;
 
     SourcePos sourcePos;
     Kind kind;
@@ -153,7 +160,7 @@ struct VarDecl {
 using Decl = std::variant<Ref<ConstDecl>, Ref<VarDecl>>;
 
 using Stmt = std::variant<Ref<IfStmt>, Ref<WhileStmt>, Ref<BreakStmt>,
-    Ref<ContinueStmt>, Ref<AssignStmt>, Ref<Block>, Ref<ReturnStmt>,
+    Ref<ContinueStmt>, Ref<AssignStmt>, Ref<yesod::frontend::Block>, Ref<ReturnStmt>,
     Ref<ExpStmt>>;
 
 struct IfStmt {
@@ -212,7 +219,7 @@ struct FuncDef {
     FuncTypeKeyword m_funcType = FuncTypeKeyword::intKeyword;
     Ref<Identifier> identifier;
     std::vector<FuncFParam> funcFParams;
-    Ptr<Block> body;
+    Ptr<yesod::frontend::Block> body;
 };
 struct CompUnit {
     using Item = std::variant<Decl, Ref<FuncDef>>;
@@ -222,7 +229,7 @@ struct CompUnit {
 
 using AST = Arena<Identifier, Exp, ConstInitVal, InitVal, ConstDef, VarDef,
     ConstDecl, VarDecl, FuncFParam, IfStmt, WhileStmt, BreakStmt, ContinueStmt,
-    AssignStmt, ExpStmt, ReturnStmt, Block, FuncDef, CompUnit>;
+    AssignStmt, ExpStmt, ReturnStmt, yesod::frontend::Block, FuncDef, CompUnit>;
 
 // basic visitor that traverses the whole AST. Override the visit* methods to
 // implement a visitor that does something useful.
@@ -239,7 +246,7 @@ protected:
     virtual void visitCompUnit(Ref<CompUnit> compUnit);
     virtual void visitFuncDef(Ref<FuncDef> funcDef);
     virtual void visitFuncFParam(const FuncFParam& funcFParam);
-    virtual void visitBlock(Ref<Block> block);
+    virtual void visitBlock(Ref<yesod::frontend::Block> block);
     virtual void visitBlockItem(BlockItem blockItem);
     virtual void visitDecl(Decl decl);
     virtual void visitConstDecl(Ref<ConstDecl> constDecl);
@@ -259,6 +266,7 @@ protected:
     virtual void visitExp(Ref<Exp> exp);
     virtual void visitBinaryExp(const Exp& exp, const Exp::Binary& binary);
     virtual void visitUnaryExp(const Exp& exp, const Exp::Unary& unary);
+    virtual void visitCastExp(const Exp& exp, const Exp::Cast& cast);
     virtual void visitCallExp(const Exp& exp, const Exp::Call& call);
     virtual void visitLValExp(const Exp& exp, const Exp::LVal& lVal);
     virtual void visitNumberExp(const Exp& exp, const Exp::Number& number);

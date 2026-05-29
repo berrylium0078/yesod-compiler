@@ -14,7 +14,7 @@ namespace {
 
 [[noreturn]] void fail(const std::string& message)
 {
-    std::cerr << "backend_riscv_test failure: " << message << std::endl;
+    std::cerr << "compiler_llvm_test failure: " << message << std::endl;
     std::exit(1);
 }
 
@@ -60,7 +60,7 @@ void writeTextFile(const std::string& path, const std::string& contents)
 struct TempFile {
     explicit TempFile(const std::string& suffix)
     {
-        std::string pattern = "/tmp/backend_riscv_test_XXXXXX" + suffix;
+        std::string pattern = "/tmp/compiler_llvm_test_XXXXXX" + suffix;
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
 
@@ -75,30 +75,7 @@ struct TempFile {
     TempFile(const TempFile&) = delete;
     TempFile& operator=(const TempFile&) = delete;
 
-    TempFile(TempFile&& other) noexcept
-        : m_path(std::move(other.m_path))
-    {
-        other.m_path.clear();
-    }
-
-    TempFile& operator=(TempFile&& other) noexcept
-    {
-        if (this == &other) {
-            return *this;
-        }
-
-        cleanup();
-        m_path = std::move(other.m_path);
-        other.m_path.clear();
-        return *this;
-    }
-
-    ~TempFile() { cleanup(); }
-
-    [[nodiscard]] const std::string& path() const { return m_path; }
-
-private:
-    void cleanup()
+    ~TempFile()
     {
         if (!m_path.empty()) {
             std::error_code errorCode;
@@ -106,6 +83,9 @@ private:
         }
     }
 
+    [[nodiscard]] const std::string& path() const { return m_path; }
+
+private:
     std::string m_path;
 };
 
@@ -120,7 +100,7 @@ std::string compilerPath()
         std::string(buffer.data(), static_cast<size_t>(length)));
     const auto compiler = testPath.parent_path() / "compiler";
     require(std::filesystem::exists(compiler),
-        "expected compiler binary next to backend_riscv_test at "
+        "expected compiler binary next to compiler_llvm_test at "
             + compiler.string());
     return compiler.string();
 }
@@ -144,31 +124,35 @@ void runCheckedCommand(const std::string& command, const std::string& purpose)
             + std::to_string(WEXITSTATUS(status)) + ": " + command);
 }
 
-void expectProgramOutput(const std::string& source, const std::string& input,
+void expectLlvmProgramOutput(const std::string& source,
     const std::string& expectedOutput)
 {
     const std::string compiledCompilerPath = compilerPath();
     const std::string libraryPath = riscvLibraryPath();
 
     TempFile sourceFile(".sy");
+    TempFile llvmFile(".ll");
     TempFile assemblyFile(".S");
     TempFile objectFile(".o");
     TempFile executableFile(".elf");
-    TempFile inputFile(".txt");
     TempFile outputFile(".txt");
 
     writeTextFile(sourceFile.path(), source);
-    writeTextFile(inputFile.path(), input);
 
     runCheckedCommand("timeout 10s " + quoteShell(compiledCompilerPath)
-            + " -riscv " + quoteShell(sourceFile.path()) + " -o "
-            + quoteShell(assemblyFile.path()),
-        "compiling SysY source to RISC-V assembly");
+            + " -llvm " + quoteShell(sourceFile.path()) + " -o "
+            + quoteShell(llvmFile.path()),
+        "compiling SysY source to LLVM IR");
+
+    runCheckedCommand("clang " + quoteShell(llvmFile.path()) + " -S -o "
+            + quoteShell(assemblyFile.path())
+            + " -target riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32",
+        "lowering LLVM IR to RISC-V assembly");
 
     runCheckedCommand("clang " + quoteShell(assemblyFile.path()) + " -c -o "
             + quoteShell(objectFile.path())
             + " -target riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32",
-        "assembling generated RISC-V code");
+        "assembling generated RISC-V assembly");
 
     runCheckedCommand("ld.lld " + quoteShell(objectFile.path()) + " -L"
             + quoteShell(libraryPath) + " -lsysy -o "
@@ -176,8 +160,7 @@ void expectProgramOutput(const std::string& source, const std::string& input,
         "linking generated RISC-V executable");
 
     runCheckedCommand("timeout 10s qemu-riscv32-static "
-            + quoteShell(executableFile.path()) + " < "
-            + quoteShell(inputFile.path()) + " > "
+            + quoteShell(executableFile.path()) + " > "
             + quoteShell(outputFile.path()),
         "executing generated RISC-V executable under qemu");
 
@@ -187,76 +170,90 @@ void expectProgramOutput(const std::string& source, const std::string& input,
             + "\nactual: " + actualOutput);
 }
 
-void testLiteralOutput()
+void testLlvmModePrependsMintRuntimeDefinitions()
 {
-    expectProgramOutput(
-        "int main(){putint(42); putch(10); return 0;}", "", "42\n");
+    const std::string compiledCompilerPath = compilerPath();
+
+    TempFile sourceFile(".sy");
+    TempFile llvmFile(".ll");
+    writeTextFile(sourceFile.path(),
+        "int id(int x){return x;} int main(){mint a = mint(id(6)); mint b = "
+        "mint(id(7)); return int(a * b);}");
+
+    runCheckedCommand("timeout 10s " + quoteShell(compiledCompilerPath)
+            + " -llvm " + quoteShell(sourceFile.path()) + " -o "
+            + quoteShell(llvmFile.path()),
+        "compiling SysY source to LLVM IR");
+
+    const std::string llvmText = readTextFile(llvmFile.path());
+    require(llvmText.find("@__yesod_mint_mul") != std::string::npos,
+        "-llvm output should include the mint multiplication helper definition");
+    require(llvmText.find("@__yesod_mint_from_int") != std::string::npos,
+        "-llvm output should include the int-to-mint helper definition");
+    require(llvmText.find("@__yesod_mint_to_int") != std::string::npos,
+        "-llvm output should include the mint-to-int helper definition");
+    require(llvmText.find("@main") != std::string::npos,
+        "-llvm output should still include the lowered main function");
 }
 
-void testGlobalLoadStoreAndBranching()
+void testLlvmMintProgramExecutesThroughRiscvToolchain()
 {
-    expectProgramOutput("int global = 1;"
-                        "int main(){"
-                        "  if(global){"
-                        "    global = global + 4;"
-                        "  } else {"
-                        "    global = 99;"
-                        "  }"
-                        "  putint(global);"
-                        "  putch(10);"
-                        "  return 0;"
-                        "}",
-        "", "5\n");
-}
-
-void testCallWithMoreThanEightArguments()
-{
-    expectProgramOutput("int sum10(int a0,int a1,int a2,int a3,int a4,int "
-                        "a5,int a6,int a7,int a8,int a9){"
-                        "  return a0+a1+a2+a3+a4+a5+a6+a7+a8+a9;"
-                        "}"
-                        "int main(){"
-                        "  putint(sum10(1,2,3,4,5,6,7,8,9,10));"
-                        "  putch(10);"
-                        "  return 0;"
-                        "}",
-        "", "55\n");
-}
-
-void testInputRedirectionAndArrayAccess()
-{
-    expectProgramOutput("int main(){"
-                        "  int values[8];"
-                        "  int length = getarray(values);"
-                        "  int index = 0;"
-                        "  int sum = 0;"
-                        "  while(index < length){"
-                        "    sum = sum + values[index];"
-                        "    index = index + 1;"
-                        "  }"
-                        "  putint(sum);"
-                        "  putch(10);"
-                        "  return 0;"
-                        "}",
-        "4 9 8 7 6\n", "30\n");
-}
-
-void testMintRuntimeHelpersLinkAndExecute()
-{
-    expectProgramOutput(
+    expectLlvmProgramOutput(
         "int id(int x){return x;} int main(){mint a = mint(id(6)); mint b = "
         "mint(id(7)); putint(int(a * b)); putch(10); return 0;}",
-        "", "42\n");
+        "42\n");
+}
+
+void testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain()
+{
+    expectLlvmProgramOutput(
+        "const int N = 12;"
+        "mint fac[N + 1], ifac[N + 1], c[N + 1][N + 1];"
+        "int main(){"
+        "  int i = 1;"
+        "  int ok = 1;"
+        "  fac[0] = mint(1);"
+        "  while (i <= N) {"
+        "    fac[i] = fac[i - 1] * mint(i);"
+        "    i = i + 1;"
+        "  }"
+        "  ifac[N] = mint(1) / fac[N];"
+        "  i = N;"
+        "  while (i >= 1) {"
+        "    ifac[i - 1] = ifac[i] * mint(i);"
+        "    i = i - 1;"
+        "  }"
+        "  c[0][0] = mint(1);"
+        "  i = 1;"
+        "  while (i <= N) {"
+        "    int j = 1;"
+        "    c[i][0] = mint(1);"
+        "    while (j <= i) {"
+        "      c[i][j] = c[i - 1][j] + c[i - 1][j - 1];"
+        "      if (c[i][j] != fac[i] * ifac[i - j] * ifac[j]) {"
+        "        ok = 0;"
+        "      }"
+        "      j = j + 1;"
+        "    }"
+        "    i = i + 1;"
+        "  }"
+        "  if (ok) {"
+        "    putint(int(c[10][3]));"
+        "  } else {"
+        "    putint(0);"
+        "  }"
+        "  putch(10);"
+        "  return 0;"
+        "}",
+        "120\n");
 }
 
 } // namespace
 
 int main()
 {
-    testLiteralOutput();
-    testGlobalLoadStoreAndBranching();
-    testCallWithMoreThanEightArguments();
-    testInputRedirectionAndArrayAccess();
-    testMintRuntimeHelpersLinkAndExecute();
+    testLlvmModePrependsMintRuntimeDefinitions();
+    testLlvmMintProgramExecutesThroughRiscvToolchain();
+    testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain();
     return 0;
 }
