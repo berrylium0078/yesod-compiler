@@ -1,0 +1,8 @@
+void putint(int x);
+void putch(int x);
+
+int main(){
+  putint(42);
+  putch(10);
+  return 0;
+}

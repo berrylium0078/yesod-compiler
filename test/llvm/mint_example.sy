@@ -1,0 +1,8 @@
+int id(int x){return x;} 
+int main(){
+  mint a = mint(id(6));
+  mint b = mint(id(7));
+  putint(int(a * b));
+  putch(10);
+  return 0;
+}
