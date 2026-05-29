@@ -94,10 +94,6 @@ void testMixedArithmeticBooleanIfBuildsMultipleBranchSites()
         "int main(){int a = 1; int b = 0; int c = 1; int d = 1; if (a + ((b || "
         "c) && d)) return 1; else return 0;}");
     const auto* function = requireOnlyFunction(*program);
-    auto rawProgram = Program::dumpRaw(program.get());
-    koopa_program_t koopaProgram = nullptr;
-    const auto errorCode
-        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
 
     require(function->getNumBBs() >= 10,
         "mixed integer/boolean if conditions should introduce multiple "
@@ -105,9 +101,7 @@ void testMixedArithmeticBooleanIfBuildsMultipleBranchSites()
     require(countBranchInstructions(*function) >= 4,
         "mixed integer/boolean lowering should emit nested short-circuit "
         "branches before the final if branch");
-    require(errorCode == KOOPA_EC_SUCCESS,
-        "mixed integer/boolean if lowering should still validate as raw Koopa");
-    koopa_delete_program(koopaProgram);
+    requireProgramWellFormed(*program);
 }
 
 } // namespace

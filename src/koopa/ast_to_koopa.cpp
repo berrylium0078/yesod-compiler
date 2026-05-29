@@ -1,6 +1,8 @@
 #include "koopa/ast_to_koopa.h"
 
 #include <algorithm>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -11,13 +13,15 @@
 namespace yesod::koopa {
 
 using namespace frontend;
+namespace koopa_ir = yesod::koopa::ir;
 
 namespace {
 
     std::string makeFunctionName(const std::string& identifier);
+    std::unique_ptr<koopa_ir::Program> generateIrProgram(const AST& ast,
+        Ptr<CompUnit> compUnit, const SemanticInfo& semanticInfo);
 
     constexpr int32_t kMintMod = 998244353;
-    constexpr uint32_t kMintR = 301989884u;
     constexpr uint32_t kMintR2 = 932051910u;
     constexpr uint32_t kMintNegInv = 998244351u;
 
@@ -81,22 +85,6 @@ namespace {
         throw std::runtime_error("unknown mint helper kind");
     }
 
-    [[nodiscard]] Function* createMintHelperDecl(MintHelper helper)
-    {
-        const size_t paramCount = helper == MintHelper::fromInt
-                || helper == MintHelper::toInt
-            ? 1
-            : 2;
-        std::vector<Type*> paramTypes(paramCount, Int32Type::get());
-        auto* function = Function::create(
-            FunctionType::get(Int32Type::get(), paramTypes),
-            makeFunctionName(mintHelperName(helper)));
-        for (size_t index = 0; index < paramTypes.size(); ++index) {
-            function->pushParam(FuncArgRefValue::get(index, paramTypes[index]));
-        }
-        return function;
-    }
-
     class MintRuntimeUseVisitor : public AstVisitor {
     public:
         explicit MintRuntimeUseVisitor(const AST& ast)
@@ -150,127 +138,6 @@ namespace {
 
     private:
         bool m_usesMintRuntime = false;
-    };
-
-    struct FunctionGenerator {
-        struct LoopBlocks {
-            BasicBlock* m_condBlock_nn;
-            BasicBlock* m_endBlock_nn;
-        };
-        const frontend::AST& m_ast;
-        const frontend::SemanticInfo* m_semanticInfo;
-        Function* m_function;
-        BasicBlock* m_currentBasicBlock;
-        BasicBlock* m_endBlock;
-        int32_t m_nextTempId = 1;
-        int32_t m_nextBlockId = 1;
-        std::unordered_map<int32_t, Value*> m_storageBySymbolId;
-        const frontend::SemanticFunctionSSA* m_ssa = nullptr;
-        std::unordered_map<int64_t, Value*> m_valueByAliasKey;
-        std::unordered_map<int32_t, Function*> m_functionBySymbolId;
-        std::unordered_map<Ref<frontend::SemanticBasicBlock>, BasicBlock*>
-            m_basicBlockBySemanticBlock;
-        std::unordered_map<Ptr<frontend::WhileStmt>, LoopBlocks>
-            m_loopBlocksByWhileStmt;
-        std::unordered_set<std::string> m_usedSymbolNames;
-        std::unordered_map<std::string, Function*> m_mintHelperByName;
-        SemanticType m_functionReturnType = SemanticType::makeVoid();
-
-        template <typename T>
-        [[nodiscard]] const T& node(Ptr<T> handle, const char* message) const
-        {
-            if (!handle) {
-                throw std::runtime_error(message);
-            }
-            return handle(m_ast);
-        }
-        template <typename T>
-        [[nodiscard]] const T& node(Ptr<T> handle,
-            const FunctionGenerator& state, const char* message) const
-        {
-            if (!handle) {
-                throw std::runtime_error(message);
-            }
-            return handle(state.m_ast);
-        }
-        [[nodiscard]] const frontend::SemanticSymbol&
-        requireSymbolForIdentifier(
-            Ref<frontend::Identifier> identifier, const char* message) const
-        {
-            const auto* symbol = m_semanticInfo->findSymbol(identifier);
-            if (symbol == nullptr) {
-                throw std::runtime_error(message);
-            }
-            return *symbol;
-        }
-        [[nodiscard]] const frontend::SemanticSymbol&
-        requireSymbolForIdentifier(Ref<frontend::Identifier> identifier,
-            const frontend::SemanticInfo& semanticInfo,
-            const char* message) const
-        {
-            const auto* symbol = semanticInfo.findSymbol(identifier);
-            if (symbol == nullptr) {
-                throw std::runtime_error(message);
-            }
-            return *symbol;
-        }
-        [[nodiscard]] BasicBlock* createBasicBlock(const std::string& stem);
-        [[nodiscard]] bool blockHasTerminator(
-            const BasicBlock& basicBlock) const;
-        void finalizeBasicBlock(
-            BasicBlock& basicBlock, BasicBlock& endBlock) const;
-        [[nodiscard]] std::string makeUniqueLocalName(
-            const frontend::SemanticSymbol& symbol);
-        [[nodiscard]] static int64_t aliasKey(
-            const frontend::SemanticSsaAlias& alias);
-        void bindAlias(Ref<frontend::Identifier> identifier, Value* value);
-        [[nodiscard]] Value* requireAliasValue(
-            Ref<frontend::Identifier> identifier, const char* message) const;
-        [[nodiscard]] std::vector<Value*> edgeArgs(
-            Ref<frontend::SemanticBasicBlock> source,
-            Ref<frontend::SemanticBasicBlock> target) const;
-        [[nodiscard]] Function* requireMintHelper(MintHelper helper) const;
-        [[nodiscard]] Value* emitCall(Function* callee,
-            std::vector<Value*> args);
-
-        void generateBlock(Ptr<frontend::Block> body);
-        void generateBlockItem(const frontend::BlockItem& blockItem);
-        void generateDecl(frontend::Decl declNode);
-        void generateSemanticBlock(Ref<frontend::SemanticBasicBlock> semanticBlock);
-        void generateSemanticBlockItem(
-            const frontend::SemanticBlockItem& semanticBlockItem);
-        void generateSemanticTerminator(
-            Ref<frontend::SemanticBasicBlock> source,
-            const frontend::SemanticBlockTerminator& terminator);
-        void generateStmt(frontend::Stmt stmtNode);
-        void generateIfStmt(Ptr<frontend::IfStmt> ifStmt);
-        void generateWhileStmt(Ptr<frontend::WhileStmt> whileStmt);
-        void generateBreakStmt(Ptr<frontend::BreakStmt> breakStmt);
-        void generateContinueStmt(Ptr<frontend::ContinueStmt> continueStmt);
-        void generateAssignStmt(Ptr<frontend::AssignStmt> assignStmt);
-        void generateExpStmt(Ptr<frontend::ExpStmt> expStmt);
-        [[nodiscard]] ReturnValue* generateReturnStmt(
-            Ptr<frontend::ReturnStmt> returnStmt);
-        [[nodiscard]] Value* generateExp(Ref<frontend::Exp> exp);
-        [[nodiscard]] Value* generateBinaryExpValue(
-            const frontend::Exp::Binary& binaryExp);
-        [[nodiscard]] Value* generateUnaryExpValue(
-            const frontend::Exp::Unary& unaryExp);
-        [[nodiscard]] Value* generateBooleanAsInt(Ref<frontend::Exp> exp);
-        void generateBooleanBranch(Ref<frontend::Exp> exp,
-            BasicBlock& trueBlock, BasicBlock& falseBlock);
-        void generateLogicalOrBranch(const frontend::Exp::Binary& binaryExp,
-            BasicBlock& trueBlock, BasicBlock& falseBlock);
-        void generateLogicalAndBranch(const frontend::Exp::Binary& binaryExp,
-            BasicBlock& trueBlock, BasicBlock& falseBlock);
-        void generateLocalArrayInitializer(Value* address,
-            const frontend::SemanticType& type,
-            const std::vector<Ptr<frontend::Exp>>& scalarExprs,
-            size_t& nextScalarIndex);
-        [[nodiscard]] Value* generateLValueAddress(
-            const frontend::Exp::LVal& lVal);
-        [[nodiscard]] Value* generateSemanticValue(
-            const frontend::SemanticValue& value);
     };
 
     size_t countScalarSlots(const SemanticType& type)
@@ -389,27 +256,6 @@ namespace {
         return scalarExprs;
     }
 
-    bool isZeroInitializerValue(const Value* value)
-    {
-        if (value->isZeroInitValue()) {
-            return true;
-        }
-        if (value->isIntegerValue()) {
-            return dynamic_cast<const IntegerValue*>(value)->getVal() == 0;
-        }
-        if (!value->isAggregateValue()) {
-            return false;
-        }
-
-        const auto* aggregate = dynamic_cast<const AggregateValue*>(value);
-        for (size_t i = 0; i < aggregate->getNumElements(); ++i) {
-            if (!isZeroInitializerValue(aggregate->getElement(i))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
 
     bool isAllDigits(const std::string& text)
@@ -433,33 +279,6 @@ namespace {
         return stem;
     }
 
-    Type* lowerSemanticType(const SemanticType& semanticType,
-        bool decayUnsizedArrayToPointer = true)
-    {
-        switch (semanticType.kind) {
-        case SemanticTypeKind::integer:
-        case SemanticTypeKind::mint:
-        case SemanticTypeKind::boolean:
-            return Int32Type::get();
-        case SemanticTypeKind::voidType:
-            return UnitType::get();
-        case SemanticTypeKind::array:
-            if (semanticType.m_elementType == nullptr) {
-                throw std::runtime_error("array type is missing element type");
-            }
-            if (semanticType.m_arrayLength == -1
-                && decayUnsizedArrayToPointer) {
-                return PointerType::get(
-                    lowerSemanticType(*semanticType.m_elementType, false));
-            }
-            return ArrayType::get(
-                lowerSemanticType(*semanticType.m_elementType, false),
-                static_cast<size_t>(semanticType.m_arrayLength));
-        }
-
-        throw std::runtime_error("unsupported semantic expression type");
-    }
-
     std::string makeFunctionName(const std::string& identifier)
     {
         return "@" + identifier;
@@ -475,20 +294,6 @@ namespace {
         return "%t" + std::to_string(nextTempId++);
     }
 
-    BinaryValue* generateBinaryValue(koopa_raw_binary_op op, Value* lhs,
-        Value* rhs, BasicBlock& basicBlock, int32_t& nextTempId)
-    {
-        auto* binaryValue
-            = BinaryValue::get(op, lhs, rhs, makeTempName(nextTempId));
-        basicBlock.pushInst(binaryValue);
-        return binaryValue;
-    }
-
-    Value* generateNumber(const Exp::Number& number)
-    {
-        return IntegerValue::get(number.value);
-    }
-
     const SemanticSymbol& requireSymbolForIdentifier(Ref<Identifier> identifier,
         const SemanticInfo& semanticInfo, const char* message)
     {
@@ -501,1260 +306,1599 @@ namespace {
 
 } // namespace
 
-Program* Generator::generate(const AST& ast, Ptr<CompUnit> compUnit,
-    const SemanticInfo& semanticInfo) const
+std::unique_ptr<koopa_ir::Program> Generator::generateIr(const AST& ast,
+    Ptr<CompUnit> compUnit, const SemanticInfo& semanticInfo) const
 {
-    auto* program = Program::create();
-    const auto& parsedCompUnit = compUnit(ast);
-    std::unordered_map<int32_t, Value*> globalStorageBySymbolId;
-    std::unordered_map<int32_t, Function*> functionBySymbolId;
-    std::unordered_map<std::string, Function*> mintHelperByName;
-    std::unordered_map<int32_t, size_t> symbolUseCount;
-    std::unordered_set<int32_t> definedFunctionSymbolIds;
+    return generateIrProgram(ast, compUnit, semanticInfo);
+}
+namespace {
 
-    MintRuntimeUseVisitor mintRuntimeUseVisitor(ast);
-    mintRuntimeUseVisitor.traverse(compUnit.ref());
-    if (mintRuntimeUseVisitor.usesMintRuntime()) {
-        for (const auto helper : { MintHelper::add, MintHelper::sub,
-                 MintHelper::mul, MintHelper::div, MintHelper::fromInt,
-                 MintHelper::toInt }) {
-            auto* helperDecl = createMintHelperDecl(helper);
-            mintHelperByName.emplace(mintHelperName(helper), helperDecl);
-            program->pushFunc(helperDecl);
+    [[nodiscard]] koopa_ir::Symbol makeIrSymbol(const std::string& spelling)
+    {
+        return koopa_ir::Symbol { .sourcePos = {}, .spelling = spelling };
+    }
+
+    [[nodiscard]] koopa_ir::Type lowerSemanticTypeToIr(koopa_ir::Program& program,
+        const SemanticType& semanticType,
+        bool decayUnsizedArrayToPointer = true)
+    {
+        switch (semanticType.kind) {
+        case SemanticTypeKind::integer:
+        case SemanticTypeKind::mint:
+        case SemanticTypeKind::boolean:
+            return koopa_ir::I32Type {};
+        case SemanticTypeKind::voidType:
+            throw std::runtime_error(
+                "void type should only appear as an omitted IR return type");
+        case SemanticTypeKind::array:
+            if (semanticType.m_elementType == nullptr) {
+                throw std::runtime_error("array type is missing element type");
+            }
+            if (semanticType.m_arrayLength == -1 && decayUnsizedArrayToPointer) {
+                return program.alloc<koopa_ir::PointerType>(koopa_ir::PointerType {
+                    .sourcePos = {},
+                    .pointeeType = lowerSemanticTypeToIr(
+                        program, *semanticType.m_elementType, false),
+                });
+            }
+            return program.alloc<koopa_ir::ArrayType>(koopa_ir::ArrayType {
+                .sourcePos = {},
+                .elementType = lowerSemanticTypeToIr(
+                    program, *semanticType.m_elementType, false),
+                .length = semanticType.m_arrayLength,
+            });
         }
+
+        throw std::runtime_error("unsupported semantic type for IR lowering");
     }
 
-    for (const auto& [identifier_nn, symbolId] :
-        semanticInfo.symbolIdByIdentifier()) {
-        (void)identifier_nn;
-        ++symbolUseCount[symbolId];
-    }
-
-    for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
-        MATCH(topLevelItem)
-        WITH(
-            [&](Ref<FuncDef> topLevelAlt) {
-                const auto& funcDef = topLevelAlt(ast);
-                if (funcDef.body == nullptr) {
-                    return;
-                }
-                const auto* functionSymbol
-                    = semanticInfo.findSymbol(funcDef.identifier);
-                if (functionSymbol == nullptr) {
-                    throw std::runtime_error("function declaration missing "
-                                             "semantic symbol during lowering");
-                }
-                definedFunctionSymbolIds.insert(functionSymbol->m_id);
+    [[nodiscard]] bool isZeroInitializer(const koopa_ir::Initializer& initializer,
+        const koopa_ir::Program& program)
+    {
+        return MATCH(initializer) WITH(
+            [&](const koopa_ir::IntegerLiteral& literal) {
+                return literal.value == 0;
             },
-            [&](const auto&) { }, );
+            [&](const koopa_ir::UndefValue&) { return false; },
+            [&](const koopa_ir::ZeroInit&) { return true; },
+            [&](Ref<koopa_ir::AggregateInitializer> aggregateRef) {
+                const auto& aggregate = program[aggregateRef];
+                return std::all_of(aggregate.elements.begin(),
+                    aggregate.elements.end(), [&](const auto& element) {
+                        return isZeroInitializer(element, program);
+                    });
+            });
     }
 
-    for (const auto& [symbolId, symbol] : semanticInfo.symbolById()) {
-        if (!symbol.isFunction()) {
-            continue;
-        }
-        if (definedFunctionSymbolIds.find(symbolId)
-            != definedFunctionSymbolIds.end()) {
-            continue;
-        }
-        if (symbolUseCount[symbolId] <= 1) {
-            continue;
+    [[nodiscard]] koopa_ir::Initializer generateGlobalInitializerToIr(
+        koopa_ir::Program& program, const SemanticType& type,
+        const std::vector<Ptr<Exp>>& scalarExprs, size_t& nextScalarIndex,
+        const SemanticInfo& semanticInfo)
+    {
+        if (!type.isArray()) {
+            if (nextScalarIndex >= scalarExprs.size()) {
+                return koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 };
+            }
+
+            const auto exp_nn = scalarExprs[nextScalarIndex++];
+            if (!exp_nn) {
+                return koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 };
+            }
+
+            const auto constantValue = semanticInfo.findConstantValue(exp_nn.ref());
+            if (!constantValue.has_value()) {
+                throw std::runtime_error(
+                    "global array initializer element must be constant");
+            }
+            return koopa_ir::IntegerLiteral {
+                .sourcePos = {},
+                .value = isMintType(type)
+                    ? static_cast<int32_t>(encodeMintConstant(*constantValue))
+                    : *constantValue,
+            };
         }
 
-        auto [it, inserted] = functionBySymbolId.try_emplace(symbolId, nullptr);
-        if (!inserted) {
-            continue;
+        if (type.m_elementType == nullptr) {
+            throw std::runtime_error("array type is missing element type");
         }
 
-        auto* function = createExternalFunctionDecl(symbol);
-        it->second = function;
-        program->pushFunc(function);
+        std::vector<koopa_ir::Initializer> elements;
+        elements.reserve(static_cast<size_t>(type.m_arrayLength));
+        for (int32_t i = 0; i < type.m_arrayLength; ++i) {
+            elements.push_back(generateGlobalInitializerToIr(
+                program, *type.m_elementType, scalarExprs, nextScalarIndex,
+                semanticInfo));
+        }
+
+        if (elements.empty()) {
+            return koopa_ir::ZeroInit {};
+        }
+        if (std::all_of(elements.begin(), elements.end(),
+                [&](const auto& element) {
+                    return isZeroInitializer(element, program);
+                })) {
+            return koopa_ir::ZeroInit {};
+        }
+        return program.alloc<koopa_ir::AggregateInitializer>(
+            koopa_ir::AggregateInitializer {
+                .sourcePos = {},
+                .elements = std::move(elements),
+            });
     }
 
-    for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
-        MATCH(topLevelItem)
-        WITH(
-            [&](Decl topLevelAlt) {
-                generateGlobalDecl(topLevelAlt, *program, ast, semanticInfo,
-                    globalStorageBySymbolId);
+    [[nodiscard]] std::optional<koopa_ir::Type> lowerOptionalReturnTypeToIr(
+        koopa_ir::Program& program, const SemanticType& type)
+    {
+        if (type.kind == SemanticTypeKind::voidType) {
+            return std::nullopt;
+        }
+        return lowerSemanticTypeToIr(program, type);
+    }
+
+    [[nodiscard]] koopa_ir::StoreValue toStoreValue(const koopa_ir::Value& value)
+    {
+        return MATCH(value) WITH(
+            [&](const koopa_ir::Symbol& symbol) {
+                return koopa_ir::StoreValue { symbol };
             },
-            [&](Ptr<FuncDef> topLevelAlt) {
-                const auto& symbol = requireSymbolForIdentifier(
-                    topLevelAlt(ast).identifier, semanticInfo,
-                    "function declaration is missing a symbol binding");
-                auto [functionIt, inserted]
-                    = functionBySymbolId.try_emplace(symbol.m_id, nullptr);
-                if (!inserted) {
-                    return;
-                }
-
-                auto* function = topLevelAlt(ast).body != nullptr
-                    ? createFunctionDecl(ast, topLevelAlt, semanticInfo)
-                    : createExternalFunctionDecl(symbol);
-                functionIt->second = function;
-                program->pushFunc(function);
-            }, );
-    }
-
-    for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
-        MATCH(topLevelItem)
-        WITH(
-            [&](Ref<FuncDef> topLevelAlt) {
-                if (topLevelAlt(ast).body == nullptr) {
-                    return;
-                }
-                const auto& symbol = requireSymbolForIdentifier(
-                    topLevelAlt(ast).identifier, semanticInfo,
-                    "function definition is missing a symbol binding");
-                const auto functionIt = functionBySymbolId.find(symbol.m_id);
-                if (functionIt == functionBySymbolId.end()) {
-                    throw std::runtime_error("function definition is missing a "
-                                             "lowered function declaration");
-                }
-                (void)generateFuncDef(ast, topLevelAlt.ptr(), semanticInfo,
-                    globalStorageBySymbolId, functionBySymbolId,
-                    mintHelperByName,
-                    functionIt->second);
+            [&](const koopa_ir::IntegerLiteral& literal) {
+                return koopa_ir::StoreValue { literal };
             },
-            [&](const auto&) { }, );
+            [&](const koopa_ir::UndefValue& undef) {
+                return koopa_ir::StoreValue { undef };
+            });
     }
 
-    return program;
-}
-
-Function* Generator::createFunctionDecl(const AST& ast, Ptr<FuncDef> funcDef,
-    const SemanticInfo& semanticInfo) const
-{
-    const auto& parsedFuncDef = funcDef(ast);
-    const auto& identifier = parsedFuncDef.identifier(ast);
-    const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
-        semanticInfo, "function definition is missing a symbol binding");
-    // TODO
-    assert(symbol.isFunction());
-    const auto& funcInfo = symbol.function();
-    std::vector<Type*> paramTypes;
-    paramTypes.reserve(funcInfo.m_paramTypes.size());
-    for (const auto& paramType : funcInfo.m_paramTypes) {
-        paramTypes.push_back(lowerSemanticType(paramType));
-    }
-    auto* function = Function::create(
-        FunctionType::get(lowerSemanticType(funcInfo.m_returnType), paramTypes),
-        makeFunctionName(identifier.name));
-    for (size_t i = 0; i < parsedFuncDef.funcFParams.size(); ++i) {
-        function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
-    }
-    return function;
-}
-
-Function* Generator::createExternalFunctionDecl(
-    const SemanticSymbol& symbol) const
-{
-    std::vector<Type*> paramTypes;
-    // TODO
-    assert(symbol.isFunction());
-    const auto& funcInfo = symbol.function();
-
-    paramTypes.reserve(funcInfo.m_paramTypes.size());
-    for (const auto& paramType : funcInfo.m_paramTypes) {
-        paramTypes.push_back(lowerSemanticType(paramType));
-    }
-    auto* function = Function::create(
-        FunctionType::get(lowerSemanticType(funcInfo.m_returnType), paramTypes),
-        makeFunctionName(symbol.name));
-    for (size_t i = 0; i != paramTypes.size(); ++i) {
-        function->pushParam(FuncArgRefValue::get(i, paramTypes[i]));
-    }
-    return function;
-}
-
-Function* Generator::generateFuncDef(const AST& ast, Ptr<FuncDef> funcDef,
-    const SemanticInfo& semanticInfo,
-    const std::unordered_map<int32_t, Value*>& globalStorageBySymbolId,
-    const std::unordered_map<int32_t, Function*>& functionBySymbolId,
-    const std::unordered_map<std::string, Function*>& mintHelperByName,
-    Function* function_nn) const
-{
-    const auto& parsedFuncDef = funcDef(ast);
-    const auto* controlFlow = semanticInfo.findControlFlow(funcDef.ref());
-    if (controlFlow == nullptr) {
-        throw std::runtime_error(
-            "function definition is missing semantic control flow");
-    }
-
-    auto* function = function_nn;
-    const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
-        semanticInfo, "function definition is missing a symbol binding");
-    const auto* ssa = semanticInfo.findSSA(funcDef.ref());
-    if (ssa == nullptr) {
-        throw std::runtime_error("function definition is missing semantic SSA");
-    }
-    FunctionGenerator state {
-        .m_ast = ast,
-        .m_semanticInfo = &semanticInfo,
-        .m_function = function,
-        .m_currentBasicBlock = nullptr,
-        .m_endBlock = nullptr,
-        .m_storageBySymbolId = globalStorageBySymbolId,
-        .m_ssa = ssa,
-        .m_functionBySymbolId = functionBySymbolId,
-        .m_mintHelperByName = mintHelperByName,
-        .m_functionReturnType = symbol.function().m_returnType,
-    };
-
-    const auto& controlFlowArena = semanticInfo.controlFlowArena();
-    for (const auto semanticBlockRef : controlFlow->blocks) {
-        const auto& semanticBlock = semanticBlockRef(controlFlowArena);
-        auto* basicBlock = semanticBlockRef == controlFlow->entryBlock
-            ? BasicBlock::createEntry("%" + semanticBlock.nameHint)
-            : BasicBlock::createNonEntry("%" + semanticBlock.nameHint);
-        const auto ssaBlockIt = ssa->m_blockInfoByBlock.find(semanticBlockRef);
-        if (ssaBlockIt == ssa->m_blockInfoByBlock.end()) {
-            throw std::runtime_error("semantic basic block is missing SSA info");
-        }
-        for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
-            const auto& param = ssaBlockIt->second.m_params[i];
-            const auto* symbol = semanticInfo.findSymbolById(param.m_symbolId);
-            if (symbol == nullptr || !symbol->isObject()) {
-                throw std::runtime_error("basic block parameter is missing object type");
-            }
-            basicBlock->pushParam(BlockArgRefValue::get(i,
-                lowerSemanticType(symbol->object().m_type, false)));
-        }
-        state.m_basicBlockBySemanticBlock[semanticBlockRef] = basicBlock;
-        function->pushBB(basicBlock);
-    }
-
-    state.m_currentBasicBlock
-        = state.m_basicBlockBySemanticBlock.at(controlFlow->entryBlock);
-    auto* entryBlock = state.m_currentBasicBlock;
-    for (size_t i = 0; i < parsedFuncDef.funcFParams.size(); ++i) {
-        const auto& funcFParam = parsedFuncDef.funcFParams[i];
-        const auto& symbol = requireSymbolForIdentifier(funcFParam.identifier,
-            semanticInfo, "function parameter is missing a symbol binding");
-        if (semanticInfo.findAlias(funcFParam.identifier).has_value()) {
-            state.bindAlias(funcFParam.identifier, function->getParam(i));
-            continue;
-        }
-        auto* alloc = AllocValue::get(function->getParam(i)->getVType(),
-            state.makeUniqueLocalName(symbol));
-        entryBlock->pushInst(alloc);
-        entryBlock->pushInst(StoreValue::get(function->getParam(i), alloc));
-        state.m_storageBySymbolId[symbol.m_id] = alloc;
-    }
-
-    for (const auto semanticBlockRef : controlFlow->blocks) {
-        state.m_currentBasicBlock
-            = state.m_basicBlockBySemanticBlock.at(semanticBlockRef);
-        state.generateSemanticBlock(semanticBlockRef);
-    }
-
-    for (auto* basicBlock : function->bbs()) {
-        basicBlock->validate();
-    }
-    function->validate();
-    return function;
-}
-
-void FunctionGenerator::generateSemanticBlock(
-    Ref<frontend::SemanticBasicBlock> semanticBlockRef)
-{
-    const auto& semanticBlock = semanticBlockRef(m_semanticInfo->controlFlowArena());
-    const auto ssaBlockIt = m_ssa->m_blockInfoByBlock.find(semanticBlockRef);
-    if (ssaBlockIt == m_ssa->m_blockInfoByBlock.end()) {
-        throw std::runtime_error("semantic basic block is missing SSA info");
-    }
-    if (ssaBlockIt->second.m_params.size() != m_currentBasicBlock->getNumParams()) {
-        throw std::runtime_error(
-            "basic block parameter count should match SSA parameters");
-    }
-    for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
-        auto* blockArg = m_currentBasicBlock->getParam(i);
-        m_valueByAliasKey[aliasKey(ssaBlockIt->second.m_params[i].m_alias)] = blockArg;
-    }
-    for (const auto& item : semanticBlock.items) {
-        generateSemanticBlockItem(item);
-    }
-    if (!semanticBlock.terminator.has_value()) {
-        throw std::runtime_error("semantic basic block is missing terminator");
-    }
-    generateSemanticTerminator(semanticBlockRef, *semanticBlock.terminator);
-}
-
-void FunctionGenerator::generateSemanticBlockItem(
-    const frontend::SemanticBlockItem& semanticBlockItem)
-{
-    MATCH(semanticBlockItem)
-    WITH([&](frontend::Decl decl) { generateDecl(decl); },
-        [&](Ref<AssignStmt> assignStmt) { generateAssignStmt(assignStmt.ptr()); },
-        [&](Ref<ExpStmt> expStmt) { generateExpStmt(expStmt.ptr()); });
-}
-
-void FunctionGenerator::generateSemanticTerminator(
-    Ref<frontend::SemanticBasicBlock> source,
-    const frontend::SemanticBlockTerminator& terminator)
-{
-    auto& state = *this;
-    MATCH(terminator)
-    WITH(
-        [&](const frontend::SemanticJumpTerminator& jump) {
-            state.m_currentBasicBlock->pushInst(JumpValue::get(
-                state.m_basicBlockBySemanticBlock.at(jump.target),
-                state.edgeArgs(source, jump.target)));
-        },
-        [&](const frontend::SemanticBranchTerminator& branch) {
-            const auto trueArgs = state.edgeArgs(source, branch.trueTarget);
-            const auto falseArgs = state.edgeArgs(source, branch.falseTarget);
-            if (const auto constantValue
-                = state.m_semanticInfo->findConstantValue(branch.condition);
-                constantValue.has_value()) {
-                state.m_currentBasicBlock->pushInst(BranchValue::get(
-                    IntegerValue::get(*constantValue),
-                    state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
-                    trueArgs,
-                    state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
-                    falseArgs));
-                return;
-            }
-
-            auto* conditionValue = generateExp(branch.condition);
-            state.m_currentBasicBlock->pushInst(BranchValue::get(
-                conditionValue,
-                state.m_basicBlockBySemanticBlock.at(branch.trueTarget),
-                trueArgs,
-                state.m_basicBlockBySemanticBlock.at(branch.falseTarget),
-                falseArgs));
-        },
-        [&](const frontend::SemanticReturnTerminator& returnTerminator) {
-            auto* value = returnTerminator.value.has_value()
-                ? generateSemanticValue(*returnTerminator.value)
-                : nullptr;
-            state.m_currentBasicBlock->pushInst(ReturnValue::get(value));
-        });
-}
-
-Value* FunctionGenerator::generateSemanticValue(
-    const frontend::SemanticValue& value)
-{
-    return MATCH(value.kind) WITH(
-        [&](int32_t constantValue) -> Value* {
-            if (isMintType(m_functionReturnType)) {
-                return IntegerValue::get(
-                    static_cast<int32_t>(encodeMintConstant(constantValue)));
-            }
-            return IntegerValue::get(constantValue);
-        },
-        [&](Ref<Exp> exp) -> Value* { return generateExp(exp); });
-}
-
-Function* FunctionGenerator::requireMintHelper(MintHelper helper) const
-{
-    const auto helperIt = m_mintHelperByName.find(mintHelperName(helper));
-    if (helperIt == m_mintHelperByName.end()) {
-        throw std::runtime_error("mint helper is missing a lowered declaration");
-    }
-    return helperIt->second;
-}
-
-Value* FunctionGenerator::emitCall(Function* callee, std::vector<Value*> args)
-{
-    const auto* functionType
-        = dynamic_cast<FunctionType*>(callee->getFuncType());
-    const std::string callName = functionType->getResultType()->isUnitType()
-        ? std::string { }
-        : makeTempName(m_nextTempId);
-    auto* callValue = CallValue::get(callee, std::move(args), callName);
-    m_currentBasicBlock->pushInst(callValue);
-    return callValue;
-}
-
-void Generator::generateGlobalDecl(Decl decl, Program& program, const AST& ast,
-    const SemanticInfo& semanticInfo,
-    std::unordered_map<int32_t, Value*>& globalStorageBySymbolId) const
-{
-    MATCH(decl)
-    WITH(
-        [&](Ptr<ConstDecl> declAlt) {
-            const auto& constDecl = declAlt(ast);
-            for (const auto constDef_nn : constDecl.constDef) {
-                const auto& constDef = constDef_nn(ast);
-                const auto& symbol = requireSymbolForIdentifier(
-                    constDef.identifier, semanticInfo,
-                    "global const is missing its symbol binding");
-                if (!symbol.isObject())
-                    continue;
-                const auto& type = symbol.object().m_type;
-                if (!type.isArray())
-                    continue;
-                auto scalarExprs = flattenArrayInitializer(
-                    ast, constDef.constInitVal.ref(), type);
-                size_t nextScalarIndex = 0;
-                Value* initValue = generateGlobalArrayInitializer(
-                    type, scalarExprs, nextScalarIndex, semanticInfo);
-                auto* globalAlloc = GlobalAllocValue::get(
-                    initValue, makeGlobalName(symbol.name));
-                program.pushVal(globalAlloc);
-                globalStorageBySymbolId[symbol.m_id] = globalAlloc;
-            }
-        },
-        [&](Ptr<VarDecl> declAlt) {
-            const auto& varDecl = declAlt(ast);
-            for (const auto varDef_nn : varDecl.varDef) {
-                const auto& varDef = varDef_nn(ast);
-                const auto& symbol = requireSymbolForIdentifier(
-                    varDef.identifier, semanticInfo,
-                    "global variable is missing its symbol binding");
-                assert(symbol.isObject());
-                const auto &type = symbol.object().m_type;
-                Value* initValue = ZeroInitValue::get(
-                    lowerSemanticType(type, false));
-                if (type.isArray() && varDef.initVal) {
-                    auto scalarExprs = flattenArrayInitializer(
-                        ast, varDef.initVal.ref(), type);
-                    size_t nextScalarIndex = 0;
-                    initValue = generateGlobalArrayInitializer(type,
-                        scalarExprs, nextScalarIndex, semanticInfo);
-                } else if (varDef.initVal) {
-                    const auto& initVal = varDef.initVal(ast);
-                    MATCH(initVal.kind)
-                    WITH(
-                        [&](Ref<Exp> initAlt) {
-                            const auto constantValue
-                                = semanticInfo.findConstantValue(initAlt);
-                            if (!constantValue.has_value()) {
-                                throw std::runtime_error(
-                                    "global variable initializer must be "
-                                    "constant");
-                            }
-                                initValue = IntegerValue::get(isMintType(type)
-                                    ? static_cast<int32_t>(
-                                        encodeMintConstant(*constantValue))
-                                    : *constantValue);
-                        },
-                        [&](const auto&) { }, );
-                }
-                auto* globalAlloc = GlobalAllocValue::get(
-                    initValue, makeGlobalName(symbol.name));
-                program.pushVal(globalAlloc);
-                globalStorageBySymbolId[symbol.m_id] = globalAlloc;
-            }
-        }, );
-}
-
-void FunctionGenerator::generateBlock(Ptr<Block> body)
-{
-    auto& state = *this;
-    const auto& parsedBlock = node(body, state, "body is missing");
-    for (const auto blockItem : parsedBlock.items) {
-        if (blockHasTerminator(*state.m_currentBasicBlock)) {
+    [[nodiscard]] koopa_ir::BinaryOp lowerBinaryOpToIr(BinaryOpKeyword op)
+    {
+        switch (op) {
+        case BinaryOpKeyword::star:
+            return koopa_ir::BinaryOp::mul;
+        case BinaryOpKeyword::slash:
+            return koopa_ir::BinaryOp::div;
+        case BinaryOpKeyword::percent:
+            return koopa_ir::BinaryOp::mod;
+        case BinaryOpKeyword::plus:
+            return koopa_ir::BinaryOp::add;
+        case BinaryOpKeyword::minus:
+            return koopa_ir::BinaryOp::sub;
+        case BinaryOpKeyword::less:
+            return koopa_ir::BinaryOp::lt;
+        case BinaryOpKeyword::greater:
+            return koopa_ir::BinaryOp::gt;
+        case BinaryOpKeyword::lessEqual:
+            return koopa_ir::BinaryOp::le;
+        case BinaryOpKeyword::greaterEqual:
+            return koopa_ir::BinaryOp::ge;
+        case BinaryOpKeyword::equal:
+            return koopa_ir::BinaryOp::eq;
+        case BinaryOpKeyword::notEqual:
+            return koopa_ir::BinaryOp::ne;
+        case BinaryOpKeyword::andAnd:
+        case BinaryOpKeyword::orOr:
             break;
         }
-        generateBlockItem(blockItem);
-    }
-}
 
-void FunctionGenerator::generateBlockItem(const BlockItem& blockItem)
-{
-    auto& state = *this;
-    if (blockHasTerminator(*state.m_currentBasicBlock)) {
-        return;
+        throw std::runtime_error(
+            "short-circuit binary expression should lower through boolean branching");
     }
-    MATCH(blockItem)
-    WITH([&](Decl decl) { generateDecl(decl); },
-        [&](Stmt stmt) { generateStmt(stmt); }, );
-}
 
-void FunctionGenerator::generateDecl(Decl decl)
-{
-    auto& state = *this;
-    MATCH(decl)
-    WITH(
-        [&](Ptr<ConstDecl> declAlt) {
-            const auto& constDecl
-                = node(declAlt, state, "const declaration payload is null");
-            for (const auto constDef : constDecl.constDef) {
-                const auto& parsedConstDef = constDef(state.m_ast);
-                const auto& symbol = requireSymbolForIdentifier(
-                    parsedConstDef.identifier, *state.m_semanticInfo,
-                    "const declarator is missing its symbol binding");
-                assert(symbol.isObject());
-                const auto &type = symbol.object().m_type;
-                if (state.m_semanticInfo->findAlias(parsedConstDef.identifier)
-                        .has_value()
-                    && type.isScalar()) {
-                    const auto& constInitVal = parsedConstDef.constInitVal(state.m_ast);
-                    MATCH(constInitVal.kind)
-                    WITH(
-                        [&](Ref<Exp> initAlt) {
-                            state.bindAlias(parsedConstDef.identifier,
-                                generateExp(initAlt));
-                        },
-                        [&](const auto&) {
-                            throw std::runtime_error(
-                                "scalar const initializer should be a scalar expression");
-                        });
-                    continue;
-                }
-                auto* alloc = AllocValue::get(
-                    ::yesod::koopa::lowerSemanticType(type, false),
-                    makeUniqueLocalName(symbol));
-                state.m_currentBasicBlock->pushInst(alloc);
-                state.m_storageBySymbolId[symbol.m_id] = alloc;
-                const auto& constInitVal
-                    = parsedConstDef.constInitVal(state.m_ast);
-                if (type.isArray()) {
-                    auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                        parsedConstDef.constInitVal.ref(), type);
-                    size_t nextScalarIndex = 0;
-                    generateLocalArrayInitializer(
-                        alloc, type, scalarExprs, nextScalarIndex);
-                } else {
-                    MATCH(constInitVal.kind)
-                    WITH(
-                        [&](Ref<Exp> initAlt) {
-                            auto* initValue = generateExp(initAlt);
-                            state.m_currentBasicBlock->pushInst(
-                                StoreValue::get(initValue, alloc));
-                        },
-                        [&](const auto&) { });
+    struct IrAddress {
+        koopa_ir::Symbol symbol;
+        SemanticType pointeeType;
+    };
+
+    struct IrFunctionGenerator {
+        const frontend::AST& m_ast;
+        const frontend::SemanticInfo* m_semanticInfo;
+        koopa_ir::Program* m_program;
+        Ref<koopa_ir::FunctionDef> m_function;
+        Ref<koopa_ir::BasicBlock> m_currentBasicBlock;
+        int32_t m_nextTempId = 1;
+        int32_t m_nextBlockId = 1;
+        std::unordered_map<int32_t, std::string> m_storageBySymbolId;
+        const frontend::SemanticFunctionSSA* m_ssa = nullptr;
+        std::unordered_map<int64_t, koopa_ir::Value> m_valueByAliasKey;
+        std::unordered_map<int32_t, std::string> m_functionBySymbolId;
+        std::unordered_map<Ref<frontend::SemanticBasicBlock>, Ref<koopa_ir::BasicBlock>>
+            m_basicBlockBySemanticBlock;
+        std::unordered_map<std::string, std::string> m_mintHelperByName;
+        std::unordered_set<Ref<koopa_ir::BasicBlock>> m_terminatedBlocks;
+        std::unordered_set<std::string> m_usedSymbolNames;
+        SemanticType m_functionReturnType = SemanticType::makeVoid();
+
+        [[nodiscard]] koopa_ir::BasicBlock& currentBlock() const
+        {
+            return (*m_program)[m_currentBasicBlock];
+        }
+
+        [[nodiscard]] koopa_ir::FunctionDef& function() const
+        {
+            return (*m_program)[m_function];
+        }
+
+        [[nodiscard]] std::string makeUniqueLocalName(
+            const frontend::SemanticSymbol& symbol)
+        {
+            const std::string baseName = "%" + normalizeIdentifierStem(symbol.name);
+            if (m_usedSymbolNames.insert(baseName).second) {
+                return baseName;
+            }
+
+            int32_t suffix = 1;
+            while (true) {
+                const std::string candidate
+                    = baseName + "_" + std::to_string(suffix++);
+                if (m_usedSymbolNames.insert(candidate).second) {
+                    return candidate;
                 }
             }
-        },
-        [&](Ptr<VarDecl> declAlt) {
-            const auto& varDecl
-                = node(declAlt, state, "var declaration payload is null");
-            for (const auto varDef : varDecl.varDef) {
-                const auto& resolvedVarDef = varDef(state.m_ast);
-                const auto& symbol = requireSymbolForIdentifier(
-                    resolvedVarDef.identifier, *state.m_semanticInfo,
-                    "var declarator is missing its symbol binding");
-                const auto &type = symbol.object().m_type;
-                if (state.m_semanticInfo->findAlias(resolvedVarDef.identifier)
-                        .has_value()
-                    && type.isScalar()) {
-                    if (resolvedVarDef.initVal) {
+        }
+
+        [[nodiscard]] static int64_t aliasKey(
+            const frontend::SemanticSsaAlias& alias)
+        {
+            return (static_cast<int64_t>(alias.m_symbolId) << 32)
+                ^ static_cast<uint32_t>(alias.m_version);
+        }
+
+        void bindAlias(Ref<frontend::Identifier> identifier, koopa_ir::Value value)
+        {
+            const auto alias = m_semanticInfo->findAlias(identifier);
+            if (!alias.has_value()) {
+                throw std::runtime_error("identifier is missing semantic SSA alias");
+            }
+            m_valueByAliasKey[aliasKey(*alias)] = std::move(value);
+        }
+
+        [[nodiscard]] koopa_ir::Value requireAliasValue(
+            Ref<frontend::Identifier> identifier, const char* message) const
+        {
+            const auto alias = m_semanticInfo->findAlias(identifier);
+            if (!alias.has_value()) {
+                throw std::runtime_error(message);
+            }
+            const auto valueIt = m_valueByAliasKey.find(aliasKey(*alias));
+            if (valueIt == m_valueByAliasKey.end()) {
+                throw std::runtime_error(message);
+            }
+            return valueIt->second;
+        }
+
+        [[nodiscard]] std::string requireMintHelper(MintHelper helper) const
+        {
+            const auto helperIt = m_mintHelperByName.find(mintHelperName(helper));
+            if (helperIt == m_mintHelperByName.end()) {
+                throw std::runtime_error(
+                    "mint helper is missing a lowered declaration");
+            }
+            return helperIt->second;
+        }
+
+        void pushStatement(koopa_ir::Statement statement)
+        {
+            currentBlock().statements.push_back(std::move(statement));
+        }
+
+        void setTerminator(koopa_ir::Terminator terminator)
+        {
+            currentBlock().terminator = std::move(terminator);
+            m_terminatedBlocks.insert(m_currentBasicBlock);
+        }
+
+        [[nodiscard]] bool blockHasTerminator(
+            Ref<koopa_ir::BasicBlock> basicBlock) const
+        {
+            return m_terminatedBlocks.contains(basicBlock);
+        }
+
+        [[nodiscard]] koopa_ir::Value emitNamedRhs(
+            koopa_ir::SymbolRhs rhs, const std::string& name)
+        {
+            auto defRef = m_program->alloc<koopa_ir::SymbolDef>(
+                koopa_ir::SymbolDef {
+                    .sourcePos = {},
+                    .symbol = makeIrSymbol(name),
+                    .rhs = std::move(rhs),
+                    .annotations = {},
+                });
+            pushStatement(defRef);
+            return makeIrSymbol(name);
+        }
+
+        [[nodiscard]] koopa_ir::Value emitAlloc(const SemanticType& type,
+            const std::string& name)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::MemoryDeclaration>(
+                koopa_ir::MemoryDeclaration {
+                    .sourcePos = {},
+                    .allocType = lowerSemanticTypeToIr(*m_program, type, false),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, name);
+        }
+
+        [[nodiscard]] koopa_ir::Value emitLoad(const koopa_ir::Symbol& source)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::LoadExpr>(koopa_ir::LoadExpr {
+                .sourcePos = {},
+                .source = source,
+                .annotations = {},
+            });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitBinary(koopa_ir::BinaryOp op,
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::BinaryExpr>(
+                koopa_ir::BinaryExpr {
+                    .sourcePos = {},
+                    .op = op,
+                    .lhs = std::move(lhs),
+                    .rhs = std::move(rhs),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitGetPointer(
+            const koopa_ir::Symbol& source, koopa_ir::Value index)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::GetPointerExpr>(
+                koopa_ir::GetPointerExpr {
+                    .sourcePos = {},
+                    .source = source,
+                    .index = std::move(index),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitGetElementPointer(
+            const koopa_ir::Symbol& source, koopa_ir::Value index)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::GetElementPointerExpr>(
+                koopa_ir::GetElementPointerExpr {
+                    .sourcePos = {},
+                    .source = source,
+                    .index = std::move(index),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitCall(
+            const std::string& callee, std::vector<koopa_ir::Value> args,
+            bool hasReturnValue)
+        {
+            auto callRef = m_program->alloc<koopa_ir::CallExpr>(koopa_ir::CallExpr {
+                .sourcePos = {},
+                .callee = makeIrSymbol(callee),
+                .args = std::move(args),
+                .annotations = {},
+            });
+            if (!hasReturnValue) {
+                pushStatement(callRef);
+                return koopa_ir::UndefValue {};
+            }
+            return emitNamedRhs(callRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Symbol requireSymbolValue(
+            const koopa_ir::Value& value, const char* message) const
+        {
+            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+                return *symbol;
+            }
+            throw std::runtime_error(message);
+        }
+
+        [[nodiscard]] Ref<koopa_ir::BasicBlock> createBasicBlock(
+            const std::string& stem)
+        {
+            auto placeholderRef = m_program->alloc<koopa_ir::ReturnTerminator>(
+                koopa_ir::ReturnTerminator {
+                    .sourcePos = {},
+                    .value = std::nullopt,
+                    .annotations = {},
+                });
+            auto blockRef = m_program->alloc<koopa_ir::BasicBlock>(
+                koopa_ir::BasicBlock {
+                    .sourcePos = {},
+                    .label = makeIrSymbol(
+                        "%" + stem + "_" + std::to_string(m_nextBlockId++)),
+                    .params = {},
+                    .statements = {},
+                    .terminator = placeholderRef,
+                    .annotations = {},
+                });
+            function().blocks.push_back(blockRef);
+            return blockRef;
+        }
+
+        [[nodiscard]] std::vector<koopa_ir::Value> edgeArgs(
+            Ref<frontend::SemanticBasicBlock> source,
+            Ref<frontend::SemanticBasicBlock> target) const
+        {
+            const auto sourceIt = m_ssa->m_blockInfoByBlock.find(source);
+            if (sourceIt == m_ssa->m_blockInfoByBlock.end()) {
+                throw std::runtime_error("source block is missing SSA info");
+            }
+            const auto argsIt
+                = sourceIt->second.m_outgoingArgsByTarget.find(target);
+            if (argsIt == sourceIt->second.m_outgoingArgsByTarget.end()) {
+                return {};
+            }
+            std::vector<koopa_ir::Value> values;
+            values.reserve(argsIt->second.size());
+            for (const auto& alias : argsIt->second) {
+                const auto valueIt = m_valueByAliasKey.find(aliasKey(alias));
+                if (valueIt == m_valueByAliasKey.end()) {
+                    throw std::runtime_error(
+                        "SSA edge argument is missing a value binding");
+                }
+                values.push_back(valueIt->second);
+            }
+            return values;
+        }
+
+        [[nodiscard]] koopa_ir::Value generateSemanticValue(
+            const frontend::SemanticValue& value)
+        {
+            return MATCH(value.kind) WITH(
+                [&](int32_t constantValue) -> koopa_ir::Value {
+                    return koopa_ir::IntegerLiteral {
+                        .sourcePos = {},
+                        .value = isMintType(m_functionReturnType)
+                            ? static_cast<int32_t>(
+                                  encodeMintConstant(constantValue))
+                            : constantValue,
+                    };
+                },
+                [&](Ref<Exp> exp) -> koopa_ir::Value { return generateExp(exp); });
+        }
+
+        void generateSemanticBlock(Ref<frontend::SemanticBasicBlock> semanticBlockRef)
+        {
+            const auto& semanticBlock
+                = semanticBlockRef(m_semanticInfo->controlFlowArena());
+            const auto ssaBlockIt = m_ssa->m_blockInfoByBlock.find(semanticBlockRef);
+            if (ssaBlockIt == m_ssa->m_blockInfoByBlock.end()) {
+                throw std::runtime_error(
+                    "semantic basic block is missing SSA info");
+            }
+            auto& block = currentBlock();
+            if (ssaBlockIt->second.m_params.size() != block.params.size()) {
+                throw std::runtime_error(
+                    "basic block parameter count should match SSA parameters");
+            }
+            for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
+                const auto& blockParam = (*m_program)[block.params[i]];
+                m_valueByAliasKey[aliasKey(ssaBlockIt->second.m_params[i].m_alias)]
+                    = blockParam.symbol;
+            }
+            for (const auto& item : semanticBlock.items) {
+                generateSemanticBlockItem(item);
+            }
+            if (!semanticBlock.terminator.has_value()) {
+                throw std::runtime_error(
+                    "semantic basic block is missing terminator");
+            }
+            generateSemanticTerminator(semanticBlockRef, *semanticBlock.terminator);
+        }
+
+        void generateSemanticBlockItem(
+            const frontend::SemanticBlockItem& semanticBlockItem)
+        {
+            MATCH(semanticBlockItem)
+            WITH([&](frontend::Decl decl) { generateDecl(decl); },
+                [&](Ref<AssignStmt> assignStmt) {
+                    generateAssignStmt(assignStmt.ptr());
+                },
+                [&](Ref<ExpStmt> expStmt) { generateExpStmt(expStmt.ptr()); });
+        }
+
+        void generateSemanticTerminator(Ref<frontend::SemanticBasicBlock> source,
+            const frontend::SemanticBlockTerminator& terminator)
+        {
+            auto& state = *this;
+            MATCH(terminator)
+            WITH(
+                [&](const frontend::SemanticJumpTerminator& jump) {
+                    state.setTerminator(state.m_program->alloc<
+                        koopa_ir::JumpTerminator>(koopa_ir::JumpTerminator {
+                        .sourcePos = {},
+                        .target = (*state.m_program)
+                                      [state.m_basicBlockBySemanticBlock.at(
+                                          jump.target)]
+                                          .label,
+                        .args = state.edgeArgs(source, jump.target),
+                        .annotations = {},
+                    }));
+                },
+                [&](const frontend::SemanticBranchTerminator& branch) {
+                    auto trueTarget
+                        = state.m_basicBlockBySemanticBlock.at(branch.trueTarget);
+                    auto falseTarget
+                        = state.m_basicBlockBySemanticBlock.at(branch.falseTarget);
+                    koopa_ir::Value condition;
+                    if (const auto constantValue
+                        = state.m_semanticInfo->findConstantValue(branch.condition);
+                        constantValue.has_value()) {
+                        condition = koopa_ir::IntegerLiteral {
+                            .sourcePos = {},
+                            .value = *constantValue,
+                        };
+                    } else {
+                        condition = state.generateExp(branch.condition);
+                    }
+                    state.setTerminator(state.m_program->alloc<
+                        koopa_ir::BranchTerminator>(koopa_ir::BranchTerminator {
+                        .sourcePos = {},
+                        .condition = std::move(condition),
+                        .trueTarget = (*state.m_program)[trueTarget].label,
+                        .trueArgs = state.edgeArgs(source, branch.trueTarget),
+                        .falseTarget = (*state.m_program)[falseTarget].label,
+                        .falseArgs = state.edgeArgs(source, branch.falseTarget),
+                        .annotations = {},
+                    }));
+                },
+                [&](const frontend::SemanticReturnTerminator& returnTerminator) {
+                    std::optional<koopa_ir::Value> value;
+                    if (returnTerminator.value.has_value()) {
+                        value = state.generateSemanticValue(*returnTerminator.value);
+                    }
+                    state.setTerminator(state.m_program->alloc<
+                        koopa_ir::ReturnTerminator>(koopa_ir::ReturnTerminator {
+                        .sourcePos = {},
+                        .value = std::move(value),
+                        .annotations = {},
+                    }));
+                });
+        }
+
+        void generateDecl(frontend::Decl decl)
+        {
+            auto& state = *this;
+            MATCH(decl)
+            WITH(
+                [&](Ptr<ConstDecl> declAlt) {
+                    const auto& constDecl = declAlt(state.m_ast);
+                    for (const auto constDef : constDecl.constDef) {
+                        const auto& parsedConstDef = constDef(state.m_ast);
+                        const auto& symbol = requireSymbolForIdentifier(
+                            parsedConstDef.identifier, *state.m_semanticInfo,
+                            "const declarator is missing its symbol binding");
+                        const auto& type = symbol.object().m_type;
+                        if (state.m_semanticInfo
+                                ->findAlias(parsedConstDef.identifier)
+                                .has_value()
+                            && type.isScalar()) {
+                            const auto& constInitVal
+                                = parsedConstDef.constInitVal(state.m_ast);
+                            MATCH(constInitVal.kind)
+                            WITH(
+                                [&](Ref<Exp> initAlt) {
+                                    state.bindAlias(parsedConstDef.identifier,
+                                        state.generateExp(initAlt));
+                                },
+                                [&](const auto&) {
+                                    throw std::runtime_error(
+                                        "scalar const initializer should be a scalar expression");
+                                });
+                            continue;
+                        }
+
+                        const std::string allocName
+                            = state.makeUniqueLocalName(symbol);
+                        (void)state.emitAlloc(type, allocName);
+                        state.m_storageBySymbolId[symbol.m_id] = allocName;
+
+                        if (type.isArray()) {
+                            auto scalarExprs = flattenArrayInitializer(state.m_ast,
+                                parsedConstDef.constInitVal.ref(), type);
+                            size_t nextScalarIndex = 0;
+                            state.generateLocalArrayInitializer(
+                                makeIrSymbol(allocName), type, scalarExprs,
+                                nextScalarIndex);
+                            continue;
+                        }
+
+                        const auto& constInitVal
+                            = parsedConstDef.constInitVal(state.m_ast);
+                        MATCH(constInitVal.kind)
+                        WITH(
+                            [&](Ref<Exp> initAlt) {
+                                auto storeRef = state.m_program->alloc<
+                                    koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                                    .sourcePos = {},
+                                    .value = toStoreValue(
+                                        state.generateExp(initAlt)),
+                                    .destination = makeIrSymbol(allocName),
+                                    .annotations = {},
+                                });
+                                state.pushStatement(storeRef);
+                            },
+                            [&](const auto&) { });
+                    }
+                },
+                [&](Ptr<VarDecl> declAlt) {
+                    const auto& varDecl = declAlt(state.m_ast);
+                    for (const auto varDef : varDecl.varDef) {
+                        const auto& resolvedVarDef = varDef(state.m_ast);
+                        const auto& symbol = requireSymbolForIdentifier(
+                            resolvedVarDef.identifier, *state.m_semanticInfo,
+                            "var declarator is missing its symbol binding");
+                        const auto& type = symbol.object().m_type;
+                        if (state.m_semanticInfo
+                                ->findAlias(resolvedVarDef.identifier)
+                                .has_value()
+                            && type.isScalar()) {
+                            if (resolvedVarDef.initVal) {
+                                const auto& initVal
+                                    = resolvedVarDef.initVal(state.m_ast);
+                                MATCH(initVal.kind)
+                                WITH(
+                                    [&](Ref<Exp> initAlt) {
+                                        state.bindAlias(
+                                            resolvedVarDef.identifier,
+                                            state.generateExp(initAlt));
+                                    },
+                                    [&](const auto&) {
+                                        throw std::runtime_error(
+                                            "scalar var initializer should be a scalar expression");
+                                    });
+                            } else {
+                                state.bindAlias(resolvedVarDef.identifier,
+                                    koopa_ir::UndefValue {});
+                            }
+                            continue;
+                        }
+
+                        const std::string allocName
+                            = state.makeUniqueLocalName(symbol);
+                        (void)state.emitAlloc(type, allocName);
+                        state.m_storageBySymbolId[symbol.m_id] = allocName;
+                        if (!resolvedVarDef.initVal) {
+                            continue;
+                        }
+                        if (type.isArray()) {
+                            auto scalarExprs = flattenArrayInitializer(state.m_ast,
+                                resolvedVarDef.initVal.ref(), type);
+                            size_t nextScalarIndex = 0;
+                            state.generateLocalArrayInitializer(
+                                makeIrSymbol(allocName), type, scalarExprs,
+                                nextScalarIndex);
+                            continue;
+                        }
+
                         const auto& initVal = resolvedVarDef.initVal(state.m_ast);
                         MATCH(initVal.kind)
                         WITH(
                             [&](Ref<Exp> initAlt) {
-                                state.bindAlias(resolvedVarDef.identifier,
-                                    generateExp(initAlt));
-                            },
-                            [&](const auto&) {
-                                throw std::runtime_error(
-                                    "scalar var initializer should be a scalar expression");
-                            });
-                    } else {
-                        state.bindAlias(resolvedVarDef.identifier,
-                            UndefValue::get(
-                                ::yesod::koopa::lowerSemanticType(type, false)));
-                    }
-                    continue;
-                }
-                auto* alloc = AllocValue::get(
-                    ::yesod::koopa::lowerSemanticType(type, false),
-                    makeUniqueLocalName(symbol));
-                state.m_currentBasicBlock->pushInst(alloc);
-                state.m_storageBySymbolId[symbol.m_id] = alloc;
-                if (resolvedVarDef.initVal) {
-                    if (type.isArray()) {
-                        auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                            resolvedVarDef.initVal.ref(), type);
-                        size_t nextScalarIndex = 0;
-                        generateLocalArrayInitializer(
-                            alloc, type, scalarExprs, nextScalarIndex);
-                    } else {
-                        const auto& initVal
-                            = resolvedVarDef.initVal(state.m_ast);
-                        MATCH(initVal.kind)
-                        WITH(
-                            [&](Ref<Exp> initAlt) {
-                                auto* initValue = generateExp(initAlt);
-                                state.m_currentBasicBlock->pushInst(
-                                    StoreValue::get(initValue, alloc));
+                                auto storeRef = state.m_program->alloc<
+                                    koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                                    .sourcePos = {},
+                                    .value = toStoreValue(
+                                        state.generateExp(initAlt)),
+                                    .destination = makeIrSymbol(allocName),
+                                    .annotations = {},
+                                });
+                                state.pushStatement(storeRef);
                             },
                             [&](const auto&) { });
                     }
+                });
+        }
+
+        void generateAssignStmt(Ptr<AssignStmt> assignStmt)
+        {
+            const auto& parsedAssignStmt = assignStmt(m_ast);
+            const auto& lValExp = parsedAssignStmt.lval(m_ast);
+            MATCH(lValExp.kind)
+            WITH(
+                [&](Exp::LVal expAlt) {
+                    if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
+                        && expAlt.indices.empty()) {
+                        bindAlias(expAlt.identifier,
+                            generateExp(parsedAssignStmt.exp));
+                        return;
+                    }
+                    const auto address = generateLValueAddress(expAlt);
+                    auto storeRef
+                        = m_program->alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                            .sourcePos = {},
+                            .value = toStoreValue(
+                                generateExp(parsedAssignStmt.exp)),
+                            .destination = address.symbol,
+                            .annotations = {},
+                        });
+                    pushStatement(storeRef);
+                },
+                [&](const auto&) {
+                    throw std::runtime_error(
+                        "assignment lhs is not an lvalue expression");
+                });
+        }
+
+        void generateExpStmt(Ptr<ExpStmt> expStmt)
+        {
+            const auto& parsedExpStmt = expStmt(m_ast);
+            if (parsedExpStmt.exp) {
+                (void)generateExp(parsedExpStmt.exp.ref());
+            }
+        }
+
+        [[nodiscard]] koopa_ir::Value generateExp(Ref<Exp> exp)
+        {
+            if (const auto constantValue = m_semanticInfo->findConstantValue(exp);
+                constantValue.has_value()) {
+                const auto semanticType = m_semanticInfo->findExpType(exp);
+                return koopa_ir::IntegerLiteral {
+                    .sourcePos = {},
+                    .value = semanticType.has_value() && isMintType(*semanticType)
+                        ? static_cast<int32_t>(encodeMintConstant(*constantValue))
+                        : *constantValue,
+                };
+            }
+
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> koopa_ir::Value {
+                    if (expAlt.op == BinaryOpKeyword::orOr
+                        || expAlt.op == BinaryOpKeyword::andAnd) {
+                        return generateBooleanAsInt(exp);
+                    }
+                    return generateBinaryExpValue(expAlt);
+                },
+                [&](Exp::Unary expAlt) -> koopa_ir::Value {
+                    return generateUnaryExpValue(expAlt);
+                },
+                [&](Exp::Cast expAlt) -> koopa_ir::Value {
+                    auto value = generateExp(expAlt.value);
+                    const auto operandType
+                        = m_semanticInfo->findExpType(expAlt.value);
+                    if (!operandType.has_value()
+                        || operandType->kind == SemanticTypeKind::array
+                        || operandType->kind == SemanticTypeKind::voidType) {
+                        return value;
+                    }
+                    const bool targetIsMint
+                        = expAlt.targetType == BTypeKeyword::mintKeyword;
+                    if (targetIsMint
+                        && operandType->kind == SemanticTypeKind::integer) {
+                        return emitCall(requireMintHelper(MintHelper::fromInt),
+                            { std::move(value) }, true);
+                    }
+                    if (!targetIsMint
+                        && operandType->kind == SemanticTypeKind::mint) {
+                        return emitCall(requireMintHelper(MintHelper::toInt),
+                            { std::move(value) }, true);
+                    }
+                    return value;
+                },
+                [&](Exp::Call expAlt) -> koopa_ir::Value {
+                    const auto& symbol = requireSymbolForIdentifier(expAlt.funcName,
+                        *m_semanticInfo,
+                        "call target is missing a symbol binding");
+                    const auto functionIt = m_functionBySymbolId.find(symbol.m_id);
+                    if (functionIt == m_functionBySymbolId.end()) {
+                        throw std::runtime_error(
+                            "call target is missing a lowered function binding");
+                    }
+                    std::vector<koopa_ir::Value> args;
+                    args.reserve(expAlt.params.size());
+                    for (const auto arg_nn : expAlt.params) {
+                        args.push_back(generateExp(arg_nn));
+                    }
+                    return emitCall(functionIt->second, std::move(args),
+                        symbol.function().m_returnType.kind
+                            != SemanticTypeKind::voidType);
+                },
+                [&](Exp::LVal expAlt) -> koopa_ir::Value {
+                    if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
+                        && expAlt.indices.empty()) {
+                        return requireAliasValue(expAlt.identifier,
+                            "scalar lvalue is missing an SSA alias value");
+                    }
+                    auto address = generateLValueAddress(expAlt);
+                    const auto expType = m_semanticInfo->findExpType(exp);
+                    if (expType.has_value() && expType->isArray()) {
+                        if (address.pointeeType.isArray()) {
+                            return emitGetElementPointer(
+                                address.symbol,
+                                koopa_ir::IntegerLiteral {
+                                    .sourcePos = {},
+                                    .value = 0,
+                                });
+                        }
+                        return address.symbol;
+                    }
+                    return emitLoad(address.symbol);
+                },
+                [&](Exp::Number expAlt) -> koopa_ir::Value {
+                    return koopa_ir::IntegerLiteral {
+                        .sourcePos = {},
+                        .value = expAlt.value,
+                    };
+                });
+        }
+
+        [[nodiscard]] koopa_ir::Value generateBinaryExpValue(
+            const Exp::Binary& binaryExp)
+        {
+            auto lhs = generateExp(binaryExp.lhs);
+            auto rhs = generateExp(binaryExp.rhs);
+            const auto lhsType = m_semanticInfo->findExpType(binaryExp.lhs);
+            if (lhsType.has_value() && isMintType(*lhsType)) {
+                switch (binaryExp.op) {
+                case BinaryOpKeyword::plus:
+                    return emitCall(requireMintHelper(MintHelper::add),
+                        { std::move(lhs), std::move(rhs) }, true);
+                case BinaryOpKeyword::minus:
+                    return emitCall(requireMintHelper(MintHelper::sub),
+                        { std::move(lhs), std::move(rhs) }, true);
+                case BinaryOpKeyword::star:
+                    return emitCall(requireMintHelper(MintHelper::mul),
+                        { std::move(lhs), std::move(rhs) }, true);
+                case BinaryOpKeyword::slash:
+                    return emitCall(requireMintHelper(MintHelper::div),
+                        { std::move(lhs), std::move(rhs) }, true);
+                case BinaryOpKeyword::less:
+                case BinaryOpKeyword::greater:
+                case BinaryOpKeyword::lessEqual:
+                case BinaryOpKeyword::greaterEqual:
+                case BinaryOpKeyword::equal:
+                case BinaryOpKeyword::notEqual:
+                    lhs = emitCall(requireMintHelper(MintHelper::toInt),
+                        { std::move(lhs) }, true);
+                    rhs = emitCall(requireMintHelper(MintHelper::toInt),
+                        { std::move(rhs) }, true);
+                    break;
+                case BinaryOpKeyword::percent:
+                    throw std::runtime_error(
+                        "mint modulo expressions should be rejected semantically");
+                case BinaryOpKeyword::andAnd:
+                case BinaryOpKeyword::orOr:
+                    throw std::runtime_error(
+                        "short-circuit binary expression should lower through boolean branching");
                 }
             }
-        }, );
-}
-
-void FunctionGenerator::generateStmt(Stmt stmt)
-{
-    MATCH(stmt)
-    WITH([&](Ptr<IfStmt> stmtAlt) { generateIfStmt(stmtAlt); },
-        [&](Ptr<WhileStmt> stmtAlt) { generateWhileStmt(stmtAlt); },
-        [&](Ptr<BreakStmt> stmtAlt) { generateBreakStmt(stmtAlt); },
-        [&](Ptr<ContinueStmt> stmtAlt) { generateContinueStmt(stmtAlt); },
-        [&](Ptr<AssignStmt> stmtAlt) { generateAssignStmt(stmtAlt); },
-        [&](Ptr<Block> stmtAlt) { generateBlock(stmtAlt); },
-        [&](Ptr<ReturnStmt> stmtAlt) { (void)generateReturnStmt(stmtAlt); },
-        [&](Ptr<ExpStmt> stmtAlt) { generateExpStmt(stmtAlt); });
-}
-
-void FunctionGenerator::generateIfStmt(Ptr<IfStmt> ifStmt)
-{
-    auto& state = *this;
-    const auto& parsedIfStmt = node(ifStmt, state, "if statement is null");
-    auto* thenBlock = createBasicBlock("if_then");
-    BasicBlock* elseBlock = nullptr;
-    BasicBlock* contBlock = nullptr;
-
-    bool hasElse = MATCH(parsedIfStmt.elseBody) WITH(
-        [&](Ref<Block> block) { return !block(state.m_ast).items.empty(); },
-        [&](const auto&) { return true; }, );
-    if (hasElse) {
-        elseBlock = createBasicBlock("if_else");
-        contBlock = createBasicBlock("if_end");
-    } else {
-        contBlock = createBasicBlock("if_end");
-        elseBlock = contBlock;
-    }
-
-    generateBooleanBranch(parsedIfStmt.condition, *thenBlock, *elseBlock);
-
-    state.m_currentBasicBlock = thenBlock;
-    generateStmt(parsedIfStmt.thenBody);
-    if (!blockHasTerminator(*state.m_currentBasicBlock)) {
-        state.m_currentBasicBlock->pushInst(JumpValue::get(contBlock, { }));
-    }
-
-    if (hasElse) {
-        state.m_currentBasicBlock = elseBlock;
-        generateStmt(parsedIfStmt.elseBody);
-        if (!blockHasTerminator(*state.m_currentBasicBlock)) {
-            state.m_currentBasicBlock->pushInst(JumpValue::get(contBlock, { }));
+            return emitBinary(lowerBinaryOpToIr(binaryExp.op), std::move(lhs),
+                std::move(rhs));
         }
-    }
 
-    state.m_currentBasicBlock = contBlock;
-}
+        [[nodiscard]] koopa_ir::Value generateUnaryExpValue(
+            const Exp::Unary& unaryExp)
+        {
+            auto operand = generateExp(unaryExp.lhs);
+            const auto operandType = m_semanticInfo->findExpType(unaryExp.lhs);
+            if (operandType.has_value() && isMintType(*operandType)) {
+                switch (unaryExp.op) {
+                case UnaryOpKeyword::plus:
+                    return operand;
+                case UnaryOpKeyword::minus:
+                    return emitCall(requireMintHelper(MintHelper::sub),
+                        { koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                            std::move(operand) },
+                        true);
+                case UnaryOpKeyword::bang:
+                    return emitBinary(koopa_ir::BinaryOp::eq,
+                        koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                        std::move(operand));
+                }
+            }
 
-void FunctionGenerator::generateWhileStmt(Ptr<WhileStmt> whileStmt)
-{
-    auto& state = *this;
-    const auto& parsedWhileStmt
-        = node(whileStmt, state, "while statement is null");
-    auto* condBlock = createBasicBlock("while_cond");
-    auto* bodyBlock = createBasicBlock("while_body");
-    auto* endBlock = createBasicBlock("while_end");
+            switch (unaryExp.op) {
+            case UnaryOpKeyword::plus:
+                return emitBinary(koopa_ir::BinaryOp::add,
+                    koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                    std::move(operand));
+            case UnaryOpKeyword::minus:
+                return emitBinary(koopa_ir::BinaryOp::sub,
+                    koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                    std::move(operand));
+            case UnaryOpKeyword::bang:
+                return emitBinary(koopa_ir::BinaryOp::eq,
+                    koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                    std::move(operand));
+            }
+            throw std::runtime_error("unsupported unary operator");
+        }
 
-    state.m_currentBasicBlock->pushInst(JumpValue::get(condBlock, { }));
+        [[nodiscard]] koopa_ir::Value generateBooleanAsInt(Ref<Exp> exp)
+        {
+            const std::string resultName = makeTempName(m_nextTempId);
+            (void)emitAlloc(SemanticType::makeInteger(), resultName);
+            auto zeroStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
+                koopa_ir::StoreStmt {
+                    .sourcePos = {},
+                    .value = koopa_ir::IntegerLiteral {
+                        .sourcePos = {},
+                        .value = 0,
+                    },
+                    .destination = makeIrSymbol(resultName),
+                    .annotations = {},
+                });
+            pushStatement(zeroStoreRef);
 
-    state.m_loopBlocksByWhileStmt[whileStmt] = FunctionGenerator::LoopBlocks {
-        .m_condBlock_nn = condBlock,
-        .m_endBlock_nn = endBlock,
+            auto trueBlock = createBasicBlock("bool_true");
+            auto falseBlock = createBasicBlock("bool_false");
+            auto contBlock = createBasicBlock("bool_end");
+
+            generateBooleanBranch(exp, trueBlock, falseBlock);
+
+            m_currentBasicBlock = trueBlock;
+            auto trueStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
+                koopa_ir::StoreStmt {
+                    .sourcePos = {},
+                    .value = koopa_ir::IntegerLiteral {
+                        .sourcePos = {},
+                        .value = 1,
+                    },
+                    .destination = makeIrSymbol(resultName),
+                    .annotations = {},
+                });
+            pushStatement(trueStoreRef);
+            setTerminator(m_program->alloc<koopa_ir::JumpTerminator>(
+                koopa_ir::JumpTerminator {
+                    .sourcePos = {},
+                    .target = (*m_program)[contBlock].label,
+                    .args = {},
+                    .annotations = {},
+                }));
+
+            m_currentBasicBlock = falseBlock;
+            auto falseStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
+                koopa_ir::StoreStmt {
+                    .sourcePos = {},
+                    .value = koopa_ir::IntegerLiteral {
+                        .sourcePos = {},
+                        .value = 0,
+                    },
+                    .destination = makeIrSymbol(resultName),
+                    .annotations = {},
+                });
+            pushStatement(falseStoreRef);
+            setTerminator(m_program->alloc<koopa_ir::JumpTerminator>(
+                koopa_ir::JumpTerminator {
+                    .sourcePos = {},
+                    .target = (*m_program)[contBlock].label,
+                    .args = {},
+                    .annotations = {},
+                }));
+
+            m_currentBasicBlock = contBlock;
+            return emitLoad(makeIrSymbol(resultName));
+        }
+
+        void generateBooleanBranch(Ref<Exp> exp,
+            Ref<koopa_ir::BasicBlock> trueBlock,
+            Ref<koopa_ir::BasicBlock> falseBlock)
+        {
+            if (const auto constantValue = m_semanticInfo->findConstantValue(exp);
+                constantValue.has_value()) {
+                setTerminator(m_program->alloc<koopa_ir::BranchTerminator>(
+                    koopa_ir::BranchTerminator {
+                        .sourcePos = {},
+                        .condition = koopa_ir::IntegerLiteral {
+                            .sourcePos = {},
+                            .value = *constantValue,
+                        },
+                        .trueTarget = (*m_program)[trueBlock].label,
+                        .trueArgs = {},
+                        .falseTarget = (*m_program)[falseBlock].label,
+                        .falseArgs = {},
+                        .annotations = {},
+                    }));
+                return;
+            }
+
+            const auto& parsedExp = exp(m_ast);
+            MATCH(parsedExp.kind)
+            WITH(
+                [&](Exp::Binary expAlt) {
+                    if (expAlt.op == BinaryOpKeyword::orOr) {
+                        generateLogicalOrBranch(expAlt, trueBlock, falseBlock);
+                        return;
+                    }
+                    if (expAlt.op == BinaryOpKeyword::andAnd) {
+                        generateLogicalAndBranch(expAlt, trueBlock, falseBlock);
+                        return;
+                    }
+
+                    setTerminator(m_program->alloc<koopa_ir::BranchTerminator>(
+                        koopa_ir::BranchTerminator {
+                            .sourcePos = {},
+                            .condition = generateBinaryExpValue(expAlt),
+                            .trueTarget = (*m_program)[trueBlock].label,
+                            .trueArgs = {},
+                            .falseTarget = (*m_program)[falseBlock].label,
+                            .falseArgs = {},
+                            .annotations = {},
+                        }));
+                },
+                [&](const auto&) {
+                    setTerminator(m_program->alloc<koopa_ir::BranchTerminator>(
+                        koopa_ir::BranchTerminator {
+                            .sourcePos = {},
+                            .condition = generateExp(exp),
+                            .trueTarget = (*m_program)[trueBlock].label,
+                            .trueArgs = {},
+                            .falseTarget = (*m_program)[falseBlock].label,
+                            .falseArgs = {},
+                            .annotations = {},
+                        }));
+                });
+        }
+
+        void generateLogicalOrBranch(const Exp::Binary& binaryExp,
+            Ref<koopa_ir::BasicBlock> trueBlock,
+            Ref<koopa_ir::BasicBlock> falseBlock)
+        {
+            const auto nextOperandBlock = createBasicBlock("lor_rhs");
+            generateBooleanBranch(binaryExp.lhs, trueBlock, nextOperandBlock);
+            m_currentBasicBlock = nextOperandBlock;
+            generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
+        }
+
+        void generateLogicalAndBranch(const Exp::Binary& binaryExp,
+            Ref<koopa_ir::BasicBlock> trueBlock,
+            Ref<koopa_ir::BasicBlock> falseBlock)
+        {
+            const auto nextOperandBlock = createBasicBlock("land_rhs");
+            generateBooleanBranch(binaryExp.lhs, nextOperandBlock, falseBlock);
+            m_currentBasicBlock = nextOperandBlock;
+            generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
+        }
+
+        void generateLocalArrayInitializer(const koopa_ir::Symbol& address,
+            const SemanticType& type,
+            const std::vector<Ptr<Exp>>& scalarExprs, size_t& nextScalarIndex)
+        {
+            if (!type.isArray()) {
+                koopa_ir::Value initValue = koopa_ir::IntegerLiteral {
+                    .sourcePos = {},
+                    .value = 0,
+                };
+                if (nextScalarIndex < scalarExprs.size()) {
+                    const auto exp_nn = scalarExprs[nextScalarIndex++];
+                    if (exp_nn) {
+                        initValue = generateExp(exp_nn.ref());
+                    }
+                }
+                auto storeRef
+                    = m_program->alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                        .sourcePos = {},
+                        .value = toStoreValue(initValue),
+                        .destination = address,
+                        .annotations = {},
+                    });
+                pushStatement(storeRef);
+                return;
+            }
+
+            if (type.m_elementType == nullptr) {
+                throw std::runtime_error("array type is missing element type");
+            }
+
+            for (int32_t i = 0; i < type.m_arrayLength; ++i) {
+                const auto elementAddress = requireSymbolValue(
+                    emitGetElementPointer(address,
+                        koopa_ir::IntegerLiteral {
+                            .sourcePos = {},
+                            .value = i,
+                        }),
+                    "array element address should lower to a symbol");
+                generateLocalArrayInitializer(
+                    elementAddress, *type.m_elementType, scalarExprs,
+                    nextScalarIndex);
+            }
+        }
+
+        [[nodiscard]] IrAddress generateLValueAddress(const Exp::LVal& lVal)
+        {
+            const auto& symbol = requireSymbolForIdentifier(lVal.identifier,
+                *m_semanticInfo, "lvalue is missing a symbol binding");
+            const auto storageIt = m_storageBySymbolId.find(symbol.m_id);
+            if (storageIt == m_storageBySymbolId.end()) {
+                throw std::runtime_error("lvalue references undefined storage");
+            }
+
+            auto address = makeIrSymbol(storageIt->second);
+            auto currentType = symbol.object().m_type;
+            auto pointeeType = currentType;
+            bool indexesDecayedArrayParameter = false;
+            if (currentType.isArray() && currentType.m_arrayLength == -1) {
+                address = requireSymbolValue(emitLoad(address),
+                    "decayed array parameter load should produce a symbol");
+                if (currentType.m_elementType == nullptr) {
+                    throw std::runtime_error(
+                        "array parameter type is missing element type");
+                }
+                pointeeType = *currentType.m_elementType;
+                indexesDecayedArrayParameter = true;
+            }
+
+            for (const auto index_nn : lVal.indices) {
+                auto indexValue = generateExp(index_nn);
+                if (indexesDecayedArrayParameter) {
+                    address = requireSymbolValue(
+                        emitGetPointer(address, std::move(indexValue)),
+                        "pointer arithmetic should produce a symbol");
+                    indexesDecayedArrayParameter = false;
+                } else if (pointeeType.isArray()) {
+                    address = requireSymbolValue(
+                        emitGetElementPointer(address, std::move(indexValue)),
+                        "array element address should produce a symbol");
+                    if (pointeeType.m_elementType == nullptr) {
+                        throw std::runtime_error(
+                            "array pointee type is missing element type");
+                    }
+                    pointeeType = *pointeeType.m_elementType;
+                } else {
+                    address = requireSymbolValue(
+                        emitGetPointer(address, std::move(indexValue)),
+                        "pointer arithmetic should produce a symbol");
+                }
+
+                if (currentType.isArray() && currentType.m_elementType != nullptr) {
+                    currentType = *currentType.m_elementType;
+                }
+            }
+
+            return IrAddress {
+                .symbol = address,
+                .pointeeType = pointeeType,
+            };
+        }
     };
 
-    state.m_currentBasicBlock = condBlock;
-    generateBooleanBranch(parsedWhileStmt.condition, *bodyBlock, *endBlock);
-
-    state.m_currentBasicBlock = bodyBlock;
-    generateStmt(parsedWhileStmt.body);
-    if (!blockHasTerminator(*state.m_currentBasicBlock)) {
-        state.m_currentBasicBlock->pushInst(JumpValue::get(condBlock, { }));
-    }
-
-    state.m_loopBlocksByWhileStmt.erase(whileStmt);
-    state.m_currentBasicBlock = endBlock;
-}
-
-void FunctionGenerator::generateBreakStmt(Ptr<BreakStmt> breakStmt)
-{
-    auto& state = *this;
-    const auto loop = state.m_semanticInfo->findLoop(breakStmt.ref());
-    if (!loop.has_value()) {
-        throw std::runtime_error("break statement references no loop binding");
-    }
-    const auto loopIt = state.m_loopBlocksByWhileStmt.find(*loop);
-    if (loopIt == state.m_loopBlocksByWhileStmt.end()) {
-        throw std::runtime_error(
-            "break statement references unknown loop target");
-    }
-    state.m_currentBasicBlock->pushInst(
-        JumpValue::get(loopIt->second.m_endBlock_nn, { }));
-}
-
-void FunctionGenerator::generateContinueStmt(Ptr<ContinueStmt> continueStmt)
-{
-    auto& state = *this;
-    const auto loop = state.m_semanticInfo->findLoop(continueStmt.ref());
-    if (!loop.has_value()) {
-        throw std::runtime_error(
-            "continue statement references no loop binding");
-    }
-    const auto loopIt = state.m_loopBlocksByWhileStmt.find(*loop);
-    if (loopIt == state.m_loopBlocksByWhileStmt.end()) {
-        throw std::runtime_error(
-            "continue statement references unknown loop target");
-    }
-    state.m_currentBasicBlock->pushInst(
-        JumpValue::get(loopIt->second.m_condBlock_nn, { }));
-}
-
-void FunctionGenerator::generateAssignStmt(Ptr<AssignStmt> assignStmt)
-{
-    auto& state = *this;
-    const auto& parsedAssignStmt
-        = node(assignStmt, state, "assignment is null");
-    const auto& lValExp = parsedAssignStmt.lval(state.m_ast);
-    MATCH(lValExp.kind)
-    WITH(
-        [&](Exp::LVal expAlt) {
-            if (state.m_semanticInfo->findAlias(expAlt.identifier).has_value()
-                && expAlt.indices.empty()) {
-                state.bindAlias(expAlt.identifier, generateExp(parsedAssignStmt.exp));
-                return;
-            }
-            auto* address = generateLValueAddress(expAlt);
-            auto* value = generateExp(parsedAssignStmt.exp);
-            state.m_currentBasicBlock->pushInst(
-                StoreValue::get(value, address));
-        },
-        [&](const auto&) {
-            throw std::runtime_error(
-                "assignment lhs is not an lvalue expression");
-        }, );
-}
-
-void FunctionGenerator::generateExpStmt(Ptr<ExpStmt> expStmt)
-{
-    auto& state = *this;
-    const auto& parsedExpStmt
-        = node(expStmt, state, "expression statement is null");
-    if (parsedExpStmt.exp) {
-        (void)generateExp(parsedExpStmt.exp.ref());
-    }
-}
-
-ReturnValue* FunctionGenerator::generateReturnStmt(Ptr<ReturnStmt> returnStmt)
-{
-    auto& state = *this;
-    const auto& parsedReturnStmt
-        = node(returnStmt, state, "return statement is null");
-    auto* value = parsedReturnStmt.exp
-        ? generateExp(parsedReturnStmt.exp.ref())
-        : nullptr;
-    auto* returnValue = ReturnValue::get(value);
-    state.m_currentBasicBlock->pushInst(returnValue);
-    return returnValue;
-}
-
-Value* FunctionGenerator::generateExp(Ref<Exp> exp)
-{
-    auto& state = *this;
-    if (const auto constantValue = state.m_semanticInfo->findConstantValue(exp);
-        constantValue.has_value()) {
-        const auto semanticType = state.m_semanticInfo->findExpType(exp);
-        return IntegerValue::get(semanticType.has_value()
-                    && isMintType(*semanticType)
-                ? static_cast<int32_t>(encodeMintConstant(*constantValue))
-                : *constantValue);
-    }
-    const auto& parsedExp = exp(state.m_ast);
-    return MATCH(parsedExp.kind) WITH(
-        [&](Exp::Binary expAlt) -> Value* {
-            if (expAlt.op == BinaryOpKeyword::orOr
-                || expAlt.op == BinaryOpKeyword::andAnd) {
-                return generateBooleanAsInt(exp);
-            }
-            return generateBinaryExpValue(expAlt);
-        },
-        [&](Exp::Unary expAlt) -> Value* {
-            return generateUnaryExpValue(expAlt);
-        },
-        [&](Exp::Cast expAlt) -> Value* {
-            auto* value = generateExp(expAlt.value);
-            const auto operandType = state.m_semanticInfo->findExpType(expAlt.value);
-            if (!operandType.has_value() || operandType->kind == SemanticTypeKind::array
-                || operandType->kind == SemanticTypeKind::voidType) {
-                return value;
-            }
-            const bool targetIsMint = expAlt.targetType == BTypeKeyword::mintKeyword;
-            if (targetIsMint && operandType->kind == SemanticTypeKind::integer) {
-                return state.emitCall(
-                    state.requireMintHelper(MintHelper::fromInt), { value });
-            }
-            if (!targetIsMint && operandType->kind == SemanticTypeKind::mint) {
-                return state.emitCall(
-                    state.requireMintHelper(MintHelper::toInt), { value });
-            }
-            return value;
-        },
-        [&](Exp::Call expAlt) -> Value* {
-            const auto& symbol = requireSymbolForIdentifier(expAlt.funcName,
-                *state.m_semanticInfo,
-                "call target is missing a symbol binding");
-            const auto functionIt
-                = state.m_functionBySymbolId.find(symbol.m_id);
-            if (functionIt == state.m_functionBySymbolId.end()) {
-                throw std::runtime_error(
-                    "call target is missing a lowered function binding");
-            }
-            std::vector<Value*> args;
-            args.reserve(expAlt.params.size());
-            for (const auto arg_nn : expAlt.params) {
-                args.push_back(generateExp(arg_nn));
-            }
-            return state.emitCall(functionIt->second, std::move(args));
-        },
-        [&](Exp::LVal expAlt) -> Value* {
-            if (state.m_semanticInfo->findAlias(expAlt.identifier).has_value()
-                && expAlt.indices.empty()) {
-                return state.requireAliasValue(expAlt.identifier,
-                    "scalar lvalue is missing an SSA alias value");
-            }
-            auto* address = generateLValueAddress(expAlt);
-            const auto expType = state.m_semanticInfo->findExpType(exp);
-            if (expType.has_value() && expType->isArray()) {
-                const auto pointeeType
-                    = dynamic_cast<PointerType*>(address->getVType())
-                          ->getPointeeType();
-                if (pointeeType->isArrayType()) {
-                    auto* decayed = GetElemPtrValue::get(address,
-                        IntegerValue::get(0), makeTempName(state.m_nextTempId));
-                    state.m_currentBasicBlock->pushInst(decayed);
-                    return decayed;
-                }
-                return address;
-            }
-            auto* loadValue
-                = LoadValue::get(address, makeTempName(state.m_nextTempId));
-            state.m_currentBasicBlock->pushInst(loadValue);
-            return loadValue;
-        },
-        [&](Exp::Number expAlt) -> Value* { return generateNumber(expAlt); });
-}
-
-Value* FunctionGenerator::generateBinaryExpValue(const Exp::Binary& binaryExp)
-{
-    auto& state = *this;
-    auto* lhs = generateExp(binaryExp.lhs);
-    auto* rhs = generateExp(binaryExp.rhs);
-    const auto lhsType = state.m_semanticInfo->findExpType(binaryExp.lhs);
-    if (lhsType.has_value() && isMintType(*lhsType)) {
-        switch (binaryExp.op) {
-        case BinaryOpKeyword::plus:
-            return state.emitCall(
-                state.requireMintHelper(MintHelper::add), { lhs, rhs });
-        case BinaryOpKeyword::minus:
-            return state.emitCall(
-                state.requireMintHelper(MintHelper::sub), { lhs, rhs });
-        case BinaryOpKeyword::star:
-            return state.emitCall(
-                state.requireMintHelper(MintHelper::mul), { lhs, rhs });
-        case BinaryOpKeyword::slash:
-            return state.emitCall(
-                state.requireMintHelper(MintHelper::div), { lhs, rhs });
-        case BinaryOpKeyword::less:
-        case BinaryOpKeyword::greater:
-        case BinaryOpKeyword::lessEqual:
-        case BinaryOpKeyword::greaterEqual:
-        case BinaryOpKeyword::equal:
-        case BinaryOpKeyword::notEqual:
-            lhs = state.emitCall(
-                state.requireMintHelper(MintHelper::toInt), { lhs });
-            rhs = state.emitCall(
-                state.requireMintHelper(MintHelper::toInt), { rhs });
-            break;
-        case BinaryOpKeyword::percent:
-            throw std::runtime_error(
-                "mint modulo expressions should be rejected semantically");
-        case BinaryOpKeyword::andAnd:
-        case BinaryOpKeyword::orOr:
-            throw std::runtime_error("short-circuit binary expression should lower "
-                                     "through boolean branching");
-        }
-    }
-
-    koopa_raw_binary_op op = KOOPA_RBO_ADD;
-    switch (binaryExp.op) {
-    case BinaryOpKeyword::star:
-        op = KOOPA_RBO_MUL;
-        break;
-    case BinaryOpKeyword::slash:
-        op = KOOPA_RBO_DIV;
-        break;
-    case BinaryOpKeyword::percent:
-        op = KOOPA_RBO_MOD;
-        break;
-    case BinaryOpKeyword::plus:
-        op = KOOPA_RBO_ADD;
-        break;
-    case BinaryOpKeyword::minus:
-        op = KOOPA_RBO_SUB;
-        break;
-    case BinaryOpKeyword::less:
-        op = KOOPA_RBO_LT;
-        break;
-    case BinaryOpKeyword::greater:
-        op = KOOPA_RBO_GT;
-        break;
-    case BinaryOpKeyword::lessEqual:
-        op = KOOPA_RBO_LE;
-        break;
-    case BinaryOpKeyword::greaterEqual:
-        op = KOOPA_RBO_GE;
-        break;
-    case BinaryOpKeyword::equal:
-        op = KOOPA_RBO_EQ;
-        break;
-    case BinaryOpKeyword::notEqual:
-        op = KOOPA_RBO_NOT_EQ;
-        break;
-    case BinaryOpKeyword::andAnd:
-    case BinaryOpKeyword::orOr:
-        throw std::runtime_error("short-circuit binary expression should lower "
-                                 "through boolean branching");
-    }
-    return generateBinaryValue(
-        op, lhs, rhs, *state.m_currentBasicBlock, state.m_nextTempId);
-}
-
-Value* FunctionGenerator::generateUnaryExpValue(const Exp::Unary& unaryExp)
-{
-    auto& state = *this;
-    auto* operand = generateExp(unaryExp.lhs);
-    const auto operandType = state.m_semanticInfo->findExpType(unaryExp.lhs);
-    if (operandType.has_value() && isMintType(*operandType)) {
-        switch (unaryExp.op) {
-        case UnaryOpKeyword::plus:
-            return operand;
-        case UnaryOpKeyword::minus:
-            return state.emitCall(state.requireMintHelper(MintHelper::sub),
-                { IntegerValue::get(0), operand });
-        case UnaryOpKeyword::bang:
-            return generateBinaryValue(KOOPA_RBO_EQ, IntegerValue::get(0),
-                operand, *state.m_currentBasicBlock, state.m_nextTempId);
-        }
-    }
-
-    switch (unaryExp.op) {
-    case UnaryOpKeyword::plus:
-        return generateBinaryValue(KOOPA_RBO_ADD, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock, state.m_nextTempId);
-    case UnaryOpKeyword::minus:
-        return generateBinaryValue(KOOPA_RBO_SUB, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock, state.m_nextTempId);
-    case UnaryOpKeyword::bang:
-        return generateBinaryValue(KOOPA_RBO_EQ, IntegerValue::get(0), operand,
-            *state.m_currentBasicBlock, state.m_nextTempId);
-    }
-    throw std::runtime_error("unsupported unary operator");
-}
-
-Value* FunctionGenerator::generateBooleanAsInt(Ref<Exp> exp)
-{
-    auto& state = *this;
-    auto* resultStorage
-        = AllocValue::get(Int32Type::get(), makeTempName(state.m_nextTempId));
-    state.m_currentBasicBlock->pushInst(resultStorage);
-    state.m_currentBasicBlock->pushInst(
-        StoreValue::get(IntegerValue::get(0), resultStorage));
-
-    auto* trueBlock = createBasicBlock("bool_true");
-    auto* falseBlock = createBasicBlock("bool_false");
-    auto* contBlock = createBasicBlock("bool_end");
-
-    generateBooleanBranch(exp, *trueBlock, *falseBlock);
-
-    trueBlock->pushInst(StoreValue::get(IntegerValue::get(1), resultStorage));
-    trueBlock->pushInst(JumpValue::get(contBlock, { }));
-    falseBlock->pushInst(StoreValue::get(IntegerValue::get(0), resultStorage));
-    falseBlock->pushInst(JumpValue::get(contBlock, { }));
-
-    state.m_currentBasicBlock = contBlock;
-    auto* loadValue
-        = LoadValue::get(resultStorage, makeTempName(state.m_nextTempId));
-    contBlock->pushInst(loadValue);
-    return loadValue;
-}
-
-void FunctionGenerator::generateBooleanBranch(
-    Ref<Exp> exp, BasicBlock& trueBlock, BasicBlock& falseBlock)
-{
-    auto& state = *this;
-    if (const auto constantValue = state.m_semanticInfo->findConstantValue(exp);
-        constantValue.has_value()) {
-        state.m_currentBasicBlock->pushInst(
-            BranchValue::get(IntegerValue::get(*constantValue), &trueBlock, { },
-                &falseBlock, { }));
-        return;
-    }
-
-    const auto& parsedExp = exp(state.m_ast);
-    MATCH(parsedExp.kind)
-    WITH(
-        [&](Exp::Binary expAlt) {
-            if (expAlt.op == BinaryOpKeyword::orOr) {
-                generateLogicalOrBranch(expAlt, trueBlock, falseBlock);
-                return;
-            }
-            if (expAlt.op == BinaryOpKeyword::andAnd) {
-                generateLogicalAndBranch(expAlt, trueBlock, falseBlock);
-                return;
-            }
-
-            auto* value = generateBinaryExpValue(expAlt);
-            state.m_currentBasicBlock->pushInst(
-                BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
-        },
-        [&](const auto&) {
-            auto* value = generateExp(exp);
-            state.m_currentBasicBlock->pushInst(
-                BranchValue::get(value, &trueBlock, { }, &falseBlock, { }));
+    [[nodiscard]] Ref<koopa_ir::FunctionDecl> createMintHelperDeclIr(
+        koopa_ir::Program& program, MintHelper helper)
+    {
+        const size_t paramCount = helper == MintHelper::fromInt
+                || helper == MintHelper::toInt
+            ? 1
+            : 2;
+        std::vector<koopa_ir::Type> paramTypes(
+            paramCount, koopa_ir::Type { koopa_ir::I32Type {} });
+        return program.alloc<koopa_ir::FunctionDecl>(koopa_ir::FunctionDecl {
+            .sourcePos = {},
+            .name = makeIrSymbol(makeFunctionName(mintHelperName(helper))),
+            .paramTypes = std::move(paramTypes),
+            .returnType = koopa_ir::Type { koopa_ir::I32Type {} },
+            .annotations = {},
         });
-}
+    }
 
-void FunctionGenerator::generateLogicalOrBranch(
-    const Exp::Binary& binaryExp, BasicBlock& trueBlock, BasicBlock& falseBlock)
-{
-    auto& state = *this;
-    auto* nextOperandBlock = createBasicBlock("lor_rhs");
-    generateBooleanBranch(binaryExp.lhs, trueBlock, *nextOperandBlock);
-    state.m_currentBasicBlock = nextOperandBlock;
-    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
-}
+    [[nodiscard]] Ref<koopa_ir::FunctionDecl> createExternalFunctionDeclIr(
+        koopa_ir::Program& program, const SemanticSymbol& symbol)
+    {
+        const auto& funcInfo = symbol.function();
+        std::vector<koopa_ir::Type> paramTypes;
+        paramTypes.reserve(funcInfo.m_paramTypes.size());
+        for (const auto& paramType : funcInfo.m_paramTypes) {
+            paramTypes.push_back(lowerSemanticTypeToIr(program, paramType));
+        }
+        return program.alloc<koopa_ir::FunctionDecl>(koopa_ir::FunctionDecl {
+            .sourcePos = {},
+            .name = makeIrSymbol(makeFunctionName(symbol.name)),
+            .paramTypes = std::move(paramTypes),
+            .returnType = lowerOptionalReturnTypeToIr(
+                program, funcInfo.m_returnType),
+            .annotations = {},
+        });
+    }
 
-void FunctionGenerator::generateLogicalAndBranch(
-    const Exp::Binary& binaryExp, BasicBlock& trueBlock, BasicBlock& falseBlock)
-{
-    auto& state = *this;
-    auto* nextOperandBlock = createBasicBlock("land_rhs");
-    generateBooleanBranch(binaryExp.lhs, *nextOperandBlock, falseBlock);
-    state.m_currentBasicBlock = nextOperandBlock;
-    generateBooleanBranch(binaryExp.rhs, trueBlock, falseBlock);
-}
-
-Type* Generator::lowerSemanticType(
-    const SemanticType& type, bool decayUnsizedArrayToPointer) const
-{
-    return ::yesod::koopa::lowerSemanticType(type, decayUnsizedArrayToPointer);
-}
-
-Value* Generator::generateGlobalArrayInitializer(const SemanticType& type,
-    const std::vector<Ptr<Exp>>& scalarExprs, size_t& nextScalarIndex,
-    const SemanticInfo& semanticInfo) const
-{
-    if (!type.isArray()) {
-        if (nextScalarIndex >= scalarExprs.size()) {
-            return IntegerValue::get(0);
+    void pruneUnreachableBlocks(koopa_ir::Program& program,
+        Ref<koopa_ir::FunctionDef> functionRef,
+        Ref<koopa_ir::BasicBlock> entryBlockRef)
+    {
+        auto& function = program[functionRef];
+        std::unordered_map<std::string, Ref<koopa_ir::BasicBlock>>
+            blockByLabel;
+        blockByLabel.reserve(function.blocks.size());
+        for (const auto blockRef : function.blocks) {
+            blockByLabel.insert_or_assign(
+                program[blockRef].label.spelling, blockRef);
         }
 
-        const auto exp_nn = scalarExprs[nextScalarIndex++];
-        if (!exp_nn) {
-            return IntegerValue::get(0);
+        std::vector<Ref<koopa_ir::BasicBlock>> worklist { entryBlockRef };
+        std::unordered_set<Ref<koopa_ir::BasicBlock>> reachableBlocks;
+        reachableBlocks.reserve(function.blocks.size());
+        while (!worklist.empty()) {
+            const auto blockRef = worklist.back();
+            worklist.pop_back();
+            if (!reachableBlocks.insert(blockRef).second) {
+                continue;
+            }
+
+            MATCH(program[blockRef].terminator)
+            WITH(
+                [&](Ref<koopa_ir::BranchTerminator> terminatorRef) {
+                    const auto& terminator = program[terminatorRef];
+                    if (const auto trueIt = blockByLabel.find(
+                            terminator.trueTarget.spelling);
+                        trueIt != blockByLabel.end()) {
+                        worklist.push_back(trueIt->second);
+                    }
+                    if (const auto falseIt = blockByLabel.find(
+                            terminator.falseTarget.spelling);
+                        falseIt != blockByLabel.end()) {
+                        worklist.push_back(falseIt->second);
+                    }
+                },
+                [&](Ref<koopa_ir::JumpTerminator> terminatorRef) {
+                    const auto& terminator = program[terminatorRef];
+                    if (const auto targetIt
+                        = blockByLabel.find(terminator.target.spelling);
+                        targetIt != blockByLabel.end()) {
+                        worklist.push_back(targetIt->second);
+                    }
+                },
+                [&](Ref<koopa_ir::ReturnTerminator>) { });
         }
 
-        const auto constantValue = semanticInfo.findConstantValue(exp_nn.ref());
-        if (!constantValue.has_value()) {
+        std::erase_if(function.blocks,
+            [&](Ref<koopa_ir::BasicBlock> blockRef) {
+                return !reachableBlocks.contains(blockRef);
+            });
+    }
+
+    [[nodiscard]] Ref<koopa_ir::FunctionDef> createFunctionDefIr(
+        koopa_ir::Program& program, const AST& ast, Ptr<FuncDef> funcDef,
+        const SemanticInfo& semanticInfo)
+    {
+        const auto& parsedFuncDef = funcDef(ast);
+        const auto& identifier = parsedFuncDef.identifier(ast);
+        const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
+            semanticInfo, "function definition is missing a symbol binding");
+        const auto& funcInfo = symbol.function();
+        std::vector<Ref<koopa_ir::FunctionParameter>> params;
+        params.reserve(funcInfo.m_paramTypes.size());
+        for (size_t i = 0; i < funcInfo.m_paramTypes.size(); ++i) {
+            params.push_back(program.alloc<koopa_ir::FunctionParameter>(
+                koopa_ir::FunctionParameter {
+                    .sourcePos = {},
+                    .symbol = makeIrSymbol("%arg" + std::to_string(i)),
+                    .type = lowerSemanticTypeToIr(program, funcInfo.m_paramTypes[i]),
+                    .annotations = {},
+                }));
+        }
+        return program.alloc<koopa_ir::FunctionDef>(koopa_ir::FunctionDef {
+            .sourcePos = {},
+            .name = makeIrSymbol(makeFunctionName(identifier.name)),
+            .params = std::move(params),
+            .returnType = lowerOptionalReturnTypeToIr(program, funcInfo.m_returnType),
+            .blocks = {},
+            .annotations = {},
+        });
+    }
+
+    void generateGlobalDeclIr(frontend::Decl decl, koopa_ir::Program& program,
+        const AST& ast, const SemanticInfo& semanticInfo,
+        std::unordered_map<int32_t, std::string>& globalStorageBySymbolId)
+    {
+        MATCH(decl)
+        WITH(
+            [&](Ptr<ConstDecl> declAlt) {
+                const auto& constDecl = declAlt(ast);
+                for (const auto constDef_nn : constDecl.constDef) {
+                    const auto& constDef = constDef_nn(ast);
+                    const auto& symbol = requireSymbolForIdentifier(
+                        constDef.identifier, semanticInfo,
+                        "global const is missing its symbol binding");
+                    if (!symbol.isObject()) {
+                        continue;
+                    }
+                    const auto& type = symbol.object().m_type;
+                    if (!type.isArray()) {
+                        continue;
+                    }
+                    auto scalarExprs = flattenArrayInitializer(
+                        ast, constDef.constInitVal.ref(), type);
+                    size_t nextScalarIndex = 0;
+                    auto globalRef = program.alloc<koopa_ir::GlobalMemoryDef>(
+                        koopa_ir::GlobalMemoryDef {
+                            .sourcePos = {},
+                            .name = makeIrSymbol(makeGlobalName(symbol.name)),
+                            .allocType = lowerSemanticTypeToIr(program, type, false),
+                            .initializer = generateGlobalInitializerToIr(program, type,
+                                scalarExprs, nextScalarIndex, semanticInfo),
+                            .annotations = {},
+                        });
+                    program.items.push_back(globalRef);
+                    globalStorageBySymbolId[symbol.m_id] = makeGlobalName(symbol.name);
+                }
+            },
+            [&](Ptr<VarDecl> declAlt) {
+                const auto& varDecl = declAlt(ast);
+                for (const auto varDef_nn : varDecl.varDef) {
+                    const auto& varDef = varDef_nn(ast);
+                    const auto& symbol = requireSymbolForIdentifier(
+                        varDef.identifier, semanticInfo,
+                        "global variable is missing its symbol binding");
+                    const auto& type = symbol.object().m_type;
+                    koopa_ir::Initializer initValue = koopa_ir::ZeroInit {};
+                    if (type.isArray() && varDef.initVal) {
+                        auto scalarExprs = flattenArrayInitializer(
+                            ast, varDef.initVal.ref(), type);
+                        size_t nextScalarIndex = 0;
+                        initValue = generateGlobalInitializerToIr(program, type,
+                            scalarExprs, nextScalarIndex, semanticInfo);
+                    } else if (varDef.initVal) {
+                        const auto& initVal = varDef.initVal(ast);
+                        MATCH(initVal.kind)
+                        WITH(
+                            [&](Ref<Exp> initAlt) {
+                                const auto constantValue
+                                    = semanticInfo.findConstantValue(initAlt);
+                                if (!constantValue.has_value()) {
+                                    throw std::runtime_error(
+                                        "global variable initializer must be constant");
+                                }
+                                initValue = koopa_ir::IntegerLiteral {
+                                    .sourcePos = {},
+                                    .value = isMintType(type)
+                                        ? static_cast<int32_t>(
+                                              encodeMintConstant(*constantValue))
+                                        : *constantValue,
+                                };
+                            },
+                            [&](const auto&) { });
+                    }
+                    auto globalRef = program.alloc<koopa_ir::GlobalMemoryDef>(
+                        koopa_ir::GlobalMemoryDef {
+                            .sourcePos = {},
+                            .name = makeIrSymbol(makeGlobalName(symbol.name)),
+                            .allocType = lowerSemanticTypeToIr(program, type, false),
+                            .initializer = std::move(initValue),
+                            .annotations = {},
+                        });
+                    program.items.push_back(globalRef);
+                    globalStorageBySymbolId[symbol.m_id] = makeGlobalName(symbol.name);
+                }
+            });
+    }
+
+    void generateFuncDefIr(koopa_ir::Program& program, const AST& ast,
+        Ptr<FuncDef> funcDef, const SemanticInfo& semanticInfo,
+        const std::unordered_map<int32_t, std::string>& globalStorageBySymbolId,
+        const std::unordered_map<int32_t, std::string>& functionBySymbolId,
+        const std::unordered_map<std::string, std::string>& mintHelperByName,
+        Ref<koopa_ir::FunctionDef> functionRef)
+    {
+        const auto& parsedFuncDef = funcDef(ast);
+        const auto* controlFlow = semanticInfo.findControlFlow(funcDef.ref());
+        if (controlFlow == nullptr) {
             throw std::runtime_error(
-                "global array initializer element must be constant");
+                "function definition is missing semantic control flow");
         }
-        return IntegerValue::get(isMintType(type)
-            ? static_cast<int32_t>(encodeMintConstant(*constantValue))
-            : *constantValue);
+
+        const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
+            semanticInfo, "function definition is missing a symbol binding");
+        const auto* ssa = semanticInfo.findSSA(funcDef.ref());
+        if (ssa == nullptr) {
+            throw std::runtime_error(
+                "function definition is missing semantic SSA");
+        }
+
+        auto placeholderRef = program.alloc<koopa_ir::ReturnTerminator>(
+            koopa_ir::ReturnTerminator {
+                .sourcePos = {},
+                .value = std::nullopt,
+                .annotations = {},
+            });
+        IrFunctionGenerator state {
+            .m_ast = ast,
+            .m_semanticInfo = &semanticInfo,
+            .m_program = &program,
+            .m_function = functionRef,
+            .m_currentBasicBlock = program.alloc<koopa_ir::BasicBlock>(
+                koopa_ir::BasicBlock {
+                    .sourcePos = {},
+                    .label = makeIrSymbol("%placeholder"),
+                    .params = {},
+                    .statements = {},
+                    .terminator = placeholderRef,
+                    .annotations = {},
+                }),
+            .m_storageBySymbolId = globalStorageBySymbolId,
+            .m_ssa = ssa,
+            .m_functionBySymbolId = functionBySymbolId,
+            .m_mintHelperByName = mintHelperByName,
+            .m_functionReturnType = symbol.function().m_returnType,
+        };
+
+        auto& function = program[functionRef];
+        function.blocks.clear();
+        const auto& controlFlowArena = semanticInfo.controlFlowArena();
+        for (const auto semanticBlockRef : controlFlow->blocks) {
+            const auto& semanticBlock = semanticBlockRef(controlFlowArena);
+            auto blockRef = program.alloc<koopa_ir::BasicBlock>(
+                koopa_ir::BasicBlock {
+                    .sourcePos = {},
+                    .label = makeIrSymbol("%" + semanticBlock.nameHint),
+                    .params = {},
+                    .statements = {},
+                    .terminator = placeholderRef,
+                    .annotations = {},
+                });
+            const auto ssaBlockIt = ssa->m_blockInfoByBlock.find(semanticBlockRef);
+            if (ssaBlockIt == ssa->m_blockInfoByBlock.end()) {
+                throw std::runtime_error(
+                    "semantic basic block is missing SSA info");
+            }
+            auto& block = program[blockRef];
+            for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
+                const auto& param = ssaBlockIt->second.m_params[i];
+                const auto* blockParamSymbol
+                    = semanticInfo.findSymbolById(param.m_symbolId);
+                if (blockParamSymbol == nullptr || !blockParamSymbol->isObject()) {
+                    throw std::runtime_error(
+                        "basic block parameter is missing object type");
+                }
+                block.params.push_back(program.alloc<koopa_ir::BlockParameter>(
+                    koopa_ir::BlockParameter {
+                        .sourcePos = {},
+                        .symbol = makeIrSymbol(block.label.spelling + "_arg"
+                            + std::to_string(i)),
+                        .type = lowerSemanticTypeToIr(program,
+                            blockParamSymbol->object().m_type, false),
+                        .annotations = {},
+                    }));
+            }
+            state.m_basicBlockBySemanticBlock.insert_or_assign(
+                semanticBlockRef, blockRef);
+            function.blocks.push_back(blockRef);
+        }
+
+        const auto entryBlockRef
+            = state.m_basicBlockBySemanticBlock.at(controlFlow->entryBlock);
+        state.m_currentBasicBlock = entryBlockRef;
+        for (size_t i = 0; i < parsedFuncDef.funcFParams.size(); ++i) {
+            const auto& funcFParam = parsedFuncDef.funcFParams[i];
+            const auto& paramSymbol = requireSymbolForIdentifier(
+                funcFParam.identifier, semanticInfo,
+                "function parameter is missing a symbol binding");
+            if (semanticInfo.findAlias(funcFParam.identifier).has_value()) {
+                state.bindAlias(
+                    funcFParam.identifier, program[function.params[i]].symbol);
+                continue;
+            }
+            const std::string allocName = state.makeUniqueLocalName(paramSymbol);
+            (void)state.emitAlloc(paramSymbol.object().m_type, allocName);
+            auto storeRef = program.alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                .sourcePos = {},
+                .value = program[function.params[i]].symbol,
+                .destination = makeIrSymbol(allocName),
+                .annotations = {},
+            });
+            state.pushStatement(storeRef);
+            state.m_storageBySymbolId[paramSymbol.m_id] = allocName;
+        }
+
+        for (const auto semanticBlockRef : controlFlow->blocks) {
+            state.m_currentBasicBlock
+                = state.m_basicBlockBySemanticBlock.at(semanticBlockRef);
+            state.generateSemanticBlock(semanticBlockRef);
+        }
+
+        pruneUnreachableBlocks(program, functionRef, entryBlockRef);
     }
 
-    if (type.m_elementType == nullptr) {
-        throw std::runtime_error("array type is missing element type");
-    }
+    std::unique_ptr<koopa_ir::Program> generateIrProgram(const AST& ast,
+        Ptr<CompUnit> compUnit, const SemanticInfo& semanticInfo)
+    {
+        auto program = std::make_unique<koopa_ir::Program>();
+        const auto& parsedCompUnit = compUnit(ast);
+        std::unordered_map<int32_t, std::string> globalStorageBySymbolId;
+        std::unordered_map<int32_t, std::string> functionBySymbolId;
+        std::unordered_map<std::string, std::string> mintHelperByName;
+        std::unordered_map<int32_t, size_t> symbolUseCount;
+        std::unordered_set<int32_t> definedFunctionSymbolIds;
 
-    std::vector<Value*> elements;
-    elements.reserve(static_cast<size_t>(type.m_arrayLength));
-    for (int32_t i = 0; i < type.m_arrayLength; ++i) {
-        elements.push_back(generateGlobalArrayInitializer(
-            *type.m_elementType, scalarExprs, nextScalarIndex, semanticInfo));
-    }
-
-    auto* arrayType = lowerSemanticType(type, false);
-    if (elements.empty()) {
-        return ZeroInitValue::get(arrayType);
-    }
-    if (std::all_of(elements.begin(), elements.end(), [](const Value* element) {
-            return isZeroInitializerValue(element);
-        })) {
-        return ZeroInitValue::get(arrayType);
-    }
-    return AggregateValue::get(std::move(elements), arrayType);
-}
-
-void FunctionGenerator::generateLocalArrayInitializer(Value* address,
-    const SemanticType& type, const std::vector<Ptr<Exp>>& scalarExprs,
-    size_t& nextScalarIndex)
-{
-    auto& state = *this;
-    if (!type.isArray()) {
-        Value* initValue = IntegerValue::get(0);
-        if (nextScalarIndex < scalarExprs.size()) {
-            const auto exp_nn = scalarExprs[nextScalarIndex++];
-            if (exp_nn) {
-                initValue = generateExp(exp_nn.ref());
+        MintRuntimeUseVisitor mintRuntimeUseVisitor(ast);
+        mintRuntimeUseVisitor.traverse(compUnit.ref());
+        if (mintRuntimeUseVisitor.usesMintRuntime()) {
+            for (const auto helper : { MintHelper::add, MintHelper::sub,
+                     MintHelper::mul, MintHelper::div, MintHelper::fromInt,
+                     MintHelper::toInt }) {
+                const auto helperName = makeFunctionName(mintHelperName(helper));
+                mintHelperByName.emplace(mintHelperName(helper), helperName);
+                program->items.push_back(createMintHelperDeclIr(*program, helper));
             }
         }
-        state.m_currentBasicBlock->pushInst(
-            StoreValue::get(initValue, address));
-        return;
-    }
 
-    if (type.m_elementType == nullptr) {
-        throw std::runtime_error("array type is missing element type");
-    }
+        for (const auto& [identifier_nn, symbolId] :
+            semanticInfo.symbolIdByIdentifier()) {
+            (void)identifier_nn;
+            ++symbolUseCount[symbolId];
+        }
 
-    for (int32_t i = 0; i < type.m_arrayLength; ++i) {
-        auto* elementAddress = GetElemPtrValue::get(
-            address, IntegerValue::get(i), makeTempName(state.m_nextTempId));
-        state.m_currentBasicBlock->pushInst(elementAddress);
-        generateLocalArrayInitializer(
-            elementAddress, *type.m_elementType, scalarExprs, nextScalarIndex);
-    }
-}
+        for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
+            MATCH(topLevelItem)
+            WITH(
+                [&](Ref<FuncDef> topLevelAlt) {
+                    const auto& funcDef = topLevelAlt(ast);
+                    if (funcDef.body == nullptr) {
+                        return;
+                    }
+                    const auto* functionSymbol
+                        = semanticInfo.findSymbol(funcDef.identifier);
+                    if (functionSymbol == nullptr) {
+                        throw std::runtime_error(
+                            "function declaration missing semantic symbol during lowering");
+                    }
+                    definedFunctionSymbolIds.insert(functionSymbol->m_id);
+                },
+                [&](const auto&) { });
+        }
 
-Value* FunctionGenerator::generateLValueAddress(const Exp::LVal& lVal)
-{
-    auto& state = *this;
-    const auto& symbol = requireSymbolForIdentifier(lVal.identifier,
-        *state.m_semanticInfo, "lvalue is missing a symbol binding");
-    const auto storageIt = state.m_storageBySymbolId.find(symbol.m_id);
-    if (storageIt == state.m_storageBySymbolId.end()) {
-        throw std::runtime_error("lvalue references undefined storage");
-    }
-
-    auto* address = storageIt->second;
-    auto currentType = symbol.object().m_type;
-    bool indexesDecayedArrayParameter = false;
-    if (currentType.isArray() && currentType.m_arrayLength == -1) {
-        auto* loadedPointer
-            = LoadValue::get(address, makeTempName(state.m_nextTempId));
-        state.m_currentBasicBlock->pushInst(loadedPointer);
-        address = loadedPointer;
-        indexesDecayedArrayParameter = true;
-    }
-
-    for (const auto index_nn : lVal.indices) {
-        auto* indexValue = generateExp(index_nn);
-        Value* nextAddress = nullptr;
-        if (indexesDecayedArrayParameter) {
-            nextAddress = GetPtrValue::get(
-                address, indexValue, makeTempName(state.m_nextTempId));
-        } else {
-            const auto pointeeType
-                = dynamic_cast<PointerType*>(address->getVType())
-                      ->getPointeeType();
-            if (pointeeType->isArrayType()) {
-                nextAddress = GetElemPtrValue::get(
-                    address, indexValue, makeTempName(state.m_nextTempId));
-            } else {
-                nextAddress = GetPtrValue::get(
-                    address, indexValue, makeTempName(state.m_nextTempId));
+        for (const auto& [symbolId, symbol] : semanticInfo.symbolById()) {
+            if (!symbol.isFunction()) {
+                continue;
             }
+            if (definedFunctionSymbolIds.contains(symbolId)) {
+                continue;
+            }
+            if (symbolUseCount[symbolId] <= 1) {
+                continue;
+            }
+
+            auto [it, inserted]
+                = functionBySymbolId.try_emplace(symbolId, makeFunctionName(symbol.name));
+            if (!inserted) {
+                continue;
+            }
+            program->items.push_back(createExternalFunctionDeclIr(*program, symbol));
         }
-        state.m_currentBasicBlock->pushInst(nextAddress);
-        address = nextAddress;
-        if (currentType.isArray() && currentType.m_elementType != nullptr) {
-            currentType = *currentType.m_elementType;
+
+        for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
+            MATCH(topLevelItem)
+            WITH(
+                [&](Decl topLevelAlt) {
+                    generateGlobalDeclIr(topLevelAlt, *program, ast, semanticInfo,
+                        globalStorageBySymbolId);
+                },
+                [&](Ptr<FuncDef> topLevelAlt) {
+                    const auto& symbol = requireSymbolForIdentifier(
+                        topLevelAlt(ast).identifier, semanticInfo,
+                        "function declaration is missing a symbol binding");
+                    auto [functionIt, inserted] = functionBySymbolId.try_emplace(
+                        symbol.m_id, makeFunctionName(symbol.name));
+                    if (!inserted) {
+                        return;
+                    }
+                    if (topLevelAlt(ast).body == nullptr) {
+                        program->items.push_back(
+                            createExternalFunctionDeclIr(*program, symbol));
+                    }
+                });
         }
-        indexesDecayedArrayParameter = false;
-    }
 
-    return address;
-}
-
-BasicBlock* FunctionGenerator::createBasicBlock(const std::string& stem)
-{
-    auto& state = *this;
-    auto* basicBlock = BasicBlock::createNonEntry(
-        "%" + stem + "_" + std::to_string(state.m_nextBlockId++));
-    state.m_function->pushBB(basicBlock);
-    return basicBlock;
-}
-
-bool FunctionGenerator::blockHasTerminator(const BasicBlock& basicBlock) const
-{
-    return basicBlock.getNumInsts() > 0
-        && basicBlock.getInst(basicBlock.getNumInsts() - 1)
-               ->canTerminateBlock();
-}
-
-void FunctionGenerator::finalizeBasicBlock(
-    BasicBlock& basicBlock, BasicBlock& endBlock) const
-{
-    if (blockHasTerminator(basicBlock)) {
-        return;
-    }
-
-    basicBlock.pushInst(JumpValue::get(&endBlock, { }));
-}
-
-std::string FunctionGenerator::makeUniqueLocalName(const SemanticSymbol& symbol)
-{
-    auto& state = *this;
-    const std::string baseName = "%" + normalizeIdentifierStem(symbol.name);
-    if (state.m_usedSymbolNames.insert(baseName).second) {
-        return baseName;
-    }
-
-    int32_t suffix = 1;
-    while (true) {
-        const std::string candidate = baseName + "_" + std::to_string(suffix++);
-        if (state.m_usedSymbolNames.insert(candidate).second) {
-            return candidate;
+        for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
+            MATCH(topLevelItem)
+            WITH(
+                [&](Ref<FuncDef> topLevelAlt) {
+                    if (topLevelAlt(ast).body == nullptr) {
+                        return;
+                    }
+                    auto functionRef = createFunctionDefIr(
+                        *program, ast, topLevelAlt.ptr(), semanticInfo);
+                    program->items.push_back(functionRef);
+                    generateFuncDefIr(*program, ast, topLevelAlt.ptr(), semanticInfo,
+                        globalStorageBySymbolId, functionBySymbolId,
+                        mintHelperByName, functionRef);
+                },
+                [&](const auto&) { });
         }
-    }
-}
 
-int64_t FunctionGenerator::aliasKey(const frontend::SemanticSsaAlias& alias)
-{
-    return (static_cast<int64_t>(alias.m_symbolId) << 32)
-        ^ static_cast<uint32_t>(alias.m_version);
-}
+        return program;
+    }
 
-void FunctionGenerator::bindAlias(
-    Ref<frontend::Identifier> identifier, Value* value)
-{
-    const auto alias = m_semanticInfo->findAlias(identifier);
-    if (!alias.has_value()) {
-        throw std::runtime_error("identifier is missing semantic SSA alias");
-    }
-    m_valueByAliasKey[aliasKey(*alias)] = value;
-}
-
-Value* FunctionGenerator::requireAliasValue(
-    Ref<frontend::Identifier> identifier, const char* message) const
-{
-    const auto alias = m_semanticInfo->findAlias(identifier);
-    if (!alias.has_value()) {
-        throw std::runtime_error(message);
-    }
-    const auto valueIt = m_valueByAliasKey.find(aliasKey(*alias));
-    if (valueIt == m_valueByAliasKey.end()) {
-        throw std::runtime_error(message);
-    }
-    return valueIt->second;
-}
-
-std::vector<Value*> FunctionGenerator::edgeArgs(
-    Ref<frontend::SemanticBasicBlock> source,
-    Ref<frontend::SemanticBasicBlock> target) const
-{
-    const auto sourceIt = m_ssa->m_blockInfoByBlock.find(source);
-    if (sourceIt == m_ssa->m_blockInfoByBlock.end()) {
-        throw std::runtime_error("source block is missing SSA info");
-    }
-    const auto argsIt = sourceIt->second.m_outgoingArgsByTarget.find(target);
-    if (argsIt == sourceIt->second.m_outgoingArgsByTarget.end()) {
-        return { };
-    }
-    std::vector<Value*> values;
-    values.reserve(argsIt->second.size());
-    for (const auto& alias : argsIt->second) {
-        const auto valueIt = m_valueByAliasKey.find(aliasKey(alias));
-        if (valueIt == m_valueByAliasKey.end()) {
-            throw std::runtime_error("SSA edge argument is missing a value binding");
-        }
-        values.push_back(valueIt->second);
-    }
-    return values;
-}
+} // namespace
 
 } // namespace yesod::koopa

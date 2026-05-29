@@ -38,7 +38,7 @@ list(REMOVE_ITEM ALL_SOURCES ${MAIN_SRC})
 # core static library used by the compiler and tests
 add_library(core STATIC ${ALL_SOURCES})
 
-target_link_libraries(core koopa pthread dl)
+target_link_libraries(core pthread dl)
 
 # compiler executable links the library and provides its own main
 add_executable(compiler ${MAIN_SRC})

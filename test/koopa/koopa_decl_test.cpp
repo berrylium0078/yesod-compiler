@@ -30,13 +30,7 @@ void testDeclarationProgramValidatesWithKoopa()
 {
     auto program = generateProgram("int main(){const int seed = 4; int value = "
                                    "seed; value = value * 3; return value;}");
-    auto rawProgram = Program::dumpRaw(program.get());
-    koopa_program_t koopaProgram = nullptr;
-    const auto errorCode
-        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
-    require(errorCode == KOOPA_EC_SUCCESS,
-        "declaration-heavy generated raw program should be accepted by Koopa");
-    koopa_delete_program(koopaProgram);
+    requireProgramWellFormed(*program);
 }
 
 void testShadowedNamesGetUniqueKoopaStorage()

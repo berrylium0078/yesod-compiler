@@ -119,13 +119,7 @@ void testGeneratedProgramValidatesWithKoopa()
 {
     auto program = generateProgram(
         "int answer(){return !(1 + 2 * 3 <= 7 == 0 || 5 && 0);}");
-    auto rawProgram = Program::dumpRaw(program.get());
-    koopa_program_t koopaProgram = nullptr;
-    const auto errorCode
-        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
-    require(errorCode == KOOPA_EC_SUCCESS,
-        "generated raw program should be accepted by Koopa");
-    koopa_delete_program(koopaProgram);
+    requireProgramWellFormed(*program);
 }
 
 void testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply()
@@ -164,13 +158,7 @@ void testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply()
         "continuation should return the multiplication result");
     requireInteger(requireReturn(endBlock->getInst(0))->getVal(), 0);
 
-    auto rawProgram = Program::dumpRaw(program.get());
-    koopa_program_t koopaProgram = nullptr;
-    const auto errorCode
-        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
-    require(errorCode == KOOPA_EC_SUCCESS,
-        "logical-or arithmetic operand lowering should validate as raw Koopa");
-    koopa_delete_program(koopaProgram);
+    requireProgramWellFormed(*program);
 }
 
 } // namespace

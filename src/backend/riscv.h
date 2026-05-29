@@ -4,7 +4,12 @@
 #include <iosfwd>
 #include <map>
 #include <string>
-#include "koopa/mykoopa.h"
+
+namespace yesod::koopa {
+namespace ir {
+struct Program;
+}
+}
 
 namespace yesod::backend {
 
@@ -12,7 +17,8 @@ class RiscvGenerator {
   public:
     RiscvGenerator() = default;
 
-    void generate(const yesod::koopa::Program& program, std::ostream& output);
+    void generate(const yesod::koopa::ir::Program& program,
+      std::ostream& output);
     std::string genLabel(std::string hint);
   private:
     std::map<std::string, int> m_usedLabels;

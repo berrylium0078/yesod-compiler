@@ -335,13 +335,7 @@ void testNestedCallsAndBooleanShortCircuitLowerCorrectly()
     require(countBranchInstructions(*mainFunction) >= 4,
         "boolean short-circuit lowering should emit several branches in main");
 
-    auto rawProgram = Program::dumpRaw(program.get());
-    koopa_program_t koopaProgram = nullptr;
-    const auto errorCode
-        = koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram);
-    require(errorCode == KOOPA_EC_SUCCESS,
-        "nested-call and boolean-short-circuit lowering should validate as raw Koopa");
-    koopa_delete_program(koopaProgram);
+    requireProgramWellFormed(*program);
 }
 
 void testRecursiveFunctionCallsLowerAgainstOwnDeclaration()

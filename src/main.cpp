@@ -15,10 +15,11 @@
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
-#include "koopa/mykoopa.h"
+#include "koopa/ir.h"
 
 namespace {
-using namespace yesod::koopa;
+using yesod::koopa::Generator;
+namespace koopa_ir = yesod::koopa::ir;
 
 constexpr std::string_view kMintRuntimeSource = R"(typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -162,13 +163,27 @@ bool runCommand(const std::string& command)
     return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-bool programUsesMintRuntime(const Program& program)
+bool programUsesMintRuntime(const koopa_ir::Program& program)
 {
-    for (const auto* function : program.funcs()) {
-        for (const auto helperName : kMintHelperNames) {
-            if (function->getName() == helperName) {
-                return true;
-            }
+    for (const auto& item : program.items) {
+        bool usesHelper = false;
+        std::visit(
+            [&](auto itemRef) {
+                using Item = std::remove_cvref_t<decltype(program[itemRef])>;
+                if constexpr (std::same_as<Item, koopa_ir::FunctionDecl>
+                    || std::same_as<Item, koopa_ir::FunctionDef>) {
+                    const auto& function = program[itemRef];
+                    for (const auto helperName : kMintHelperNames) {
+                        if (function.name.spelling == helperName) {
+                            usesHelper = true;
+                            break;
+                        }
+                    }
+                }
+            },
+            item);
+        if (usesHelper) {
+            return true;
         }
     }
     return false;
@@ -346,21 +361,14 @@ static void printDiagnosticsAggregate(const std::string& inputPath,
     }
 }
 
-bool writeKoopaProgramToFile(const Program& program, const std::string& path)
+bool writeKoopaProgramToFile(
+    const koopa_ir::Program& program, const std::string& path)
 {
-    auto rawProgram = Program::dumpRaw(&program);
-    koopa_program_t koopaProgram = nullptr;
-    if (koopa_generate_raw_to_koopa(&rawProgram, &koopaProgram)
-        != KOOPA_EC_SUCCESS) {
-        return false;
-    }
-
-    const auto dumpResult = koopa_dump_to_file(koopaProgram, path.c_str());
-    koopa_delete_program(koopaProgram);
-    return dumpResult == KOOPA_EC_SUCCESS;
+    return writeTextFile(path, koopa_ir::serializeToKoopa(program));
 }
 
-bool writeLlvmProgramToFile(const Program& program, const std::string& path)
+bool writeLlvmProgramToFile(
+    const koopa_ir::Program& program, const std::string& path)
 {
     TempFile koopaFile(".koopa");
     TempFile llvmFile(".ll");
@@ -385,7 +393,7 @@ bool writeLlvmProgramToFile(const Program& program, const std::string& path)
 }
 
 bool writePlainRiscvProgramToFile(
-    const Program& program, const std::string& path)
+    const koopa_ir::Program& program, const std::string& path)
 {
     std::ofstream outputStream(path);
     if (!outputStream) {
@@ -397,7 +405,8 @@ bool writePlainRiscvProgramToFile(
     return outputStream.good();
 }
 
-bool writeRiscvProgramToFile(const Program& program, const std::string& path)
+bool writeRiscvProgramToFile(
+    const koopa_ir::Program& program, const std::string& path)
 {
     if (!programUsesMintRuntime(program)) {
         return writePlainRiscvProgramToFile(program, path);
@@ -467,21 +476,29 @@ int main(int argc, const char* argv[])
             return 1;
         }
 
-        Generator generator;
-        std::unique_ptr<Program> program(
-            generator.generate(semanticOutput.m_ast, semanticOutput.m_root,
-                semanticOutput.m_info));
         if (mode == "-koopa") {
+            Generator generator;
+            auto program = generator.generateIr(
+                semanticOutput.m_ast, semanticOutput.m_root,
+                semanticOutput.m_info);
             if (!writeKoopaProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate koopa IR" << std::endl;
                 return 1;
             }
         } else if (mode == "-llvm") {
+            Generator generator;
+            auto program = generator.generateIr(
+                semanticOutput.m_ast, semanticOutput.m_root,
+                semanticOutput.m_info);
             if (!writeLlvmProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate LLVM IR" << std::endl;
                 return 1;
             }
         } else {
+            Generator generator;
+            auto program = generator.generateIr(
+                semanticOutput.m_ast, semanticOutput.m_root,
+                semanticOutput.m_info);
             if (!writeRiscvProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate RISC-V assembly" << std::endl;
                 return 1;
