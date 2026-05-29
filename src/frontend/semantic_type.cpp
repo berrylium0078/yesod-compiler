@@ -46,6 +46,11 @@ namespace {
 
     constexpr int32_t kMintMod = 998244353;
 
+    struct ShiftFoldResult {
+        int32_t value = 0;
+        bool warnedOutOfRange = false;
+    };
+
     [[nodiscard]] int32_t normalizeMintValue(int64_t value)
     {
         value %= kMintMod;
@@ -118,6 +123,8 @@ namespace {
             return -operand;
         case UnaryOpKeyword::bang:
             return operand == 0 ? 1 : 0;
+        case UnaryOpKeyword::tilde:
+            return ~operand;
         }
         return std::nullopt;
     }
@@ -144,6 +151,41 @@ namespace {
             return static_cast<int32_t>(static_cast<int64_t>(lhs) - rhs);
         default:
             return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] std::optional<int32_t> applyBitwiseOp(
+        BinaryOpKeyword op, int32_t lhs, int32_t rhs)
+    {
+        switch (op) {
+        case BinaryOpKeyword::bitAnd:
+            return lhs & rhs;
+        case BinaryOpKeyword::bitXor:
+            return lhs ^ rhs;
+        case BinaryOpKeyword::bitOr:
+            return lhs | rhs;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] ShiftFoldResult applyShiftOp(
+        BinaryOpKeyword op, int32_t lhs, int32_t rhs)
+    {
+        const int32_t normalizedShift = ((rhs % 32) + 32) % 32;
+        switch (op) {
+        case BinaryOpKeyword::shl:
+            return ShiftFoldResult {
+                .value = static_cast<int32_t>(lhs << normalizedShift),
+                .warnedOutOfRange = rhs < 0 || rhs >= 32,
+            };
+        case BinaryOpKeyword::sar:
+            return ShiftFoldResult {
+                .value = static_cast<int32_t>(lhs >> normalizedShift),
+                .warnedOutOfRange = rhs < 0 || rhs >= 32,
+            };
+        default:
+            throw std::runtime_error("unsupported shift operator");
         }
     }
 
@@ -699,6 +741,44 @@ namespace detail {
                 }
             }
             break;
+        case BinaryOpKeyword::shl:
+        case BinaryOpKeyword::sar:
+        case BinaryOpKeyword::bitAnd:
+        case BinaryOpKeyword::bitXor:
+        case BinaryOpKeyword::bitOr:
+            lhs = normalizeToArithmetic(std::move(lhs));
+            rhs = normalizeToArithmetic(std::move(rhs));
+            if (lhs.m_type.kind != SemanticTypeKind::integer
+                || rhs.m_type.kind != SemanticTypeKind::integer) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "bitwise and shift operands must be integer values");
+                break;
+            }
+            binaryExp.m_type = SemanticType::makeInteger();
+            binaryExp.m_valueKind = ExpType::integer;
+            if (lhs.m_isConstant && rhs.m_isConstant) {
+                if (binary.op == BinaryOpKeyword::shl
+                    || binary.op == BinaryOpKeyword::sar) {
+                    const auto folded = applyShiftOp(
+                        binary.op, lhs.m_constantValue, rhs.m_constantValue);
+                    binaryExp.m_isConstant = true;
+                    binaryExp.m_constantValue = folded.value;
+                    if (folded.warnedOutOfRange) {
+                        recordDiagnostic<ShiftOperandOutOfRangeDiagnostic>(
+                            binary.rhs(m_ast).sourcePos.m_offset,
+                            "shift operand is outside [0, 32); constant folding applies modulo 32",
+                            DiagnosticSeverity::warning);
+                    }
+                } else {
+                    const auto folded = applyBitwiseOp(
+                        binary.op, lhs.m_constantValue, rhs.m_constantValue);
+                    if (folded.has_value()) {
+                        binaryExp.m_isConstant = true;
+                        binaryExp.m_constantValue = *folded;
+                    }
+                }
+            }
+            break;
         }
         return binaryExp;
     }
@@ -725,6 +805,17 @@ namespace detail {
             operand = normalizeToBoolean(std::move(operand));
         } else {
             operand = normalizeToArithmetic(std::move(operand));
+            if (unary.op == UnaryOpKeyword::tilde
+                && operand.m_type.kind != SemanticTypeKind::integer) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "bitwise not requires an integer operand");
+                return AnalyzedExp {
+                    .m_type = SemanticType::makeInteger(),
+                    .m_valueKind = ExpType::integer,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            }
         }
         if (operand.m_isConstant) {
             const auto folded = applyUnaryOp(unary.op, operand.m_constantValue);
@@ -732,9 +823,13 @@ namespace detail {
                 return AnalyzedExp {
                     .m_type = unary.op == UnaryOpKeyword::bang
                         ? SemanticType::makeBoolean()
+                        : unary.op == UnaryOpKeyword::tilde
+                        ? SemanticType::makeInteger()
                         : operand.m_type,
                     .m_valueKind = unary.op == UnaryOpKeyword::bang
                         ? ExpType::boolean
+                        : unary.op == UnaryOpKeyword::tilde
+                        ? ExpType::integer
                         : operand.m_type.valueKind(),
                     .m_isConstant = true,
                     .m_constantValue = unary.op == UnaryOpKeyword::minus
@@ -747,9 +842,12 @@ namespace detail {
         return AnalyzedExp {
             .m_type = unary.op == UnaryOpKeyword::bang
                 ? SemanticType::makeBoolean()
-                : operand.m_type,
-            .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
-                                                            : operand.m_type.valueKind(),
+                : unary.op == UnaryOpKeyword::tilde ? SemanticType::makeInteger()
+                                                    : operand.m_type,
+            .m_valueKind = unary.op == UnaryOpKeyword::bang
+                ? ExpType::boolean
+                : unary.op == UnaryOpKeyword::tilde ? ExpType::integer
+                                                    : operand.m_type.valueKind(),
             .m_isConstant = false,
             .m_constantValue = 0,
         };

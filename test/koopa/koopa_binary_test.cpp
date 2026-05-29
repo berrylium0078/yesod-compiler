@@ -122,6 +122,35 @@ void testGeneratedProgramValidatesWithKoopa()
     requireProgramWellFormed(*program);
 }
 
+void testBitwiseAndShiftOperatorsLowerToKoopa()
+{
+    auto program = generateProgram(
+        "int main(){int a = 6; int b = 2; return (~a ^ ((a << b) & 31)) | (32 >> b);}");
+    requireProgramWellFormed(*program);
+
+    const auto* function = requireOnlyFunction(*program);
+    const auto* entryBlock = requireEntryBlock(*function);
+    bool sawXor = false;
+    bool sawAnd = false;
+    bool sawShl = false;
+    bool sawSar = false;
+    for (size_t instIndex = 0; instIndex < entryBlock->getNumInsts(); ++instIndex) {
+        const auto* binary = dynamic_cast<const BinaryValue*>(
+            entryBlock->getInst(instIndex));
+        if (binary == nullptr) {
+            continue;
+        }
+        sawXor = sawXor || binary->getOp() == KOOPA_RBO_XOR;
+        sawAnd = sawAnd || binary->getOp() == KOOPA_RBO_AND;
+        sawShl = sawShl || binary->getOp() == KOOPA_RBO_SHL;
+        sawSar = sawSar || binary->getOp() == KOOPA_RBO_SAR;
+    }
+    require(sawXor, "bitwise xor lowering should produce a Koopa xor instruction");
+    require(sawAnd, "bitwise and lowering should produce a Koopa and instruction");
+    require(sawShl, "left shift lowering should produce a Koopa shl instruction");
+    require(sawSar, "right shift lowering should produce a Koopa sar instruction");
+}
+
 void testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply()
 {
     auto program = generateProgram(
@@ -171,6 +200,7 @@ int main()
     testLogicalAndShortCircuitsThroughBranchBlocks();
     testLogicalOrShortCircuitsThroughBranchBlocks();
     testGeneratedProgramValidatesWithKoopa();
+    testBitwiseAndShiftOperatorsLowerToKoopa();
     testLogicalOrUsedAsArithmeticOperandMaterializesBeforeMultiply();
     return 0;
 }

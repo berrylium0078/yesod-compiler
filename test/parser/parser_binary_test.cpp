@@ -72,6 +72,24 @@ struct ParserBinaryTest : ParserTestBase {
                     .exp.ref())
                 == 1,
             "logical and should bind tighter than logical or");
+
+        parseRoot("int b(){return 1 | 2 ^ 7 & 3 == 3 && 0;}");
+        require(
+            evaluateExp(extractReturnStmt(
+                firstFuncDef()(ast()).body(ast()).items.front())(
+                ast())
+                    .exp.ref())
+                == 0,
+            "bitwise and should bind tighter than xor, then or, all tighter than logical and");
+
+        parseRoot("int s(){return 1 + 2 << 3 < 25;}");
+        require(
+            evaluateExp(extractReturnStmt(
+                firstFuncDef()(ast()).body(ast()).items.front())(
+                ast())
+                    .exp.ref())
+                == 1,
+            "shift expressions should bind tighter than relational and looser than additive");
     }
 
     void testOrderedChoiceSensitiveOperators()
@@ -91,6 +109,30 @@ struct ParserBinaryTest : ParserTestBase {
         require(evaluateExp(returnStmt_nn(ast()).exp.ref()) == 1,
             "relational chains should stay left-associated under the generic "
             "binary tree");
+
+        parseRoot("int sh(){return 1 << 2 < 5;}");
+        const auto shiftReturnStmt_nn = extractReturnStmt(
+            firstFuncDef()(ast()).body(ast()).items.front());
+        const auto& shiftRootBinaryExp = requireBinaryExp(
+            shiftReturnStmt_nn(ast()).exp.ref());
+        const auto& shiftLhsBinaryExp = requireBinaryExp(shiftRootBinaryExp.lhs);
+
+        require(shiftRootBinaryExp.op == BinaryOpKeyword::less,
+            "< should still parse after << consumes the longer token");
+        require(shiftLhsBinaryExp.op == BinaryOpKeyword::shl,
+            "<< must be parsed before <");
+
+        parseRoot("int bit(){return 8 >> 1 | 1;}");
+        const auto bitReturnStmt_nn = extractReturnStmt(
+            firstFuncDef()(ast()).body(ast()).items.front());
+        const auto& bitRootBinaryExp = requireBinaryExp(
+            bitReturnStmt_nn(ast()).exp.ref());
+        const auto& bitLhsBinaryExp = requireBinaryExp(bitRootBinaryExp.lhs);
+
+        require(bitRootBinaryExp.op == BinaryOpKeyword::bitOr,
+            "bitwise or should remain available after >>");
+        require(bitLhsBinaryExp.op == BinaryOpKeyword::sar,
+            ">> should parse as arithmetic right shift");
     }
 };
 

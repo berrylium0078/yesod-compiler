@@ -36,6 +36,17 @@ struct ParserUnaryTest : ParserTestBase {
                 == 1,
             "logical not should parse");
     }
+    void testTilde()
+    {
+        parseRoot("int bitnot(){return ~5;}");
+        require(
+            evaluateExp(extractReturnStmt(
+                firstFuncDef()(ast()).body(ast()).items.front())(
+                ast())
+                    .exp.ref())
+                == ~5,
+            "bitwise not should parse");
+    }
     void testNested()
     {
         parseRoot("int nested(){return -(+42);}");
@@ -107,6 +118,7 @@ int main()
         test.testPlus();
         test.testMinus();
         test.testBang();
+        test.testTilde();
         test.testNested();
         test.testTriviaAndParenthesizedPrimary();
         test.testRecoveryDiagnostics();

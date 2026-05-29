@@ -1,6 +1,6 @@
 # SysY PEG Grammar
 
-This document describes the current PEG-oriented grammar for the SysY frontend in this repository. The source-language reference remains [doc/sysy.md](doc/sysy.md). This file presents the grammar in its final integrated form, including arrays in declarations, lvalues, function parameters, brace initializers, top-level function declarations, the finite-field base type `mint`, and explicit type conversions written as `BType ( Exp )`.
+This document describes the current PEG-oriented grammar for the SysY frontend in this repository. The source-language reference remains [doc/sysy.md](doc/sysy.md). This file presents the grammar in its final integrated form, including arrays in declarations, lvalues, function parameters, brace initializers, top-level function declarations, the finite-field base type `mint`, explicit type conversions written as `BType ( Exp )`, and the integer-only bitwise extension with `~`, `&`, `|`, `^`, `<<`, and arithmetic `>>`.
 
 ## 1. Source Grammar Notes
 
@@ -46,27 +46,37 @@ LVal          ::= IDENT {"[" Exp "]"};
 PrimaryExp    ::= "(" Exp ")" | LVal | Number;
 Number        ::= INT_CONST;
 UnaryExp      ::= BType "(" Exp ")" | PrimaryExp | IDENT "(" [FuncRParams] ")" | UnaryOp UnaryExp;
-UnaryOp       ::= "+" | "-" | "!";
+UnaryOp       ::= "+" | "-" | "!" | "~";
+MulExp        ::= UnaryExp | MulExp ("*" | "/" | "%") UnaryExp;
+AddExp        ::= MulExp | AddExp ("+" | "-") MulExp;
+ShiftExp      ::= AddExp | ShiftExp ("<<" | ">>") AddExp;
+RelExp        ::= ShiftExp | RelExp ("<" | ">" | "<=" | ">=") ShiftExp;
+EqExp         ::= RelExp | EqExp ("==" | "!=") RelExp;
+BitAndExp     ::= EqExp | BitAndExp "&" EqExp;
+BitXorExp     ::= BitAndExp | BitXorExp "^" BitAndExp;
+BitOrExp      ::= BitXorExp | BitOrExp "|" BitXorExp;
+LAndExp       ::= BitOrExp | LAndExp "&&" BitOrExp;
+LOrExp        ::= LAndExp | LOrExp "||" LAndExp;
 FuncRParams   ::= Exp {"," Exp};
 ```
 
 Assumptions carried by the PEG form:
 
 - top-level parsing is represented as a non-empty ordered list of top-level items
-- expression precedence remains the standard SysY ladder from `LOrExp` down to `UnaryExp`, `PrimaryExp`, `LVal`, and `Number`
+- expression precedence extends the standard SysY ladder with `BitOrExp`, `BitXorExp`, `BitAndExp`, and `ShiftExp`, so the final order is `LOrExp` -> `LAndExp` -> `BitOrExp` -> `BitXorExp` -> `BitAndExp` -> `EqExp` -> `RelExp` -> `ShiftExp` -> `AddExp` -> `MulExp` -> `UnaryExp` -> `PrimaryExp`
 - whitespace and comments are handled by the token layer through `Spacing`
 - `[` and `]` are first-class tokens because array declarators and subscripts are part of the grammar
-- the token layer gains one new keyword token, `KW_MINT`, but is otherwise unchanged
+- the token layer keeps the existing keywords, including `KW_MINT`, and adds operator tokens for `~`, `&`, `|`, `^`, `<<`, and `>>`
 - the compilation pipeline prepends builtin library declarations to the translation unit source before parsing; builtin names are not synthesized later during semantic analysis
 
 ## 2. Baseline Delta
 
 This is an incremental extension of the existing PEG design in this file.
 
-- unchanged rules: array declarators, initializer rules, lvalues, statement forms, operator-precedence tiers above `UnaryExp`, and function-header factoring through `FuncItem`/`FuncTail`
-- refactored rules: `BType`, `FuncType`, and `UnaryExp`; the recovery helpers that enumerate declaration or expression starts also need to recognize `mint`
-- token-layer delta: add `KW_MINT`; all delimiters, operators, identifier rules, and literal rules stay unchanged
-- existing recovery around declarations, function headers, and statement boundaries remains valid; only the synchronization sets that mention type keywords or expression starters need to admit `KW_MINT`, and the unary-expression recovery needs one cast-specific `)` diagnostic
+- unchanged rules: declarations, arrays, initializers, lvalues, statement forms, function-header factoring through `FuncItem`/`FuncTail`, and cast syntax
+- refactored rules: the expression ladder gains `ShiftExp`, `BitAndExp`, `BitXorExp`, and `BitOrExp`; `UnaryOp` gains `~`; ordered-choice-sensitive token rules now need to preserve `<<` before `<`, `>>` before `>`, `&&` before `&`, and `||` before `|`
+- token-layer delta: no new keywords are needed; only operator tokens for `~`, `&`, `|`, `^`, `<<`, and `>>` are added
+- existing recovery around declarations, function headers, and statement boundaries remains valid; only the synchronization sets that mention expression starters need to admit unary `~`, and no new cuts or labeled failures are required for the bitwise tiers
 
 ## 3. Runtime AST Mapping
 
@@ -85,15 +95,16 @@ The PEG grammar is not a one-to-one dump of runtime node types. The current AST 
 
 Those choices drive a few grammar-to-AST mismatches intentionally:
 
-- grammar precedence layers such as `AddExp`, `MulExp`, and `UnaryExp` explain parse structure, but all lower to the single `Exp` runtime node type
+- grammar precedence layers such as `BitOrExp`, `ShiftExp`, `AddExp`, `MulExp`, and `UnaryExp` explain parse structure, but all lower to the single `Exp` runtime node type
 - brace initializers are grammar rules with their own list helpers, but runtime storage is recursive through `ConstInitVal::List` and `InitVal::List`
 - function array parameters encode the unsized first dimension separately from the trailing constant dimensions because the AST needs to preserve `int a[]` distinctly from `int a`
 - explicit conversions sit at the `UnaryExp` layer in the grammar; they should lower either to a dedicated cast payload or to an extended unary payload, but not to a new expression-precedence family
+- unary `~` remains a plain unary payload and the binary bitwise operators remain plain binary payloads in the flattened `Exp` runtime node; the extra grammar nonterminals exist only to encode precedence and ordered choice
 - `ConstExp` remains a grammar alias only. Constant-expression validity is discovered later by semantic analysis and constant folding, not by introducing a separate AST node.
 
 ## 4. Left-Recursion Elimination
 
-The expression ladder uses standard PEG-friendly repetition instead of left recursion. Arrays, recursive initializers, and the new explicit-conversion prefix form add list, suffix, and keyword-led unary forms without introducing any new left-recursive rule.
+The expression ladder uses standard PEG-friendly repetition instead of left recursion. Arrays, recursive initializers, explicit conversions, and the new bitwise tiers all fit the same PEG-friendly `Head (Op Tail)*` pattern.
 
 | Original shape | Rewritten PEG shape | Why it preserves the parse |
 |---|---|---|
@@ -104,9 +115,13 @@ The expression ladder uses standard PEG-friendly repetition instead of left recu
 | `LVal ::= IDENT {"[" Exp "]"}` | `LVal <- IDENT LValIndices` with `LValIndices <- (LBRACK Exp RBRACK)*` | preserves a base identifier followed by zero or more subscripts |
 | `FuncFParam ::= BType IDENT ["[" "]" {"[" ConstExp "]"}]` | `FuncFParam <- BType IDENT ParamArraySuffix?` with `ParamArraySuffix <- LBRACK RBRACK (LBRACK ConstExp RBRACK)*` | preserves the SysY rule that only the first parameter dimension may be unsized |
 | `UnaryExp ::= BType "(" Exp ")" | IDENT "(" [FuncRParams] ")" | PrimaryExp | UnaryOp UnaryExp` | `UnaryExp <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp` with `CastExp <- BType LPAREN Exp RPAREN` | makes the new conversion form explicit and keeps it at unary precedence without interfering with identifier-led calls or primary expressions |
+| `ShiftExp ::= AddExp | ShiftExp ("<<" | ">>") AddExp` | `ShiftExp <- AddExp (ShiftOp AddExp)*` | preserves left associativity while isolating the `<<` and `>>` tokens from the relational layer that shares `<` and `>` prefixes |
+| `BitAndExp ::= EqExp | BitAndExp "&" EqExp` | `BitAndExp <- EqExp (AMP EqExp)*` | preserves left associativity and keeps scalar bitwise `&` distinct from logical `&&` |
+| `BitXorExp ::= BitAndExp | BitXorExp "^" BitAndExp` | `BitXorExp <- BitAndExp (CARET BitAndExp)*` | preserves left associativity with a single-token operator that does not need extra factoring |
+| `BitOrExp ::= BitXorExp | BitOrExp "|" BitXorExp` | `BitOrExp <- BitXorExp (PIPE BitXorExp)*` | preserves left associativity and keeps scalar bitwise `|` distinct from logical `||` |
 | `FuncDef ::= FuncType IDENT "(" [FuncFParams] ")" Block` and `FuncDecl ::= FuncType IDENT "(" [FuncFParams] ")" ";"` | `FuncItem <- FuncType IDENT LPAREN FuncFParams? RPAREN FuncTail` with `FuncTail <- Block / SEMI` | factors the shared function header while preserving the distinction between a declaration tail and a definition tail |
 
-The existing rewrites for `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, and `LOrExp` are unchanged.
+The remaining rewrites for `FuncRParams`, `MulExp`, `AddExp`, `RelExp`, `EqExp`, `LAndExp`, and `LOrExp` keep the same PEG repetition shape.
 
 ## 5. Plain PEG Grammar
 
@@ -148,9 +163,13 @@ ExpStmt            <- Exp? SEMI
 
 Exp                <- LOrExp
 LOrExp             <- LAndExp (OROR LAndExp)*
-LAndExp            <- EqExp (ANDAND EqExp)*
+LAndExp            <- BitOrExp (ANDAND BitOrExp)*
+BitOrExp           <- BitXorExp (PIPE BitXorExp)*
+BitXorExp          <- BitAndExp (CARET BitAndExp)*
+BitAndExp          <- EqExp (AMP EqExp)*
 EqExp              <- RelExp (EqOp RelExp)*
-RelExp             <- AddExp (RelOp AddExp)*
+RelExp             <- ShiftExp (RelOp ShiftExp)*
+ShiftExp           <- AddExp (ShiftOp AddExp)*
 AddExp             <- MulExp (AddOp MulExp)*
 MulExp             <- UnaryExp (MulOp UnaryExp)*
 UnaryExp           <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
@@ -161,9 +180,10 @@ PrimaryExp         <- LPAREN Exp RPAREN / LVal / Number
 LVal               <- IDENT LValIndices
 LValIndices        <- (LBRACK Exp RBRACK)*
 Number             <- INT_CONST
-UnaryOp            <- PLUS / MINUS / BANG
+UnaryOp            <- PLUS / MINUS / BANG / TILDE
 MulOp              <- STAR / SLASH / PERCENT
 AddOp              <- PLUS / MINUS
+ShiftOp            <- SHL / SAR
 RelOp              <- LE / GE / LT / GT
 EqOp               <- EQEQ / NE
 
@@ -202,15 +222,21 @@ ASSIGN             <- "=" Spacing
 PLUS               <- "+" Spacing
 MINUS              <- "-" Spacing
 BANG               <- "!" Spacing
+TILDE              <- "~" Spacing
 STAR               <- "*" Spacing
 SLASH              <- "/" Spacing
 PERCENT            <- "%" Spacing
+SHL                <- "<<" Spacing
+SAR                <- ">>" Spacing
 LE                 <- "<=" Spacing
 GE                 <- ">=" Spacing
 LT                 <- "<" Spacing
 GT                 <- ">" Spacing
 EQEQ               <- "==" Spacing
 NE                 <- "!=" Spacing
+AMP                <- "&" Spacing
+CARET              <- "^" Spacing
+PIPE               <- "|" Spacing
 ANDAND             <- "&&" Spacing
 OROR               <- "||" Spacing
 
@@ -325,9 +351,13 @@ ExpStmt                    <- SEMI
 
 Exp                        <- LOrExp
 LOrExp                     <- LAndExp (OROR LAndExp)*
-LAndExp                    <- EqExp (ANDAND EqExp)*
+LAndExp                    <- BitOrExp (ANDAND BitOrExp)*
+BitOrExp                   <- BitXorExp (PIPE BitXorExp)*
+BitXorExp                  <- BitAndExp (CARET BitAndExp)*
+BitAndExp                  <- EqExp (AMP EqExp)*
 EqExp                      <- RelExp (EqOp RelExp)*
-RelExp                     <- AddExp (RelOp AddExp)*
+RelExp                     <- ShiftExp (RelOp ShiftExp)*
+ShiftExp                   <- AddExp (ShiftOp AddExp)*
 AddExp                     <- MulExp (AddOp MulExp)*
 MulExp                     <- UnaryExp (MulOp UnaryExp)*
 UnaryExp                   <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
@@ -351,9 +381,10 @@ LValIndices                <- (LBRACK ^
                                 (Exp / Throw<MalformedSubscript> RecoverToRBracket)
                                 (RBRACK / Throw<MissingSubscriptRBracket> RecoverToRBracket))*
 Number                     <- INT_CONST
-UnaryOp                    <- PLUS / MINUS / BANG
+UnaryOp                    <- PLUS / MINUS / BANG / TILDE
 MulOp                      <- STAR / SLASH / PERCENT
 AddOp                      <- PLUS / MINUS
+ShiftOp                    <- SHL / SAR
 RelOp                      <- LE / GE / LT / GT
 EqOp                       <- EQEQ / NE
 
@@ -392,15 +423,21 @@ ASSIGN                     <- "=" Spacing
 PLUS                       <- "+" Spacing
 MINUS                      <- "-" Spacing
 BANG                       <- "!" Spacing
+TILDE                      <- "~" Spacing
 STAR                       <- "*" Spacing
 SLASH                      <- "/" Spacing
 PERCENT                    <- "%" Spacing
+SHL                        <- "<<" Spacing
+SAR                        <- ">>" Spacing
 LE                         <- "<=" Spacing
 GE                         <- ">=" Spacing
 LT                         <- "<" Spacing
 GT                         <- ">" Spacing
 EQEQ                       <- "==" Spacing
 NE                         <- "!=" Spacing
+AMP                        <- "&" Spacing
+CARET                      <- "^" Spacing
+PIPE                       <- "|" Spacing
 ANDAND                     <- "&&" Spacing
 OROR                       <- "||" Spacing
 
@@ -420,15 +457,15 @@ RecoverToArgBoundary       <- (!"," !")" !";" !"}" !EOF .)* (COMMA / RPAREN / &S
 RecoverToExprRParen        <- (!")" !";" !"}" !EOF .)* (RPAREN / &SEMI / &RBRACE / EOF)
 RecoverToRBracket          <- (!"]" !"," !")" !"}" !";" !EOF .)* (RBRACK / &COMMA / &RPAREN / &RBRACE / &SEMI / EOF)
 RecoverToInitBoundary      <- (!"," !"}" !";" !EOF .)* (&COMMA / &RBRACE / &SEMI / EOF)
-RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
-RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !EOF .)*
-                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / EOF)
+RecoverToIfStmtHead        <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !TILDE !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &TILDE / EOF)
+RecoverToWhileStmtHead     <- (!")" !LBRACE !RBRACE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !KW_ELSE !SEMI !LPAREN !KW_INT !KW_MINT !IDENT !INT_CONST !PLUS !MINUS !BANG !TILDE !EOF .)*
+                              (RPAREN / &LBRACE / &RBRACE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &KW_ELSE / &SEMI / &LPAREN / &KW_INT / &KW_MINT / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &TILDE / EOF)
 RecoverToStmtBoundary      <- (!";" !"}" !KW_ELSE !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !EOF .)*
                               (SEMI / &RBRACE / &KW_ELSE / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / EOF)
 RecoverToDeclBoundary      <- (!"," !";" !"}" !EOF .)* (COMMA / SEMI / &RBRACE / EOF)
-RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_MINT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !RBRACE !EOF .)*
-                              (&KW_CONST / &KW_INT / &KW_MINT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &RBRACE / EOF)
+RecoverToBlockItemBoundary <- (!KW_CONST !KW_INT !KW_MINT !KW_IF !KW_WHILE !KW_BREAK !KW_CONTINUE !KW_RETURN !LBRACE !SEMI !LPAREN !IDENT !INT_CONST !PLUS !MINUS !BANG !TILDE !RBRACE !EOF .)*
+                              (&KW_CONST / &KW_INT / &KW_MINT / &KW_IF / &KW_WHILE / &KW_BREAK / &KW_CONTINUE / &KW_RETURN / &LBRACE / &SEMI / &LPAREN / &IDENT / &INT_CONST / &PLUS / &MINUS / &BANG / &TILDE / &RBRACE / EOF)
 RecoverToBlockEnd          <- (!"}" !EOF .)* (RBRACE / EOF)
 
 Digit                      <- [0-9]
@@ -509,6 +546,8 @@ UnaryExp <- CastExp / CallExp / PrimaryExp / UnaryOp UnaryExp
 
 The cut belongs inside `CastExp`, after `BType LPAREN`. Before that point, a leading `BType` may still be the start of a declaration in a recovery-annotated block item. After `(`, the parse is decisively an explicit conversion and should report only cast-local errors.
 
+The `UnaryOp UnaryExp` suffix branch stays last because `CastExp`, `CallExp`, and parenthesized `PrimaryExp` all have stronger distinguishing prefixes than symbolic unary operators. Adding `~` does not change that ordering; it only enlarges the unary starter set used by recovery.
+
 4. `PrimaryExp`
 
 ```peg
@@ -517,15 +556,27 @@ PrimaryExp <- LPAREN Exp RPAREN / LVal / Number
 
 This order is safe because call syntax is already handled at `UnaryExp`, and the parenthesized-expression form is prefix-distinct.
 
-5. `RelOp`
+5. `ShiftOp` and `RelOp`
 
 ```peg
-RelOp <- LE / GE / LT / GT
+ShiftOp <- SHL / SAR
+RelOp   <- LE / GE / LT / GT
 ```
 
-Longer operators must precede shorter prefix-sharing operators.
+`SHL` and `SAR` must be recognized before the relational layer tries `LT` or `GT`, because `<<` and `>>` share prefixes with `<` and `>`. The dedicated `ShiftExp` tier is the minimal PEG-friendly way to preserve the intended precedence and avoid splitting a shift token into two relational tokens.
 
-6. `VarDecl` in the recovery grammar
+Within `RelOp`, the longer operators must still precede the shorter prefix-sharing operators.
+
+6. `BitAndExp` and `BitOrExp`
+
+```peg
+BitAndExp <- EqExp (AMP EqExp)*
+BitOrExp  <- BitXorExp (PIPE BitXorExp)*
+```
+
+These tiers must sit below equality and above logical `&&` and `||` to match the intended C-style precedence. The token rules are branch-order-sensitive even though the expression rules themselves are simple repetitions: `ANDAND` must remain distinct from `AMP`, and `OROR` must remain distinct from `PIPE`.
+
+7. `VarDecl` in the recovery grammar
 
 ```peg
 VarDecl <- BType
@@ -536,7 +587,7 @@ VarDecl <- BType
 
 The recovery form delays commitment until `IDENT` appears after `BType`. That is necessary because `int(` and `mint(` can now begin a cast expression inside `Stmt`; cutting immediately after `BType` would misclassify those statements as broken declarations.
 
-7. `IntegerConst`
+8. `IntegerConst`
 
 ```peg
 IntegerConst <- HexadecimalConst / OctalConst / DecimalConst
@@ -548,11 +599,11 @@ The initializer rules are not branch-order-sensitive because brace initializers 
 
 ## 9. Short Design Rationale
 
-This grammar stays close to the SysY source rules while keeping the parser implementation local and predictable. The `mint` extension is a minimal coherent delta: one new keyword in the token layer, `BType` reused wherever finite-field values are legal, `FuncType` widened in the same way, and a single new unary-production branch for explicit conversions.
+This grammar stays close to the SysY source rules while keeping the parser implementation local and predictable. The bitwise extension is a minimal coherent delta on top of the existing `mint` and cast work: no declaration or statement forms change, no new keywords are introduced, and the expression ladder grows by exactly the tiers needed to encode C-style precedence without left recursion.
 
-Recovery remains intentionally sparse. Declaration and top-level synchronizers only gain `KW_MINT`, while expression-oriented recovery gains one cast-specific pair of diagnostics and treats both `KW_INT` and `KW_MINT` as valid expression starters because conversions are now keyword-led unary expressions.
+Recovery remains intentionally sparse. The bitwise extension does not add new labels or cut points. The only recovery-surface delta is that expression-starter synchronizers now also treat unary `~` as a valid restart point, while the existing cast-specific diagnostics continue to cover the keyword-led unary ambiguity.
 
-The only structural recovery adjustment beyond the new cast rule is delaying declaration commitment until an identifier appears after `BType`. That keeps recovery-compatible block parsing from misclassifying `int(expr);` or `mint(expr);` as malformed declarations.
+The only structural recovery adjustment beyond the cast rule remains delaying declaration commitment until an identifier appears after `BType`. That still keeps recovery-compatible block parsing from misclassifying `int(expr);` or `mint(expr);` as malformed declarations, and the new bitwise operators do not require any wider recovery net.
 
 The runtime AST is flatter and more normalized than the grammar:
 

@@ -59,6 +59,23 @@ struct SemanticMintTest : SemanticTestBase {
         require(isDiagnostic<TypeMismatchDiagnostic>(firstDiagnostic()),
             "mint condition should report an integer-condition mismatch");
     }
+
+    void testMintBitwiseOperatorsAreRejected()
+    {
+        m_output = analyzeSource(
+            "int main(){mint value = mint(1); return int(~value);}" 
+        );
+        require(!success(), "mint bitwise not should fail semantic analysis");
+        require(isDiagnostic<TypeMismatchDiagnostic>(firstDiagnostic()),
+            "mint bitwise not should report a type mismatch");
+
+        m_output = analyzeSource(
+            "int main(){mint lhs = mint(1); mint rhs = mint(2); return int(lhs << rhs);}"
+        );
+        require(!success(), "mint shifts should fail semantic analysis");
+        require(isDiagnostic<TypeMismatchDiagnostic>(firstDiagnostic()),
+            "mint shifts should report a type mismatch");
+    }
 };
 
 } // namespace
@@ -71,5 +88,6 @@ int main()
     test.testImplicitMintToIntIsRejected();
     test.testArrayElementTypeMismatchIsRejected();
     test.testMintConditionRequiresExplicitIntCast();
+    test.testMintBitwiseOperatorsAreRejected();
     return 0;
 }

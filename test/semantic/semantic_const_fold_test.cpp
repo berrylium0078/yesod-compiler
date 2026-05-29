@@ -56,6 +56,31 @@ struct SemanticConstFoldTest : SemanticTestBase {
         require(isDiagnostic<AssignToConstDiagnostic>(firstDiagnostic()),
             "assignment to const should report the expected semantic label");
     }
+
+    void testBitwiseAndShiftConstFolding()
+    {
+        m_output = analyzeSource(
+            "int main(){const int a = ~1; const int b = 3 << 35; return (a & 7) ^ (b | 1);}");
+        require(success(), "bitwise integer constant folding should succeed");
+
+        const auto funcDef_nn = firstFuncDef();
+        const auto& blockItems = funcDef_nn(ast()).body(ast()).items;
+        const auto returnStmt_nn = extractReturnStmt(extractStmtNode(blockItems[2]));
+
+        require(requireConstantValue(m_output, returnStmt_nn(ast()).exp.ref())
+                == (((~1) & 7) ^ ((3 << (35 % 32)) | 1)),
+            "bitwise and shift expressions should fold with modulo-32 shift normalization");
+
+        bool sawShiftWarning = false;
+        for (const auto& diagnostic : m_output.m_diagnostics) {
+            if (isDiagnostic<ShiftOperandOutOfRangeDiagnostic>(*diagnostic)) {
+                sawShiftWarning = diagnostic->severity == DiagnosticSeverity::warning;
+                break;
+            }
+        }
+        require(sawShiftWarning,
+            "out-of-range constant shift counts should produce a warning diagnostic");
+    }
 };
 
 } // namespace
@@ -65,5 +90,6 @@ int main()
     SemanticConstFoldTest test;
     test.testConstExpressionsRecordFoldedValues();
     test.testConstSemanticDiagnostics();
+    test.testBitwiseAndShiftConstFolding();
     return 0;
 }

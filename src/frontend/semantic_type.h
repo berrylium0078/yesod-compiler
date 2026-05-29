@@ -19,6 +19,7 @@ YESOD_DECLARE_DIAGNOSTIC(InvalidCallTargetDiagnostic)
 YESOD_DECLARE_DIAGNOSTIC(CallArityMismatchDiagnostic)
 YESOD_DECLARE_DIAGNOSTIC(TypeMismatchDiagnostic)
 YESOD_DECLARE_DIAGNOSTIC(ReturnTypeMismatchDiagnostic)
+YESOD_DECLARE_DIAGNOSTIC(ShiftOperandOutOfRangeDiagnostic)
 
 
 enum class ExpType {

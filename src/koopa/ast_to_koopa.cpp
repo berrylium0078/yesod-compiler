@@ -462,6 +462,10 @@ namespace {
             return koopa_ir::BinaryOp::add;
         case BinaryOpKeyword::minus:
             return koopa_ir::BinaryOp::sub;
+        case BinaryOpKeyword::shl:
+            return koopa_ir::BinaryOp::shl;
+        case BinaryOpKeyword::sar:
+            return koopa_ir::BinaryOp::sar;
         case BinaryOpKeyword::less:
             return koopa_ir::BinaryOp::lt;
         case BinaryOpKeyword::greater:
@@ -474,6 +478,12 @@ namespace {
             return koopa_ir::BinaryOp::eq;
         case BinaryOpKeyword::notEqual:
             return koopa_ir::BinaryOp::ne;
+        case BinaryOpKeyword::bitAnd:
+            return koopa_ir::BinaryOp::bitAnd;
+        case BinaryOpKeyword::bitXor:
+            return koopa_ir::BinaryOp::bitXor;
+        case BinaryOpKeyword::bitOr:
+            return koopa_ir::BinaryOp::bitOr;
         case BinaryOpKeyword::andAnd:
         case BinaryOpKeyword::orOr:
             break;
@@ -1157,8 +1167,13 @@ namespace {
                         { std::move(rhs) }, true);
                     break;
                 case BinaryOpKeyword::percent:
+                case BinaryOpKeyword::shl:
+                case BinaryOpKeyword::sar:
+                case BinaryOpKeyword::bitAnd:
+                case BinaryOpKeyword::bitXor:
+                case BinaryOpKeyword::bitOr:
                     throw std::runtime_error(
-                        "mint modulo expressions should be rejected semantically");
+                        "mint bitwise and shift expressions should be rejected semantically");
                 case BinaryOpKeyword::andAnd:
                 case BinaryOpKeyword::orOr:
                     throw std::runtime_error(
@@ -1187,6 +1202,9 @@ namespace {
                     return emitBinary(koopa_ir::BinaryOp::eq,
                         koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
                         std::move(operand));
+                case UnaryOpKeyword::tilde:
+                    throw std::runtime_error(
+                        "mint bitwise-not expressions should be rejected semantically");
                 }
             }
 
@@ -1203,6 +1221,9 @@ namespace {
                 return emitBinary(koopa_ir::BinaryOp::eq,
                     koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
                     std::move(operand));
+            case UnaryOpKeyword::tilde:
+                return emitBinary(koopa_ir::BinaryOp::bitXor, std::move(operand),
+                    koopa_ir::IntegerLiteral { .sourcePos = {}, .value = -1 });
             }
             throw std::runtime_error("unsupported unary operator");
         }

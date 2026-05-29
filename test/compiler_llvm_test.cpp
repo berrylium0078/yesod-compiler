@@ -248,6 +248,19 @@ void testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain()
         "120\n");
 }
 
+    void testLlvmBitwiseProgramExecutesThroughRiscvToolchain()
+    {
+        expectLlvmProgramOutput(
+        "int main(){"
+        "  int a = 6;"
+        "  int b = 2;"
+        "  putint((~a ^ ((a << b) & 31)) | (32 >> b));"
+        "  putch(10);"
+        "  return 0;"
+        "}",
+        "-15\n");
+    }
+
 } // namespace
 
 int main()
@@ -255,5 +268,6 @@ int main()
     testLlvmModePrependsMintRuntimeDefinitions();
     testLlvmMintProgramExecutesThroughRiscvToolchain();
     testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain();
+    testLlvmBitwiseProgramExecutesThroughRiscvToolchain();
     return 0;
 }

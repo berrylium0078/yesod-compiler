@@ -249,6 +249,19 @@ void testMintRuntimeHelpersLinkAndExecute()
         "", "42\n");
 }
 
+void testBitwiseAndShiftOperatorsExecute()
+{
+    expectProgramOutput(
+        "int main(){"
+        "  int a = 6;"
+        "  int b = 2;"
+        "  putint((~a ^ ((a << b) & 31)) | (32 >> b));"
+        "  putch(10);"
+        "  return 0;"
+        "}",
+        "", "-15\n");
+}
+
 } // namespace
 
 int main()
@@ -258,5 +271,6 @@ int main()
     testCallWithMoreThanEightArguments();
     testInputRedirectionAndArrayAccess();
     testMintRuntimeHelpersLinkAndExecute();
+    testBitwiseAndShiftOperatorsExecute();
     return 0;
 }

@@ -128,8 +128,12 @@ private:
     [[nodiscard]] ParseResult<Exp> parseExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseLOrExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseLAndExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseBitOrExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseBitXorExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseBitAndExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseEqExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseRelExp(int32_t offset);
+    [[nodiscard]] ParseResult<Exp> parseShiftExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseAddExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseMulExp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parsePrimaryExp(int32_t offset);
@@ -140,8 +144,12 @@ private:
     [[nodiscard]] ParseResult<UnaryOpKeyword> parseUnaryOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseMulOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseAddOp(int32_t offset);
+    [[nodiscard]] ParseResult<BinaryOpKeyword> parseShiftOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseRelOp(int32_t offset);
     [[nodiscard]] ParseResult<BinaryOpKeyword> parseEqOp(int32_t offset);
+    [[nodiscard]] ParseResult<BinaryOpKeyword> parseBitAndOp(int32_t offset);
+    [[nodiscard]] ParseResult<BinaryOpKeyword> parseBitXorOp(int32_t offset);
+    [[nodiscard]] ParseResult<BinaryOpKeyword> parseBitOrOp(int32_t offset);
     [[nodiscard]] ParseResult<Exp> parseNumber(int32_t offset);
     [[nodiscard]] ParseResult<Identifier> parseIdent(int32_t offset);
     [[nodiscard]] ParseResult<ParamArraySuffixParse> parseParamArraySuffix(
@@ -243,8 +251,12 @@ private:
     std::unordered_map<int32_t, ParseResult<Exp>> m_expMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_lOrExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_lAndExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_bitOrExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_bitXorExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_bitAndExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_eqExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_relExpMemo;
+    std::unordered_map<int32_t, ParseResult<Exp>> m_shiftExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_addExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_mulExpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_primaryExpMemo;
@@ -255,8 +267,12 @@ private:
     std::unordered_map<int32_t, ParseResult<UnaryOpKeyword>> m_unaryOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_mulOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_addOpMemo;
+    std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_shiftOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_relOpMemo;
     std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_eqOpMemo;
+    std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_bitAndOpMemo;
+    std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_bitXorOpMemo;
+    std::unordered_map<int32_t, ParseResult<BinaryOpKeyword>> m_bitOrOpMemo;
     std::unordered_map<int32_t, ParseResult<Exp>> m_numberMemo;
     std::unordered_map<int32_t, ParseResult<Identifier>> m_identMemo;
     std::unordered_map<int32_t, ParseResult<ParamArraySuffixParse>>
@@ -300,8 +316,12 @@ ParseOutput ParserImpl::parse()
     m_expMemo.clear();
     m_lOrExpMemo.clear();
     m_lAndExpMemo.clear();
+    m_bitOrExpMemo.clear();
+    m_bitXorExpMemo.clear();
+    m_bitAndExpMemo.clear();
     m_eqExpMemo.clear();
     m_relExpMemo.clear();
+    m_shiftExpMemo.clear();
     m_addExpMemo.clear();
     m_mulExpMemo.clear();
     m_primaryExpMemo.clear();
@@ -311,8 +331,12 @@ ParseOutput ParserImpl::parse()
     m_unaryOpMemo.clear();
     m_mulOpMemo.clear();
     m_addOpMemo.clear();
+    m_shiftOpMemo.clear();
     m_relOpMemo.clear();
     m_eqOpMemo.clear();
+    m_bitAndOpMemo.clear();
+    m_bitXorOpMemo.clear();
+    m_bitOrOpMemo.clear();
     m_numberMemo.clear();
     m_identMemo.clear();
     m_paramArraySuffixMemo.clear();
@@ -2311,7 +2335,7 @@ ParseResult<Exp> ParserImpl::parseLAndExp(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
-    const auto head = parseEqExp(normalizedOffset);
+    const auto head = parseBitOrExp(normalizedOffset);
     if (!head.value) {
         const auto failure = ParseResult<Exp> {
 
@@ -2332,7 +2356,7 @@ ParseResult<Exp> ParserImpl::parseLAndExp(int32_t offset)
             break;
         }
 
-        const auto rhs = parseEqExp(op.nextOffset);
+        const auto rhs = parseBitOrExp(op.nextOffset);
         if (!rhs.value) {
             m_bestFailureOffset = savedFailureOffset;
             m_bestDiagnostics = cloneDiagnostics(savedDiagnostics);
@@ -2350,6 +2374,156 @@ ParseResult<Exp> ParserImpl::parseLAndExp(int32_t offset)
         .value = current,
     };
     m_lAndExpMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<Exp> ParserImpl::parseBitOrExp(int32_t offset)
+{
+    if (const auto memoIt = m_bitOrExpMemo.find(offset);
+        memoIt != m_bitOrExpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto head = parseBitXorExp(normalizedOffset);
+    if (!head.value) {
+        const auto failure = ParseResult<Exp> {
+
+            .nextOffset = head.nextOffset,
+            .value = { },
+        };
+        m_bitOrExpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto current = head.value;
+    auto nextOffset = head.nextOffset;
+    while (true) {
+        const auto savedFailureOffset = m_bestFailureOffset;
+        const auto savedDiagnostics = cloneDiagnostics(m_bestDiagnostics);
+        const auto op = parseBitOrOp(nextOffset);
+        if (!op.value) {
+            break;
+        }
+
+        const auto rhs = parseBitXorExp(op.nextOffset);
+        if (!rhs.value) {
+            m_bestFailureOffset = savedFailureOffset;
+            m_bestDiagnostics = cloneDiagnostics(savedDiagnostics);
+            break;
+        }
+
+        current = makeBinaryRoot(
+            m_ast, normalizedOffset, *op.value, current.ref(), rhs.value.ref());
+        nextOffset = rhs.nextOffset;
+    }
+
+    const auto result = ParseResult<Exp> {
+
+        .nextOffset = nextOffset,
+        .value = current,
+    };
+    m_bitOrExpMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<Exp> ParserImpl::parseBitXorExp(int32_t offset)
+{
+    if (const auto memoIt = m_bitXorExpMemo.find(offset);
+        memoIt != m_bitXorExpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto head = parseBitAndExp(normalizedOffset);
+    if (!head.value) {
+        const auto failure = ParseResult<Exp> {
+
+            .nextOffset = head.nextOffset,
+            .value = { },
+        };
+        m_bitXorExpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto current = head.value;
+    auto nextOffset = head.nextOffset;
+    while (true) {
+        const auto savedFailureOffset = m_bestFailureOffset;
+        const auto savedDiagnostics = cloneDiagnostics(m_bestDiagnostics);
+        const auto op = parseBitXorOp(nextOffset);
+        if (!op.value) {
+            break;
+        }
+
+        const auto rhs = parseBitAndExp(op.nextOffset);
+        if (!rhs.value) {
+            m_bestFailureOffset = savedFailureOffset;
+            m_bestDiagnostics = cloneDiagnostics(savedDiagnostics);
+            break;
+        }
+
+        current = makeBinaryRoot(
+            m_ast, normalizedOffset, *op.value, current.ref(), rhs.value.ref());
+        nextOffset = rhs.nextOffset;
+    }
+
+    const auto result = ParseResult<Exp> {
+
+        .nextOffset = nextOffset,
+        .value = current,
+    };
+    m_bitXorExpMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<Exp> ParserImpl::parseBitAndExp(int32_t offset)
+{
+    if (const auto memoIt = m_bitAndExpMemo.find(offset);
+        memoIt != m_bitAndExpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto head = parseEqExp(normalizedOffset);
+    if (!head.value) {
+        const auto failure = ParseResult<Exp> {
+
+            .nextOffset = head.nextOffset,
+            .value = { },
+        };
+        m_bitAndExpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto current = head.value;
+    auto nextOffset = head.nextOffset;
+    while (true) {
+        const auto savedFailureOffset = m_bestFailureOffset;
+        const auto savedDiagnostics = cloneDiagnostics(m_bestDiagnostics);
+        const auto op = parseBitAndOp(nextOffset);
+        if (!op.value) {
+            break;
+        }
+
+        const auto rhs = parseEqExp(op.nextOffset);
+        if (!rhs.value) {
+            m_bestFailureOffset = savedFailureOffset;
+            m_bestDiagnostics = cloneDiagnostics(savedDiagnostics);
+            break;
+        }
+
+        current = makeBinaryRoot(
+            m_ast, normalizedOffset, *op.value, current.ref(), rhs.value.ref());
+        nextOffset = rhs.nextOffset;
+    }
+
+    const auto result = ParseResult<Exp> {
+
+        .nextOffset = nextOffset,
+        .value = current,
+    };
+    m_bitAndExpMemo.emplace(offset, result);
     return result;
 }
 
@@ -2411,7 +2585,7 @@ ParseResult<Exp> ParserImpl::parseRelExp(int32_t offset)
     }
 
     const auto normalizedOffset = skipTrivia(offset);
-    const auto head = parseAddExp(normalizedOffset);
+    const auto head = parseShiftExp(normalizedOffset);
     if (!head.value) {
         const auto failure = ParseResult<Exp> {
 
@@ -2428,6 +2602,56 @@ ParseResult<Exp> ParserImpl::parseRelExp(int32_t offset)
         const auto savedFailureOffset = m_bestFailureOffset;
         const auto savedDiagnostics = cloneDiagnostics(m_bestDiagnostics);
         const auto op = parseRelOp(nextOffset);
+        if (!op.value) {
+            break;
+        }
+
+        const auto rhs = parseShiftExp(op.nextOffset);
+        if (!rhs.value) {
+            m_bestFailureOffset = savedFailureOffset;
+            m_bestDiagnostics = cloneDiagnostics(savedDiagnostics);
+            break;
+        }
+
+        current = makeBinaryRoot(
+            m_ast, normalizedOffset, *op.value, current.ref(), rhs.value.ref());
+        nextOffset = rhs.nextOffset;
+    }
+
+    const auto result = ParseResult<Exp> {
+
+        .nextOffset = nextOffset,
+        .value = current,
+    };
+    m_relExpMemo.emplace(offset, result);
+    return result;
+}
+
+ParseResult<Exp> ParserImpl::parseShiftExp(int32_t offset)
+{
+    if (const auto memoIt = m_shiftExpMemo.find(offset);
+        memoIt != m_shiftExpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto normalizedOffset = skipTrivia(offset);
+    const auto head = parseAddExp(normalizedOffset);
+    if (!head.value) {
+        const auto failure = ParseResult<Exp> {
+
+            .nextOffset = head.nextOffset,
+            .value = { },
+        };
+        m_shiftExpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    auto current = head.value;
+    auto nextOffset = head.nextOffset;
+    while (true) {
+        const auto savedFailureOffset = m_bestFailureOffset;
+        const auto savedDiagnostics = cloneDiagnostics(m_bestDiagnostics);
+        const auto op = parseShiftOp(nextOffset);
         if (!op.value) {
             break;
         }
@@ -2449,7 +2673,7 @@ ParseResult<Exp> ParserImpl::parseRelExp(int32_t offset)
         .nextOffset = nextOffset,
         .value = current,
     };
-    m_relExpMemo.emplace(offset, result);
+    m_shiftExpMemo.emplace(offset, result);
     return result;
 }
 
@@ -3027,6 +3251,17 @@ ParseResult<UnaryOpKeyword> ParserImpl::parseUnaryOp(int32_t offset)
         return result;
     }
 
+    const auto tilde = matchSymbol(offset, '~');
+    if (tilde.success) {
+        const auto result = ParseResult<UnaryOpKeyword> {
+
+            .nextOffset = tilde.nextOffset,
+            .value = UnaryOpKeyword::tilde,
+        };
+        m_unaryOpMemo.emplace(offset, result);
+        return result;
+    }
+
     const auto failure = ParseResult<UnaryOpKeyword> {
 
         .nextOffset = skipTrivia(offset),
@@ -3183,6 +3418,44 @@ ParseResult<BinaryOpKeyword> ParserImpl::parseRelOp(int32_t offset)
     return failure;
 }
 
+ParseResult<BinaryOpKeyword> ParserImpl::parseShiftOp(int32_t offset)
+{
+    if (const auto memoIt = m_shiftOpMemo.find(offset);
+        memoIt != m_shiftOpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto shl = matchSymbol(offset, "<<");
+    if (shl.success) {
+        const auto result = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = shl.nextOffset,
+            .value = BinaryOpKeyword::shl,
+        };
+        m_shiftOpMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto sar = matchSymbol(offset, ">>");
+    if (sar.success) {
+        const auto result = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = sar.nextOffset,
+            .value = BinaryOpKeyword::sar,
+        };
+        m_shiftOpMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<BinaryOpKeyword> {
+
+        .nextOffset = skipTrivia(offset),
+        .value = { },
+    };
+    m_shiftOpMemo.emplace(offset, failure);
+    return failure;
+}
+
 ParseResult<BinaryOpKeyword> ParserImpl::parseEqOp(int32_t offset)
 {
     if (const auto memoIt = m_eqOpMemo.find(offset);
@@ -3218,6 +3491,109 @@ ParseResult<BinaryOpKeyword> ParserImpl::parseEqOp(int32_t offset)
         .value = { },
     };
     m_eqOpMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<BinaryOpKeyword> ParserImpl::parseBitAndOp(int32_t offset)
+{
+    if (const auto memoIt = m_bitAndOpMemo.find(offset);
+        memoIt != m_bitAndOpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto andAnd = matchSymbol(offset, "&&");
+    if (andAnd.success) {
+        const auto failure = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = skipTrivia(offset),
+            .value = { },
+        };
+        m_bitAndOpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto bitAnd = matchSymbol(offset, '&');
+    if (bitAnd.success) {
+        const auto result = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = bitAnd.nextOffset,
+            .value = BinaryOpKeyword::bitAnd,
+        };
+        m_bitAndOpMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<BinaryOpKeyword> {
+
+        .nextOffset = skipTrivia(offset),
+        .value = { },
+    };
+    m_bitAndOpMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<BinaryOpKeyword> ParserImpl::parseBitXorOp(int32_t offset)
+{
+    if (const auto memoIt = m_bitXorOpMemo.find(offset);
+        memoIt != m_bitXorOpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto bitXor = matchSymbol(offset, '^');
+    if (bitXor.success) {
+        const auto result = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = bitXor.nextOffset,
+            .value = BinaryOpKeyword::bitXor,
+        };
+        m_bitXorOpMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<BinaryOpKeyword> {
+
+        .nextOffset = skipTrivia(offset),
+        .value = { },
+    };
+    m_bitXorOpMemo.emplace(offset, failure);
+    return failure;
+}
+
+ParseResult<BinaryOpKeyword> ParserImpl::parseBitOrOp(int32_t offset)
+{
+    if (const auto memoIt = m_bitOrOpMemo.find(offset);
+        memoIt != m_bitOrOpMemo.end()) {
+        return memoIt->second;
+    }
+
+    const auto orOr = matchSymbol(offset, "||");
+    if (orOr.success) {
+        const auto failure = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = skipTrivia(offset),
+            .value = { },
+        };
+        m_bitOrOpMemo.emplace(offset, failure);
+        return failure;
+    }
+
+    const auto bitOr = matchSymbol(offset, '|');
+    if (bitOr.success) {
+        const auto result = ParseResult<BinaryOpKeyword> {
+
+            .nextOffset = bitOr.nextOffset,
+            .value = BinaryOpKeyword::bitOr,
+        };
+        m_bitOrOpMemo.emplace(offset, result);
+        return result;
+    }
+
+    const auto failure = ParseResult<BinaryOpKeyword> {
+
+        .nextOffset = skipTrivia(offset),
+        .value = { },
+    };
+    m_bitOrOpMemo.emplace(offset, failure);
     return failure;
 }
 

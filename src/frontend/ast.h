@@ -44,6 +44,7 @@ enum class UnaryOpKeyword {
     plus,
     minus,
     bang,
+    tilde,
 };
 
 enum class BinaryOpKeyword {
@@ -52,12 +53,17 @@ enum class BinaryOpKeyword {
     percent,
     plus,
     minus,
+    shl,
+    sar,
     less,
     greater,
     lessEqual,
     greaterEqual,
     equal,
     notEqual,
+    bitAnd,
+    bitXor,
+    bitOr,
     andAnd,
     orOr,
 };

@@ -235,6 +235,8 @@ public:
                         return -value;
                     case UnaryOpKeyword::bang:
                         return value == 0 ? 1 : 0;
+                    case UnaryOpKeyword::tilde:
+                        return ~value;
                     }
                     fail("unexpected unary operator");
                 },
@@ -252,6 +254,10 @@ public:
                         return lhsValue + rhsValue;
                     case BinaryOpKeyword::minus:
                         return lhsValue - rhsValue;
+                    case BinaryOpKeyword::shl:
+                        return lhsValue << rhsValue;
+                    case BinaryOpKeyword::sar:
+                        return lhsValue >> rhsValue;
                     case BinaryOpKeyword::less:
                         return lhsValue < rhsValue ? 1 : 0;
                     case BinaryOpKeyword::greater:
@@ -264,6 +270,12 @@ public:
                         return lhsValue == rhsValue ? 1 : 0;
                     case BinaryOpKeyword::notEqual:
                         return lhsValue != rhsValue ? 1 : 0;
+                    case BinaryOpKeyword::bitAnd:
+                        return lhsValue & rhsValue;
+                    case BinaryOpKeyword::bitXor:
+                        return lhsValue ^ rhsValue;
+                    case BinaryOpKeyword::bitOr:
+                        return lhsValue | rhsValue;
                     case BinaryOpKeyword::andAnd:
                         return (lhsValue != 0 && rhsValue != 0) ? 1 : 0;
                     case BinaryOpKeyword::orOr:
