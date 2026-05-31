@@ -346,6 +346,8 @@ struct AstTestHelperBase {
                         return -value;
                     case UnaryOpKeyword::bang:
                         return value == 0 ? 1 : 0;
+                    case UnaryOpKeyword::tilde:
+                        return ~value;
                     }
                     fail("unexpected unary operator");
                     std::unreachable();
@@ -380,6 +382,16 @@ struct AstTestHelperBase {
                         return (lhsValue != 0 && rhsValue != 0) ? 1 : 0;
                     case BinaryOpKeyword::orOr:
                         return (lhsValue != 0 || rhsValue != 0) ? 1 : 0;
+                    case BinaryOpKeyword::shl:
+                        return lhsValue << rhsValue;
+                    case BinaryOpKeyword::sar:
+                        return lhsValue >> rhsValue;
+                    case BinaryOpKeyword::bitAnd:
+                        return lhsValue & rhsValue;
+                    case BinaryOpKeyword::bitOr:
+                        return lhsValue | rhsValue;
+                    case BinaryOpKeyword::bitXor:
+                        return lhsValue ^ rhsValue;
                     }
                     fail("unexpected binary operator");
                     std::unreachable();

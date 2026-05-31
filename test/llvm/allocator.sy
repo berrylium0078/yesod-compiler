@@ -1,0 +1,192 @@
+// Fixed pool size (number of ints)
+const int LOG_SIZE = 23;
+const int SIZE = 0x800000; // 2^23 ints
+// Threshold B (minimal block size for buddy merging)
+const int B = 256;
+// Levels 0..LOG_SIZE, where level i has blocks of size (1<<i)
+const int MAX_LEVEL = LOG_SIZE;
+const int NULL = -1;
+
+// pool stores ints; when a block is free we use the first two ints as
+// doubly-linked list pointers: pool[offset] = prev, pool[offset+1] = next
+int pool[SIZE];
+// free_list[level] stores head offset (index into pool) of free blocks of size 1<<level
+// -1 means empty
+int free_list[MAX_LEVEL+1];
+// meta for minimal B-sized units: SIZE/B entries
+// meta[i] == 1 means that B-sized chunk is currently (partially or fully) allocated
+int meta[SIZE / B];
+
+int log2ceil(int n) {
+    // Should be implemented with ctlz or similar for efficiency
+    int logn = 0;
+    int power = 1;
+    while (power < n) {
+        power = power * 2;
+        logn = logn + 1;
+    }
+    return logn;
+}
+
+// initialize allocator
+void buddy_init() {
+    int i = 0;
+    while (i <= MAX_LEVEL) {
+        free_list[i] = NULL;
+        i = i + 1;
+    }
+    // memset(meta, 0, sizeof(meta));
+
+    // start with one big free block at level MAX_LEVEL at offset 0
+    free_list[MAX_LEVEL] = 0;
+    pool[0] = NULL; // next pointer
+}
+
+// helper: compute level for size (power of two). returns -1 if not power of two or out of range
+int size_to_level(int size) {
+    if (size <= 0) return -1;
+    // if ((size & (size - 1)) != 0) return -1; // not power of two
+    return log2ceil(size);
+}
+
+// remove head from free_list[level], return offset or -1
+// remove head from free_list[level], return offset or -1
+int pop_free(int level) {
+    int head = free_list[level];
+    if (head == NULL) return NULL;
+    int next = pool[head + 1]; // next stored at offset+1
+    free_list[level] = next;
+    if (next != NULL) pool[next] = NULL; // clear prev of new head
+    return head;
+}
+
+// push block at offset into free_list[level]
+// push block at offset into free_list[level] (insert at head)
+void push_free(int level, int offset) {
+    pool[offset] = NULL; // prev
+    pool[offset + 1] = free_list[level]; // next
+    if (free_list[level] != NULL) pool[free_list[level]] = offset; // set prev of old head
+    free_list[level] = offset;
+}
+
+// search and remove a specific block offset from free_list[level].
+// returns 1 if removed, 0 if not found.
+// search and remove a specific block offset from free_list[level].
+// returns 1 if removed, 0 if not found.
+int remove_from_free_list(int level, int offset) {
+    int prev = pool[offset];
+    int next = pool[offset + 1];
+    // validate that offset is actually in this list by simple scan (cheap)
+    // int cur = free_list[level];
+    // while (cur != -1) {
+    //     if (cur == offset) break;
+    //     cur = pool[cur + 1];
+    // }
+    // if (cur == -1) return 0;
+    if (prev == NULL) {
+        free_list[level] = next;
+    } else {
+        pool[prev + 1] = next;
+    }
+    if (next != NULL) pool[next] = prev;
+    return 1;
+}
+
+// mark or unmark meta entries for a block starting at offset with size 'size'
+void mark_meta(int offset, int size, int value) {
+    if (size < B) return; // only track blocks >= B
+    int start = offset / B;
+    int count = size / B;
+    int i = 0;
+    while (i < count) {
+        meta[start + i] = value;
+        i = i + 1;
+    }
+}
+
+// check if all meta entries covering [offset,size) are zero
+int meta_all_zero(int offset, int size) {
+    if (size < B) return 1; // consider "zero" for small blocks
+    int start = offset / B;
+    int count = size / B;
+    int i = 0;
+    while (i < count) {
+        if (meta[start + i]) return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// allocate an int array of length 'size' (must be power of two)
+int buddy_alloc(int size) {
+    int level = size_to_level(size);
+    if (level < 0) return NULL;
+    int l = level, sz = size;
+    // find larger block
+    while (l <= MAX_LEVEL && free_list[l] == NULL) {
+        l = l + 1;
+        sz = sz + sz;
+    }
+    if (l > MAX_LEVEL) return NULL; // no block available
+
+    // take block from level l
+    int offset = pop_free(l);
+    // split down to desired level
+    while (l > level) {
+        l = l - 1;
+        sz = sz / 2;
+        int buddy_offset = offset + sz;
+        // push right buddy
+        push_free(l, buddy_offset);
+    }
+
+    // mark meta for allocated block if needed
+    mark_meta(offset, size, 1);
+
+    return offset;
+}
+
+// free a previously allocated block given pointer and its size (power of two)
+void buddy_free(int offset, int size) {
+    if (offset == NULL) return;
+    int level = size_to_level(size);
+    if (level < 0) return;
+
+    // unmark meta for this block
+    mark_meta(offset, size, 0);
+
+    int cur_offset = offset;
+    int cur_size = size;
+    int cur_level = level;
+
+    // try to merge while size >= B (only merge for blocks >= B)
+    while (cur_size >= B && cur_level < MAX_LEVEL) {
+        int buddy = cur_offset ^ cur_size; // buddy offset
+        // we can merge only if buddy is entirely free (meta all zero)
+        if (!meta_all_zero(buddy, cur_size)) break;
+        // try to remove buddy from free list
+        if (!remove_from_free_list(cur_level, buddy)) break;
+        // buddy removed; new merged block offset is min
+        if (buddy < cur_offset) cur_offset = buddy;
+        cur_size = cur_size << 1;
+        cur_level = cur_level + 1;
+        // unmark meta for the merged larger block region as it's free now (already zeros)
+    }
+    // insert resulting block into free list
+    push_free(cur_level, cur_offset);
+}
+
+int main() {
+    buddy_init();
+    // simple test
+    int a = buddy_alloc(128);
+    int b = buddy_alloc(256);
+    int c = buddy_alloc(256);
+    putint(a); putch(32); putint(b); putch(32); putint(c); putch(10);
+    buddy_free(b, 256);
+    buddy_free(c, 256);
+    // now those two should merge
+    int d = buddy_alloc(512);
+    putint(d); putch(10);
+    return 0;
+}

@@ -622,7 +622,7 @@ namespace {
             auto rhsRef = m_program->alloc<koopa_ir::MemoryDeclaration>(
                 koopa_ir::MemoryDeclaration {
                     .sourcePos = {},
-                    .allocType = lowerSemanticTypeToIr(*m_program, type, false),
+                    .allocType = lowerSemanticTypeToIr(*m_program, type),
                     .annotations = {},
                 });
             return emitNamedRhs(rhsRef, name);

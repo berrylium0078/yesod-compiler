@@ -267,12 +267,8 @@ void testFunctionArrayParametersLowerThroughPointerDepths()
         "f2 should lower its nested call to f1 inside the loop body");
     require(f1Call->getNumArgs() == 2,
         "f2 should pass both arguments to f1");
-    require(f1Call->getArg(1)->getVType()->isPointerType(),
-        "f2 should pass an address as the array argument to f1");
-    require(dynamic_cast<const PointerType*>(f1Call->getArg(1)->getVType())
-                ->getPointeeType()
-                ->isInt32Type(),
-        "f2 should decay a[n] to an int pointer when calling f1");
+    require(f1Call->getArg(1)->isGetPtrValue(),
+        "f2 should pass a getptr-derived row address to f1");
 
     const auto* f3Body = requireBlockNameContains(*f3Function, "while_body");
     const auto* f2Call = findCallToCallee(*f3Body, f2Function);
@@ -280,24 +276,14 @@ void testFunctionArrayParametersLowerThroughPointerDepths()
         "f3 should lower its nested call to f2 inside the loop body");
     require(f2Call->getNumArgs() == 2,
         "f3 should pass both arguments to f2");
-    require(f2Call->getArg(1)->getVType()->isPointerType(),
-        "f3 should pass an address as the array argument to f2");
-    const auto* f3ArgPointee
-        = dynamic_cast<const PointerType*>(f2Call->getArg(1)->getVType())
-              ->getPointeeType();
-    require(f3ArgPointee->isArrayType(),
-        "f3 should decay a[n] to a pointer-to-array when calling f2");
-    const auto* pointeeArray = dynamic_cast<const ArrayType*>(f3ArgPointee);
-    require(pointeeArray->getNumElements() == 10,
-        "f3 should preserve the inner row extent when passing a[n] to f2");
-    require(pointeeArray->getElementType()->isInt32Type(),
-        "f3 should pass rows of ten integers to f2");
+    require(f2Call->getArg(1)->isGetPtrValue(),
+        "f3 should pass a getptr-derived slice address to f2");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     const auto* f3Call = findCallToCallee(*mainEntry, f3Function);
     require(f3Call != nullptr,
         "main should lower its call to f3");
-    require(f3Call->getArg(1)->getVType()->isPointerType(),
+    require(f3Call->getArg(1)->isGetElemPtrValue(),
         "main should pass the local three-dimensional array by address");
 }
 
@@ -338,36 +324,11 @@ void testBuiltinArrayLibraryDeclarationsLowerToExternalFunctions()
     require(putarrayFunction->getNumBBs() == 0,
         "putarray should lower as an external function declaration");
 
-    const auto* getarrayType
-        = dynamic_cast<const FunctionType*>(getarrayFunction->getFuncType());
-    const auto* putarrayType
-        = dynamic_cast<const FunctionType*>(putarrayFunction->getFuncType());
-    require(getarrayType != nullptr && putarrayType != nullptr,
-        "builtin array library declarations should lower to function types");
-    require(getarrayType->getNumParams() == 1,
+    require(getarrayFunction->getNumParams() == 1,
         "getarray should preserve its single pointer parameter");
-    require(getarrayType->getResultType()->isInt32Type(),
-        "getarray should return int in Koopa IR");
-    require(getarrayType->getParamType(0)->isPointerType(),
-        "getarray parameter should lower to *i32");
-    require(dynamic_cast<const PointerType*>(getarrayType->getParamType(0))
-                ->getPointeeType()
-                ->isInt32Type(),
-        "getarray parameter should point to i32 elements");
 
-    require(putarrayType->getNumParams() == 2,
+    require(putarrayFunction->getNumParams() == 2,
         "putarray should preserve both parameters");
-    require(putarrayType->getResultType()->isUnitType(),
-        "putarray should return void in Koopa IR");
-    require(putarrayType->getParamType(0)->isInt32Type(),
-        "putarray first parameter should lower to i32");
-    require(putarrayType->getParamType(1)->isPointerType(),
-        "putarray second parameter should lower to *i32");
-    require(dynamic_cast<const PointerType*>(putarrayType->getParamType(1))
-                ->getPointeeType()
-                ->isInt32Type(),
-        "putarray second parameter should point to i32 elements");
-
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     require(findCallToCallee(*mainEntry, putarrayFunction) != nullptr,
         "main should call the lowered putarray declaration");

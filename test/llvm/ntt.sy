@@ -1,0 +1,115 @@
+const mint PRIM_ROOT = mint(3);
+const int MOD = 998244353;
+
+mint mod_pow(mint a, int e) {
+    mint r = mint(1), x = a;
+    while (e) {
+        if (e % 2) r = r * x;
+        x = x * x;
+        e = e / 2;
+    }
+    return r;
+}
+
+// Precomputed roots for stages. indexed by k where len = 1<<k
+// roots[k] is primitive len-th root: g^{(MOD-1)/len}
+const int MAX_LOGN = 23, MAXN = 0x800000;
+mint roots[MAX_LOGN + 1];
+mint iroots[MAX_LOGN + 1];
+int log_ceil(int n) {
+    int logn = 0, power = 1;
+    while (power < n) {
+        logn = logn + 1;
+        power = power + power;
+    }
+    return logn;
+}
+
+// Precompute roots up to n (power of two)
+void precompute_roots() {
+    int k = MAX_LOGN;
+    roots[k] = mod_pow(PRIM_ROOT, (MOD - 1) / MAXN);
+    iroots[k] = mint(1) / roots[k];
+    while (k >= 1) {
+        roots[k - 1] = roots[k] * roots[k];
+        iroots[k - 1] = iroots[k] * iroots[k];
+        k = k - 1;
+    }
+}
+
+// Forward NTT (decimation-in-frequency). Does NOT perform explicit bit-reversal.
+// Input: a[0..n-1], n must be power of two and <= precomputed size.
+void ntt_forward(mint a[], int n) {
+    int logn = log_ceil(n);
+    int k = logn;
+    int len = n;
+    int half = n / 2;
+    while (k >= 1) {
+        mint wlen = roots[k];
+        int i = 0;
+        while (i < n) {
+            mint w = mint(1);
+            int j = 0;
+            while (j < half) {
+                mint u = a[i + j];
+                mint v = a[i + j + half] * w;
+                a[i + j] = u + v;
+                a[i + j + half] = u - v;
+                w = w * wlen;
+                j = j + 1;
+            }
+            i = i + len;
+        }
+        len = half;
+        half = half / 2;
+        k = k - 1;
+    }
+}
+
+// Inverse NTT (decimation-in-time). Does NOT perform explicit bit-reversal.
+// After this call the values are in normal order. Caller is responsible to
+// ensure input was produced by a compatible forward transform (DIF) or
+// otherwise in bit-reversed order expected by DIT.
+void ntt_inverse(mint a[], int n) {
+    int logn = log_ceil(n);
+    int k = 1, len = 2, half = 1;
+    while (k <= logn) {
+        mint wlen = iroots[k];
+        int i = 0;
+        while (i < n) {
+            mint w = mint(1);
+            int j = 0;
+            while (j < half) {
+                mint u = a[i + j];
+                mint v = a[i + j + half] * w;
+                a[i + j] = u + v;
+                a[i + j + half] = u - v;
+                w = w * wlen;
+                j = j + 1;
+            }
+            i = i + len;
+        }
+        k = k + 1;
+        half = len;
+        len = len + len;
+    }
+    mint invn = mint(1) / mint(n);
+    int i = 0;
+    while (i < n) { a[i] = a[i] * invn; i = i + 1; }
+}
+
+int main() {
+    int n = 8;
+    precompute_roots();
+    mint a[8] = { mint(1),mint(2),mint(3),mint(4) };
+    mint b[8] = { mint(5),mint(6),mint(7),mint(8) };
+    ntt_forward(a, n);
+    ntt_forward(b, n);
+    int i = 0;
+    while (i < n) { a[i] = a[i] * b[i]; i = i + 1; }
+    ntt_inverse(a, n);
+    i = 0;
+    while (i < n) { putint(int(a[i])); putch(32); i = i + 1; }
+    putch(10);
+    return 0;
+}
