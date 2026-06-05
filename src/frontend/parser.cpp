@@ -69,6 +69,17 @@ Ref<Exp> makeCastExp(AST& ast, int32_t startOffset, BTypeKeyword targetType,
         } });
 }
 
+Ref<Exp> makeSliceExp(AST& ast, int32_t startOffset, Ref<Exp> base,
+    Ref<Exp> start, Ref<Exp> end)
+{
+    return ast.alloc<Exp>(startOffset,
+        Exp::Kind { Exp::Slice {
+            .base = base,
+            .start = start,
+            .end = end,
+        } });
+}
+
 Ref<Exp> makeBinaryRoot(AST& ast, int32_t startOffset, BinaryOpKeyword op,
     Ref<Exp> lhs_nn, Ref<Exp> rhs_nn)
 {
@@ -448,6 +459,43 @@ ParseResult<CompUnit> ParserImpl::parseCompUnit(int32_t offset)
             continue;
         }
 
+        const auto polyKeyword = matchKeyword(currentOffset, "poly");
+        if (polyKeyword.success) {
+            const auto identifier = parseIdent(polyKeyword.nextOffset);
+            if (!identifier.value) {
+                break;
+            }
+
+            const auto openParen = matchSymbol(identifier.nextOffset, '(');
+            if (openParen.success) {
+                const auto funcDef = parseFuncDef(currentOffset);
+                if (!funcDef.value) {
+                    const auto failure = ParseResult<CompUnit> {
+                        .nextOffset = funcDef.nextOffset,
+                        .value = { },
+                    };
+                    m_compUnitMemo.emplace(offset, failure);
+                    return failure;
+                }
+                topLevelItems.emplace_back(funcDef.value.ref());
+                nextOffset = funcDef.nextOffset;
+                continue;
+            }
+
+            const auto decl = parseDecl(currentOffset);
+            if (!decl.value) {
+                const auto failure = ParseResult<CompUnit> {
+                    .nextOffset = decl.nextOffset,
+                    .value = { },
+                };
+                m_compUnitMemo.emplace(offset, failure);
+                return failure;
+            }
+            topLevelItems.emplace_back(decl.value.value());
+            nextOffset = decl.nextOffset;
+            continue;
+        }
+
         const auto intKeyword = matchKeyword(currentOffset, "int");
         if (!intKeyword.success) {
             break;
@@ -707,25 +755,34 @@ ParseResult<FuncTypeKeyword> ParserImpl::parseFuncType(int32_t offset)
     }
 
     const auto mintKeyword = matchKeyword(offset, "mint");
-    if (!mintKeyword.success) {
-        recordFailure<ExpectedKeywordDiagnostic>(
-            skipTrivia(offset), "expected 'void', 'int', or 'mint'");
-        const auto failure = ParseResult<FuncTypeKeyword> {
-
-            .nextOffset = skipTrivia(offset),
-            .value = { },
+    if (mintKeyword.success) {
+        const auto result = ParseResult<FuncTypeKeyword> {
+            .nextOffset = mintKeyword.nextOffset,
+            .value = FuncTypeKeyword::mintKeyword,
         };
-        m_funcTypeMemo.emplace(offset, failure);
-        return failure;
+        m_funcTypeMemo.emplace(offset, result);
+        return result;
     }
 
-    const auto result = ParseResult<FuncTypeKeyword> {
+    const auto polyKeyword = matchKeyword(offset, "poly");
+    if (polyKeyword.success) {
+        const auto result = ParseResult<FuncTypeKeyword> {
+            .nextOffset = polyKeyword.nextOffset,
+            .value = FuncTypeKeyword::polyKeyword,
+        };
+        m_funcTypeMemo.emplace(offset, result);
+        return result;
+    }
 
-        .nextOffset = mintKeyword.nextOffset,
-        .value = FuncTypeKeyword::mintKeyword,
+    recordFailure<ExpectedKeywordDiagnostic>(
+        skipTrivia(offset), "expected 'void', 'int', 'mint', or 'poly'");
+    const auto failure = ParseResult<FuncTypeKeyword> {
+
+        .nextOffset = skipTrivia(offset),
+        .value = { },
     };
-    m_funcTypeMemo.emplace(offset, result);
-    return result;
+    m_funcTypeMemo.emplace(offset, failure);
+    return failure;
 }
 
 ParseResult<Block> ParserImpl::parseBlock(int32_t offset)
@@ -1080,23 +1137,31 @@ ParseResult<BTypeKeyword> ParserImpl::parseBType(int32_t offset)
     }
 
     const auto mintKeyword = matchKeyword(offset, "mint");
-    if (!mintKeyword.success) {
-        const auto failure = ParseResult<BTypeKeyword> {
-
-            .nextOffset = skipTrivia(offset),
-            .value = { },
+    if (mintKeyword.success) {
+        const auto result = ParseResult<BTypeKeyword> {
+            .nextOffset = mintKeyword.nextOffset,
+            .value = BTypeKeyword::mintKeyword,
         };
-        m_bTypeMemo.emplace(offset, failure);
-        return failure;
+        m_bTypeMemo.emplace(offset, result);
+        return result;
     }
 
-    const auto result = ParseResult<BTypeKeyword> {
+    const auto polyKeyword = matchKeyword(offset, "poly");
+    if (polyKeyword.success) {
+        const auto result = ParseResult<BTypeKeyword> {
+            .nextOffset = polyKeyword.nextOffset,
+            .value = BTypeKeyword::polyKeyword,
+        };
+        m_bTypeMemo.emplace(offset, result);
+        return result;
+    }
 
-        .nextOffset = mintKeyword.nextOffset,
-        .value = BTypeKeyword::mintKeyword,
+    const auto failure = ParseResult<BTypeKeyword> {
+        .nextOffset = skipTrivia(offset),
+        .value = { },
     };
-    m_bTypeMemo.emplace(offset, result);
-    return result;
+    m_bTypeMemo.emplace(offset, failure);
+    return failure;
 }
 
 ParseResult<ConstDef> ParserImpl::parseConstDef(int32_t offset)
@@ -2846,13 +2911,95 @@ ParseResult<Exp> ParserImpl::parsePrimaryExp(int32_t offset)
             return recoveredResult;
         }
 
+        // After the parenthesized expression, check for trailing subscript
+        // [exp] and slice [exp, exp] syntax (PrimaryExp recursion).
+        auto parenResult = exp.value;
+        auto parenNext = closeParen.nextOffset;
+        while (true) {
+            const auto bracket = matchSymbol(skipTrivia(parenNext), '[');
+            if (!bracket.success) {
+                break;
+            }
+            // Try slice [exp, exp] first.
+            const auto sliceStart = parseExp(bracket.nextOffset);
+            if (sliceStart.value) {
+                const auto comma = matchSymbol(sliceStart.nextOffset, ',');
+                if (comma.success) {
+                    const auto sliceEnd = parseExp(comma.nextOffset);
+                    if (sliceEnd.value) {
+                        const auto close = matchSymbol(sliceEnd.nextOffset, ']');
+                        if (close.success) {
+                            parenResult = makeSliceExp(m_ast, normalizedOffset,
+                                parenResult.ref(), sliceStart.value.ref(),
+                                sliceEnd.value.ref());
+                            parenNext = close.nextOffset;
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Try subscript [exp].
+            const bool sliceStartValid = sliceStart.value;
+            const auto subStart = sliceStartValid
+                ? sliceStart
+                : parseExp(bracket.nextOffset);
+            if (subStart.value) {
+                const auto close = matchSymbol(subStart.nextOffset, ']');
+                if (close.success) {
+                    parenResult = m_ast.alloc<Exp>(normalizedOffset,
+                        Exp::Kind { Exp::Subscript {
+                            .base = parenResult.ref(),
+                            .index = subStart.value.ref(),
+                        } });
+                    parenNext = close.nextOffset;
+                    continue;
+                }
+            }
+            break;
+        }
         const auto result = ParseResult<Exp> {
 
-            .nextOffset = closeParen.nextOffset,
-            .value = exp.value,
+            .nextOffset = parenNext,
+            .value = parenResult,
         };
         m_primaryExpMemo.emplace(offset, result);
         return result;
+    }
+
+    // Before LVal: try slice syntax identifier[exp, exp].
+    // Must be checked here because parseLVal's LValIndices would greedily
+    // consume the opening bracket and fail on the comma.
+    if (isIdentifierStart(m_source[normalizedOffset])) {
+        const auto ident = parseIdent(normalizedOffset);
+        if (ident.value) {
+            const auto bracket = matchSymbol(skipTrivia(ident.nextOffset), '[');
+            if (bracket.success) {
+                // Peek ahead: if the bracket contains a comma, treat as slice.
+                const auto sliceStart = parseExp(bracket.nextOffset);
+                if (sliceStart.value) {
+                    const auto comma = matchSymbol(sliceStart.nextOffset, ',');
+                    if (comma.success) {
+                        const auto sliceEnd = parseExp(comma.nextOffset);
+                        if (sliceEnd.value) {
+                            const auto close = matchSymbol(sliceEnd.nextOffset, ']');
+                            if (close.success) {
+                                const auto baseLVal = m_ast.alloc<Exp>(
+                                    normalizedOffset,
+                                    Exp::Kind { Exp::LVal { ident.value.ref(), {} } });
+                                const auto result = ParseResult<Exp> {
+                                    .nextOffset = close.nextOffset,
+                                    .value = makeSliceExp(m_ast, normalizedOffset,
+                                        baseLVal, sliceStart.value.ref(),
+                                        sliceEnd.value.ref()),
+                                };
+                                m_primaryExpMemo.emplace(offset, result);
+                                return result;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     const auto lVal = parseLVal(normalizedOffset);

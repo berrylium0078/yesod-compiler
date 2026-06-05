@@ -1106,6 +1106,16 @@ namespace {
                         symbol.function().m_returnType.kind
                             != SemanticTypeKind::voidType);
                 },
+                [&](Exp::Slice expAlt) -> koopa_ir::Value {
+                    (void)expAlt;
+                    throw std::runtime_error(
+                        "poly slice operations are not yet supported in IR generation");
+                },
+                [&](Exp::Subscript expAlt) -> koopa_ir::Value {
+                    (void)expAlt;
+                    throw std::runtime_error(
+                        "poly subscript operations are not yet supported in IR generation");
+                },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
                     if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
                         && expAlt.indices.empty()) {

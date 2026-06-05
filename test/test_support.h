@@ -352,6 +352,14 @@ struct AstTestHelperBase {
                     fail("unexpected unary operator");
                     std::unreachable();
                 },
+                [](const Exp::Slice&) -> int32_t {
+                    fail("cannot evaluate slice expression");
+                    std::unreachable();
+                },
+                [](const Exp::Subscript&) -> int32_t {
+                    fail("cannot evaluate subscript expression");
+                    std::unreachable();
+                },
                 [&](const Exp::Binary& binary) -> int32_t {
                     const auto lhsValue = self.evaluateExp(binary.lhs);
                     const auto rhsValue = self.evaluateExp(binary.rhs);

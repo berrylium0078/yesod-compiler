@@ -28,6 +28,7 @@ enum class ExpType {
     boolean,
     voidType,
     array,
+    poly,
 };
 
 enum class SemanticTypeKind {
@@ -36,6 +37,7 @@ enum class SemanticTypeKind {
     boolean,
     voidType,
     array,
+    poly,
 };
 
 struct SemanticType {
@@ -76,6 +78,16 @@ struct SemanticType {
         };
     }
 
+    [[nodiscard]] static SemanticType makePoly()
+    {
+        return SemanticType {
+            .kind = SemanticTypeKind::poly,
+            .m_size = 8,
+            .m_arrayLength = 0,
+            .m_elementType = nullptr,
+        };
+    }
+
     [[nodiscard]] static SemanticType makeArray(
         const SemanticType& elementType, int32_t arrayLength)
     {
@@ -110,6 +122,11 @@ struct SemanticType {
             || kind == SemanticTypeKind::boolean;
     }
 
+    [[nodiscard]] bool isPoly() const
+    {
+        return kind == SemanticTypeKind::poly;
+    }
+
     [[nodiscard]] bool isNumeric() const
     {
         return kind == SemanticTypeKind::integer
@@ -134,6 +151,8 @@ struct SemanticType {
             return ExpType::voidType;
         case SemanticTypeKind::array:
             return ExpType::array;
+        case SemanticTypeKind::poly:
+            return ExpType::poly;
         }
         throw std::runtime_error("unsupported semantic type kind");
     }

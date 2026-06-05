@@ -43,7 +43,7 @@ static_assert(std::is_enum_v<BinaryOpKeyword>);
 static_assert(std::variant_size_v<Decl> == 2);
 static_assert(std::variant_size_v<Stmt> == 8);
 static_assert(std::variant_size_v<BlockItem> == 2);
-static_assert(std::variant_size_v<Exp::Kind> == 6);
+static_assert(std::variant_size_v<Exp::Kind> == 8);
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -131,6 +131,18 @@ public:
         const auto* number = std::get_if<Number>(&exp_nn(ast()).kind);
         require(number != nullptr, "expected number expression");
         return *number;
+    }
+    const Exp::Slice& requireSliceExp(const Ref<Exp>& exp_nn)
+    {
+        const auto* slice = std::get_if<Exp::Slice>(&exp_nn(ast()).kind);
+        require(slice != nullptr, "expected slice expression");
+        return *slice;
+    }
+    const Exp::Subscript& requireSubscriptExp(const Ref<Exp>& exp_nn)
+    {
+        const auto* subscript = std::get_if<Exp::Subscript>(&exp_nn(ast()).kind);
+        require(subscript != nullptr, "expected subscript expression");
+        return *subscript;
     }
     Stmt extractStmtNode(const BlockItem& blockItem)
     {
@@ -239,6 +251,12 @@ public:
                         return ~value;
                     }
                     fail("unexpected unary operator");
+                },
+                [](const Exp::Slice&) -> int32_t {
+                    fail("cannot evaluate slice expression");
+                },
+                [](const Exp::Subscript&) -> int32_t {
+                    fail("cannot evaluate subscript expression");
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
                     const auto lhsValue = evaluateExp(binary.lhs);

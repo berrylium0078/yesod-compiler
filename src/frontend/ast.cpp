@@ -183,6 +183,8 @@ void AstVisitor::visitExp(Ref<Exp> exp_ref)
         [&](const Exp::Unary& unary) { visitUnaryExp(exp, unary); },
     [&](const Exp::Cast& cast) { visitCastExp(exp, cast); },
         [&](const Exp::Call& call) { visitCallExp(exp, call); },
+        [&](const Exp::Slice& slice) { visitSliceExp(exp, slice); },
+        [&](const Exp::Subscript& subscript) { visitSubscriptExp(exp, subscript); },
         [&](const Exp::LVal& lVal) { visitLValExp(exp, lVal); },
         [&](const Exp::Number& number) { visitNumberExp(exp, number); });
 }
@@ -208,6 +210,19 @@ void AstVisitor::visitCallExp(const Exp&, const Exp::Call& call)
     for (const auto param : call.params) {
         visitExp(param);
     }
+}
+
+void AstVisitor::visitSliceExp(const Exp&, const Exp::Slice& slice)
+{
+    visitExp(slice.base);
+    visitExp(slice.start);
+    visitExp(slice.end);
+}
+
+void AstVisitor::visitSubscriptExp(const Exp&, const Exp::Subscript& subscript)
+{
+    visitExp(subscript.base);
+    visitExp(subscript.index);
 }
 
 void AstVisitor::visitLValExp(const Exp&, const Exp::LVal& lVal)

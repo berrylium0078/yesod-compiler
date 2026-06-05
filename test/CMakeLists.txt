@@ -47,6 +47,10 @@ add_executable(parser_mint_test parser/parser_mint_test.cpp)
 target_link_libraries(parser_mint_test core)
 add_test(NAME parser_mint_test COMMAND parser_mint_test)
 
+add_executable(parser_poly_test parser/parser_poly_test.cpp)
+target_link_libraries(parser_poly_test core)
+add_test(NAME parser_poly_test COMMAND parser_poly_test)
+
 add_executable(semantic_symbol_test semantic/semantic_symbol_test.cpp)
 target_link_libraries(semantic_symbol_test core)
 add_test(NAME semantic_symbol_test COMMAND semantic_symbol_test)

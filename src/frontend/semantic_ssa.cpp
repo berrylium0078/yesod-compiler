@@ -67,6 +67,15 @@ struct ExpressionWalker {
                     walkExp(arg);
                 }
             },
+            [&](const Exp::Slice& slice) {
+                walkExp(slice.base);
+                walkExp(slice.start);
+                walkExp(slice.end);
+            },
+            [&](const Exp::Subscript& subscript) {
+                walkExp(subscript.base);
+                walkExp(subscript.index);
+            },
             [&](const Exp::LVal& lVal) {
                 for (auto index : lVal.indices) {
                     walkExp(index);

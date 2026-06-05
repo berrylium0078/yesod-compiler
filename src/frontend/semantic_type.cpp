@@ -74,6 +74,8 @@ namespace {
             return SemanticType::makeInteger();
         case BTypeKeyword::mintKeyword:
             return SemanticType::makeMint();
+        case BTypeKeyword::polyKeyword:
+            return SemanticType::makePoly();
         }
         throw std::runtime_error("unsupported base type keyword");
     }
@@ -272,6 +274,8 @@ namespace {
             return SemanticType::makeInteger();
         case FuncTypeKeyword::mintKeyword:
             return SemanticType::makeMint();
+        case FuncTypeKeyword::polyKeyword:
+            return SemanticType::makePoly();
         }
         throw std::runtime_error("unsupported function type keyword");
     }
@@ -644,6 +648,53 @@ namespace detail {
             .m_constantValue = 0,
         };
 
+        // Handle poly binary operations before the scalar-only check.
+        if (lhs.m_type.isPoly() || rhs.m_type.isPoly()) {
+            // Shift: poly << int, poly >> int
+            if (binary.op == BinaryOpKeyword::shl
+                || binary.op == BinaryOpKeyword::sar) {
+                if (!lhs.m_type.isPoly() || rhs.m_type.kind != SemanticTypeKind::integer) {
+                    recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                        "shift expects a poly left operand and an int right operand");
+                    return binaryExp;
+                }
+                binaryExp.m_type = SemanticType::makePoly();
+                binaryExp.m_valueKind = ExpType::poly;
+                return binaryExp;
+            }
+            // Poly arithmetic: poly +-* poly, poly +-* mint, mint +-* poly
+            if (binary.op == BinaryOpKeyword::plus
+                || binary.op == BinaryOpKeyword::minus
+                || binary.op == BinaryOpKeyword::star) {
+                const bool lhsPoly = lhs.m_type.isPoly();
+                const bool rhsPoly = rhs.m_type.isPoly();
+                const bool lhsNumeric = lhs.m_type.isNumeric();
+                const bool rhsNumeric = rhs.m_type.isNumeric();
+                if (lhsPoly && rhsPoly) {
+                    binaryExp.m_type = SemanticType::makePoly();
+                    binaryExp.m_valueKind = ExpType::poly;
+                    return binaryExp;
+                }
+                // Scalar multiplication: poly * mint, mint * poly
+                if (lhsPoly && rhsNumeric) {
+                    binaryExp.m_type = SemanticType::makePoly();
+                    binaryExp.m_valueKind = ExpType::poly;
+                    return binaryExp;
+                }
+                if (lhsNumeric && rhsPoly) {
+                    binaryExp.m_type = SemanticType::makePoly();
+                    binaryExp.m_valueKind = ExpType::poly;
+                    return binaryExp;
+                }
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "type mismatch in poly arithmetic");
+                return binaryExp;
+            }
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "operation not supported for poly operands");
+            return binaryExp;
+        }
+
         if (!isScalarTypeImpl(lhs.m_type) || !isScalarTypeImpl(rhs.m_type)) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "binary operator requires scalar operands");
@@ -788,6 +839,28 @@ namespace detail {
         const Exp& exp, const Exp::Unary& unary)
     {
         auto operand = analyzeExp(unary.lhs);
+        // Handle !poly -> int (length extraction, not boolean negation)
+        if (operand.m_type.isPoly()) {
+            if (unary.op == UnaryOpKeyword::bang) {
+                return AnalyzedExp {
+                    .m_type = SemanticType::makeInteger(),
+                    .m_valueKind = ExpType::integer,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            }
+            if (unary.op == UnaryOpKeyword::plus || unary.op == UnaryOpKeyword::minus) {
+                return operand;
+            }
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "unary bitwise not requires a scalar operand");
+            return AnalyzedExp {
+                .m_type = SemanticType::makeInteger(),
+                .m_valueKind = ExpType::integer,
+                .m_isConstant = false,
+                .m_constantValue = 0,
+            };
+        }
         if (!isScalarTypeImpl(operand.m_type)) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "unary operator requires a scalar operand");
@@ -858,20 +931,36 @@ namespace detail {
         const Exp& exp, const Exp::Cast& cast)
     {
         auto operand = analyzeExp(cast.value);
+        const auto targetType = lowerBType(cast.targetType);
+
+        // Handle poly(exp) construction: exp must be int or mint
+        if (targetType.isPoly()) {
+            if (operand.m_type.kind != SemanticTypeKind::integer
+                && operand.m_type.kind != SemanticTypeKind::mint) {
+                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    "poly() constructor requires an int or mint operand");
+            }
+            return AnalyzedExp {
+                .m_type = targetType,
+                .m_valueKind = targetType.valueKind(),
+                .m_isConstant = false,
+                .m_constantValue = 0,
+            };
+        }
+
         if (operand.m_valueKind == ExpType::voidType
             || operand.m_valueKind == ExpType::array) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                 "explicit casts only support scalar int/mint values; arrays must be converted element by element");
             return AnalyzedExp {
-                .m_type = lowerBType(cast.targetType),
-                .m_valueKind = lowerBType(cast.targetType).valueKind(),
+                .m_type = targetType,
+                .m_valueKind = targetType.valueKind(),
                 .m_isConstant = false,
                 .m_constantValue = 0,
             };
         }
 
         operand = normalizeToArithmetic(std::move(operand));
-        const auto targetType = lowerBType(cast.targetType);
         if (operand.m_type.kind != SemanticTypeKind::integer
             && operand.m_type.kind != SemanticTypeKind::mint) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
@@ -985,6 +1074,11 @@ namespace detail {
                     index(m_ast).sourcePos.m_offset,
                     "array subscript must produce an integer value");
             }
+            // Handle poly[k] -> mint (coefficient extraction)
+            if (currentType.isPoly()) {
+                currentType = SemanticType::makeMint();
+                continue;
+            }
             if (!currentType.isArray() || currentType.m_elementType == nullptr) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                     "subscripted expression is not an array");
@@ -1012,6 +1106,72 @@ namespace detail {
         };
     }
 
+    SemanticTypeAnalyzerImpl::AnalyzedExp
+    SemanticTypeAnalyzerImpl::analyzeSliceExp(
+        const Exp& exp, const Exp::Slice& slice)
+    {
+        auto base = analyzeExp(slice.base);
+        auto start = analyzeExp(slice.start);
+        auto end = analyzeExp(slice.end);
+
+        if (!base.m_type.isPoly()) {
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "slice operation requires a poly base expression");
+            return AnalyzedExp {
+                .m_type = SemanticType::makePoly(),
+                .m_valueKind = ExpType::poly,
+                .m_isConstant = false,
+                .m_constantValue = 0,
+            };
+        }
+        if (start.m_type.kind != SemanticTypeKind::integer) {
+            recordDiagnostic<TypeMismatchDiagnostic>(
+                slice.start(m_ast).sourcePos.m_offset,
+                "slice start index must be an integer");
+        }
+        if (end.m_type.kind != SemanticTypeKind::integer) {
+            recordDiagnostic<TypeMismatchDiagnostic>(
+                slice.end(m_ast).sourcePos.m_offset,
+                "slice end index must be an integer");
+        }
+        return AnalyzedExp {
+            .m_type = SemanticType::makePoly(),
+            .m_valueKind = ExpType::poly,
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+    }
+
+    SemanticTypeAnalyzerImpl::AnalyzedExp
+    SemanticTypeAnalyzerImpl::analyzeSubscriptExp(
+        const Exp& exp, const Exp::Subscript& subscript)
+    {
+        auto base = analyzeExp(subscript.base);
+        auto index = analyzeExp(subscript.index);
+
+        if (!base.m_type.isPoly()) {
+            recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                "subscript operation requires a poly base expression");
+            return AnalyzedExp {
+                .m_type = SemanticType::makeMint(),
+                .m_valueKind = ExpType::mint,
+                .m_isConstant = false,
+                .m_constantValue = 0,
+            };
+        }
+        if (index.m_type.kind != SemanticTypeKind::integer) {
+            recordDiagnostic<TypeMismatchDiagnostic>(
+                subscript.index(m_ast).sourcePos.m_offset,
+                "subscript index must be an integer");
+        }
+        return AnalyzedExp {
+            .m_type = SemanticType::makeMint(),
+            .m_valueKind = ExpType::mint,
+            .m_isConstant = false,
+            .m_constantValue = 0,
+        };
+    }
+
     SemanticTypeAnalyzerImpl::AnalyzedExp SemanticTypeAnalyzerImpl::analyzeExp(
         Ref<Exp> expRef)
     {
@@ -1024,6 +1184,12 @@ namespace detail {
             [&](const Exp::Cast& cast) { return analyzeCastExp(exp, cast); },
             [&](const Exp::Call& call) { return analyzeCallExp(exp, call); },
             [&](const Exp::LVal& lVal) { return analyzeLValExp(exp, lVal); },
+            [&](const Exp::Slice& slice) {
+                return analyzeSliceExp(exp, slice);
+            },
+            [&](const Exp::Subscript& subscript) {
+                return analyzeSubscriptExp(exp, subscript);
+            },
             [&](const Exp::Number& number) {
                 return AnalyzedExp {
                     .m_type = SemanticType::makeInteger(),

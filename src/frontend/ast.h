@@ -33,11 +33,13 @@ enum class FuncTypeKeyword {
     voidKeyword,
     intKeyword,
     mintKeyword,
+    polyKeyword,
 };
 
 enum class BTypeKeyword {
     intKeyword,
     mintKeyword,
+    polyKeyword,
 };
 
 enum class UnaryOpKeyword {
@@ -117,7 +119,16 @@ struct Exp {
         Ref<Identifier> identifier;
         std::vector<Ref<Exp>> indices;
     };
-    using Kind = std::variant<Binary, Unary, Cast, Call, LVal, Number>;
+    struct Slice {
+        Ref<Exp> base;
+        Ref<Exp> start;
+        Ref<Exp> end;
+    };
+    struct Subscript {
+        Ref<Exp> base;
+        Ref<Exp> index;
+    };
+    using Kind = std::variant<Binary, Unary, Cast, Call, Slice, Subscript, LVal, Number>;
 
     SourcePos sourcePos;
     Kind kind;
@@ -274,6 +285,8 @@ protected:
     virtual void visitUnaryExp(const Exp& exp, const Exp::Unary& unary);
     virtual void visitCastExp(const Exp& exp, const Exp::Cast& cast);
     virtual void visitCallExp(const Exp& exp, const Exp::Call& call);
+    virtual void visitSliceExp(const Exp& exp, const Exp::Slice& slice);
+    virtual void visitSubscriptExp(const Exp& exp, const Exp::Subscript& subscript);
     virtual void visitLValExp(const Exp& exp, const Exp::LVal& lVal);
     virtual void visitNumberExp(const Exp& exp, const Exp::Number& number);
 };

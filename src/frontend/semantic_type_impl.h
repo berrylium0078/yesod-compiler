@@ -50,6 +50,10 @@ private:
         const Exp& exp, const Exp::Call& call);
     [[nodiscard]] AnalyzedExp analyzeLValExp(
         const Exp& exp, const Exp::LVal& lVal);
+    [[nodiscard]] AnalyzedExp analyzeSliceExp(
+        const Exp& exp, const Exp::Slice& slice);
+    [[nodiscard]] AnalyzedExp analyzeSubscriptExp(
+        const Exp& exp, const Exp::Subscript& subscript);
     [[nodiscard]] AnalyzedExp analyzeCondExp(Ref<Exp> exp);
     [[nodiscard]] SemanticType analyzeObjectType(BTypeKeyword bType,
         const std::vector<Ref<Exp>>& dimensions, int32_t offset,
