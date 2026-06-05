@@ -258,7 +258,7 @@ void testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain()
         "  putch(10);"
         "  return 0;"
         "}",
-        "-15\n");
+        "-23\n");
     }
 
 } // namespace

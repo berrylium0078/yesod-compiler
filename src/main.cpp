@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "backend/llvm.h"
 #include "backend/riscv.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
@@ -375,17 +376,11 @@ bool writeKoopaProgramToFile(
 bool writeLlvmProgramToFile(
     const koopa_ir::Program& program, const std::string& path)
 {
-    TempFile koopaFile(".koopa");
-    TempFile llvmFile(".ll");
-    if (!writeKoopaProgramToFile(program, koopaFile.path())) {
-        return false;
-    }
-    if (!runCommand(
-            "koopac " + koopaFile.path() + " -o " + llvmFile.path())) {
-        return false;
-    }
+    std::ostringstream output;
+    yesod::backend::LlvmGenerator generator;
+    generator.generate(program, output);
+    auto llvmModule = output.str();
 
-    auto llvmModule = readTextFile(llvmFile.path());
     if (programUsesMintRuntime(program)) {
         std::string runtimePrelude;
         if (!buildMintRuntimeLlvmPrelude(runtimePrelude)) {
