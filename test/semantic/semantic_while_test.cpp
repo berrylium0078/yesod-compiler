@@ -103,34 +103,38 @@ struct SemanticWhileTest : SemanticTestBase {
 
     void testWhileBuildsSemanticControlFlowBlocks()
     {
-        m_output = analyzeRoot(
-            "int main(){while (1) {continue;} return 0;}");
+        m_output = analyzeRoot("int main(){while (1) {continue;} return 0;}");
 
         const auto funcDef_nn = firstFuncDef();
         const auto& controlFlow = requireControlFlow(m_output, funcDef_nn);
-        require(controlFlow.blocks.size() == 5,
-            "while semantic CFG should include entry, condition, body, exit, and end blocks");
+        // CFG simplification replaces the constant condition branch with a
+        // jump, removes the unreachable loop-exit block, and then merges the
+        // original condition block with the body block. The explicit `return
+        // a;` path is unreachable too, so only entry, the merged self-loop
+        // block, and the synthesized end block remain.
+        require(controlFlow.blocks.size() == 3,
+            "while semantic CFG should include entry, merged-cond-body, and "
+            "end blocks");
 
         const auto& entryBlock
             = requireControlFlowBlock(m_output, controlFlow.entryBlock);
-        const auto& condBlock
+        const auto& mergedBlock
             = requireControlFlowBlock(m_output, controlFlow.blocks[1]);
-        const auto& bodyBlock
-            = requireControlFlowBlock(m_output, controlFlow.blocks[2]);
-        const auto& whileEndBlock
-            = requireControlFlowBlock(m_output, controlFlow.blocks[3]);
+        const auto& endBlock
+            = requireControlFlowBlock(m_output, controlFlow.endBlock);
 
-        require(requireJumpTerminator(entryBlock).target == controlFlow.blocks[1],
-            "while entry block should jump to the loop condition");
-        const auto& condTerminator = requireBranchTerminator(condBlock);
-        require(condTerminator.trueTarget == controlFlow.blocks[2],
-            "while condition true edge should jump to the body block");
-        require(condTerminator.falseTarget == controlFlow.blocks[3],
-            "while condition false edge should jump to the loop exit block");
-        require(requireJumpTerminator(bodyBlock).target == controlFlow.blocks[1],
-            "continue-only while body should jump back to the condition block");
-        require(requireReturnTerminator(whileEndBlock).value.has_value(),
-            "loop exit block should carry the explicit return terminator");
+        require(
+            requireJumpTerminator(entryBlock).target == controlFlow.blocks[1],
+            "while entry block should jump to the merged cond+body block");
+        // The merged block has a self-loop (body's continue jumps to cond,
+        // but cond was merged into body).
+        require(
+            requireJumpTerminator(mergedBlock).target == controlFlow.blocks[1],
+            "continue-only while merged body should jump to itself "
+            "(self-loop)");
+        require(requireReturnTerminator(endBlock).value.has_value(),
+            "synthesized end block should still carry the default return "
+            "terminator");
     }
 };
 

@@ -1574,6 +1574,11 @@ namespace {
 
         std::erase_if(function.blocks,
             [&](Ref<koopa_ir::BasicBlock> blockRef) {
+                // Always keep the synthesized %end block (default return guard),
+                // even if it's unreachable from entry (e.g., function returns early).
+                if (program[blockRef].label.spelling == "%end") {
+                    return false;
+                }
                 return !reachableBlocks.contains(blockRef);
             });
     }

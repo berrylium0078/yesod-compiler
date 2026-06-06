@@ -483,11 +483,47 @@ namespace detail {
 void SemanticCFG::simplify(
     const std::unordered_map<Ref<Exp>, SemanticExpInfo>& expInfo)
 {
-    // Only Phase 1 is active: replace constant-condition branches with
-    // unconditional jumps. Phase 2 (block merging) is deferred until the
-    // SSA pipeline's edge-case handling is fully validated.
+    // Phase 1: Replace constant-condition branches with unconditional jumps.
+    // Uses emplace to construct the jump terminator in-place within the
+    // optional, avoiding any variant valueless state issues.
     for (auto& [funcDef, funcCfgRef] : m_controlFlowByFuncDef) {
+        (void)funcDef;
         auto& funcCfg = funcCfgRef(m_controlFlowArena);
+        const auto pruneUnreachableBlocks = [&]() -> void {
+            std::unordered_set<Ref<SemanticBasicBlock>> reachable;
+            std::vector<Ref<SemanticBasicBlock>> worklist { funcCfg.entryBlock };
+            while (!worklist.empty()) {
+                const auto block = worklist.back();
+                worklist.pop_back();
+                if (!reachable.insert(block).second) {
+                    continue;
+                }
+                const auto& blockInfo = block(m_controlFlowArena);
+                if (!blockInfo.terminator.has_value()) {
+                    continue;
+                }
+                MATCH(*blockInfo.terminator)
+                WITH(
+                    [&](const SemanticJumpTerminator& jump) {
+                        worklist.push_back(jump.target);
+                    },
+                    [&](const SemanticBranchTerminator& branch) {
+                        worklist.push_back(branch.trueTarget);
+                        worklist.push_back(branch.falseTarget);
+                    },
+                    [&](const SemanticReturnTerminator&) {});
+            }
+
+            std::vector<Ref<SemanticBasicBlock>> prunedBlocks;
+            prunedBlocks.reserve(funcCfg.blocks.size());
+            for (const auto block : funcCfg.blocks) {
+                const auto& blockInfo = block(m_controlFlowArena);
+                if (reachable.contains(block) || blockInfo.nameHint == "end") {
+                    prunedBlocks.push_back(block);
+                }
+            }
+            funcCfg.blocks = std::move(prunedBlocks);
+        };
         bool changed = true;
 
         while (changed) {
@@ -509,17 +545,122 @@ void SemanticCFG::simplify(
                 }
                 const bool constantVal
                     = infoIt->second.m_constantValue.value() != 0;
-                // Replace branch with an unconditional jump.
-                // Build the jump value first, then assign to avoid valueless
-                // state.
-                SemanticBlockTerminator jumpVariant = SemanticJumpTerminator {
-                    .target
-                    = constantVal ? branch->trueTarget : branch->falseTarget,
-                };
-                blockInfo.terminator = std::move(jumpVariant);
+                // Construct a new optional with SemanticBlockTerminator holding
+                // SemanticJumpTerminator, then move-assign to replace the old
+                auto jumpTarget
+                    = constantVal ? branch->trueTarget : branch->falseTarget;
+                SemanticBlockTerminator newTerminator
+                    = SemanticJumpTerminator { .target = jumpTarget };
+                blockInfo.terminator.emplace(std::move(newTerminator));
                 changed = true;
             }
         }
+
+        pruneUnreachableBlocks();
+
+        // Phase 2: Merge reachable blocks with single predecessor.
+        // Single pass: for each block with an unconditional jump to a successor
+        // that has exactly one incoming edge, merge the successor into this
+        // block.
+        {
+            // Compute incoming edge counts for all blocks
+            std::unordered_map<Ref<SemanticBasicBlock>, size_t> incomingCount;
+            for (auto block : funcCfg.blocks) {
+                auto& bbInfo = block(m_controlFlowArena);
+                if (!bbInfo.terminator.has_value()) {
+                    continue;
+                }
+                MATCH(*bbInfo.terminator)
+                WITH(
+                    [&](const SemanticJumpTerminator& j) {
+                        ++incomingCount[j.target];
+                    },
+                    [&](const SemanticBranchTerminator& b) {
+                        ++incomingCount[b.trueTarget];
+                        ++incomingCount[b.falseTarget];
+                    },
+                    [&](const SemanticReturnTerminator&) {});
+            }
+
+            std::unordered_set<Ref<SemanticBasicBlock>> toRemove;
+            for (auto block : funcCfg.blocks) {
+                if (toRemove.contains(block)) {
+                    continue;
+                }
+                auto& blockInfo = block(m_controlFlowArena);
+                if (!blockInfo.terminator.has_value()) {
+                    continue;
+                }
+                const auto* jump = std::get_if<SemanticJumpTerminator>(
+                    &*blockInfo.terminator);
+                if (jump == nullptr) {
+                    continue;
+                }
+                const auto succ = jump->target;
+                if (succ == block || toRemove.contains(succ)) {
+                    continue;
+                }
+                // Only merge if the successor has exactly one incoming edge
+                // and is not the entry block.
+                auto it = incomingCount.find(succ);
+                if (it == incomingCount.end() || it->second != 1) {
+                    continue;
+                }
+                if (succ == funcCfg.entryBlock) {
+                    continue;
+                }
+                // Never merge the synthesized %end block (default return guard)
+                if (succ(m_controlFlowArena).nameHint == "end") {
+                    continue;
+                }
+
+                auto& succInfo = succ(m_controlFlowArena);
+                // Merge succ's items into block
+                blockInfo.items.insert(blockInfo.items.end(),
+                    succInfo.items.begin(), succInfo.items.end());
+                // Replace block's terminator with succ's terminator
+                blockInfo.terminator.emplace(std::move(*succInfo.terminator));
+                // Redirect any block whose terminator referenced succ to block
+                for (auto other : funcCfg.blocks) {
+                    if (other == block || other == succ) {
+                        continue;
+                    }
+                    auto& otherInfo = other(m_controlFlowArena);
+                    if (!otherInfo.terminator.has_value()) {
+                        continue;
+                    }
+                    MATCH(*otherInfo.terminator)
+                    WITH(
+                        [&](SemanticJumpTerminator& otherJump) {
+                            if (otherJump.target == succ) {
+                                otherJump.target = block;
+                            }
+                        },
+                        [&](SemanticBranchTerminator& otherBranch) {
+                            if (otherBranch.trueTarget == succ) {
+                                otherBranch.trueTarget = block;
+                            }
+                            if (otherBranch.falseTarget == succ) {
+                                otherBranch.falseTarget = block;
+                            }
+                        },
+                        [&](const SemanticReturnTerminator&) {});
+                }
+                toRemove.insert(succ);
+            }
+
+            if (!toRemove.empty()) {
+                std::vector<Ref<SemanticBasicBlock>> newBlocks;
+                for (auto block : funcCfg.blocks) {
+                    if (!toRemove.contains(block)) {
+                        newBlocks.push_back(block);
+                    }
+                }
+                funcCfg.blocks = std::move(newBlocks);
+            }
+        }
+
+        pruneUnreachableBlocks();
     }
 }
 

@@ -7,19 +7,19 @@ namespace {
 struct SemanticIfTest : SemanticTestBase {
     void testIfConditionMarksPlainValueAsBooleanContext()
     {
-        m_output = analyzeSource(
-            "int main(){int a; if (a) return 1; return 0;}");
+        m_output
+            = analyzeSource("int main(){int a; if (a) return 1; return 0;}");
         require(success(), "expected semantic success");
 
         const auto funcDef_nn = firstFuncDef();
-        const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).body(ast()).items[1]);
+        const auto ifStmt_nn
+            = extractIfStmt(funcDef_nn(ast()).body(ast()).items[1]);
         require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
                 == ExpType::boolean,
             "if conditions should be recorded as boolean expressions");
-        require(requireSymbol(m_output, ifStmt_nn(ast()).condition).name
-                == "a",
-            "plain lvalue conditions should still preserve their symbol binding");
+        require(requireSymbol(m_output, ifStmt_nn(ast()).condition).name == "a",
+            "plain lvalue conditions should still preserve their symbol "
+            "binding");
     }
 
     void testMixedArithmeticAndLogicalSubexpressionsKeepDistinctKinds()
@@ -29,10 +29,10 @@ struct SemanticIfTest : SemanticTestBase {
         require(success(), "expected semantic success");
 
         const auto funcDef_nn = firstFuncDef();
-        const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).body(ast()).items[3]);
-        const auto& outerBinaryExp = requireBinaryExp(
-            ifStmt_nn(ast()).condition);
+        const auto ifStmt_nn
+            = extractIfStmt(funcDef_nn(ast()).body(ast()).items[3]);
+        const auto& outerBinaryExp
+            = requireBinaryExp(ifStmt_nn(ast()).condition);
         const auto& nestedBinaryExp = requireBinaryExp(outerBinaryExp.rhs);
 
         require(requireExpValueKind(m_output, ifStmt_nn(ast()).condition)
@@ -54,28 +54,30 @@ struct SemanticIfTest : SemanticTestBase {
 
     void testLogicalConditionRecordsFoldedBooleanConstant()
     {
-        m_output = analyzeSource(
-            "int main(){if (1 || 0) return 1; return 0;}");
+        m_output = analyzeSource("int main(){if (1 || 0) return 1; return 0;}");
         require(success(), "expected semantic success");
 
         const auto funcDef_nn = firstFuncDef();
-        const auto ifStmt_nn = extractIfStmt(
-            funcDef_nn(ast()).body(ast()).items[0]);
-        require(requireConstantValue(m_output, ifStmt_nn(ast()).condition)
-                == 1,
+        const auto ifStmt_nn
+            = extractIfStmt(funcDef_nn(ast()).body(ast()).items[0]);
+        require(requireConstantValue(m_output, ifStmt_nn(ast()).condition) == 1,
             "constant logical conditions should record their folded truth "
             "value");
     }
 
     void testIfElseBuildsSemanticControlFlowBlocks()
     {
-        m_output = analyzeRoot(
-            "int main(){int a; if (a) return 1; else return 0;}");
+        m_output
+            = analyzeRoot("int main(){int a; if (a) return 1; else return 0;}");
 
         const auto funcDef_nn = firstFuncDef();
         const auto& controlFlow = requireControlFlow(m_output, funcDef_nn);
-        require(controlFlow.blocks.size() == 5,
-            "if-else semantic CFG should include entry, then, else, join, and end blocks");
+        // Both branches return directly, so the join block becomes unreachable
+        // after CFG simplification and is removed. The synthesized end block is
+        // still preserved as the default return guard.
+        require(controlFlow.blocks.size() == 4,
+            "if-else semantic CFG should include entry, then, else, and end "
+            "blocks");
 
         const auto& entryBlock
             = requireControlFlowBlock(m_output, controlFlow.entryBlock);
@@ -83,8 +85,6 @@ struct SemanticIfTest : SemanticTestBase {
             = requireControlFlowBlock(m_output, controlFlow.blocks[1]);
         const auto& elseBlock
             = requireControlFlowBlock(m_output, controlFlow.blocks[2]);
-        const auto& joinBlock
-            = requireControlFlowBlock(m_output, controlFlow.blocks[3]);
         const auto& endBlock
             = requireControlFlowBlock(m_output, controlFlow.endBlock);
 
@@ -97,8 +97,6 @@ struct SemanticIfTest : SemanticTestBase {
             "then block should terminate with a return");
         require(requireReturnTerminator(elseBlock).value.has_value(),
             "else block should terminate with a return");
-        require(requireJumpTerminator(joinBlock).target == controlFlow.endBlock,
-            "if join block should jump to the synthesized end block");
         require(!requireReturnTerminator(endBlock).value.has_value()
                 || std::holds_alternative<int32_t>(
                     requireReturnTerminator(endBlock).value->kind),

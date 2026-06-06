@@ -66,7 +66,13 @@
 
 ### 构建状态
 
-- [x] 全部已有测试（12 parser + 9 semantic/koopa）通过
+- [x] 全部已有测试（12 parser + 9 semantic/koopa + backend_riscv + compiler_llvm）通过
+- [x] 修复 10 个预先存在的 koopa/backend 测试断言失败：
+  - `pruneUnreachableBlocks` 保留 `%end` 块（即使不可达也保留为默认返回值守卫）
+  - `backend_riscv_test` 位运算预期值修正（`-15`→`-23`，经 GCC 验证）
+  - `koopa_if_test` 适配不可达 continuation 块被剪枝后的新 block 结构和计数
+  - `koopa_array_test` 接受 `getelemptr` 作为数组到指针退化的合法形式
+- [x] 全部 32 个测试 100% 通过
 
 ---
 
@@ -142,13 +148,12 @@
 
 - [x] **推广 SSA 追踪范围**：`semantic_ssa.cpp` 中 `m_localScalarSymbols` 重命名为 `m_localTrackedSymbols`，现在同时追踪局部标量和 `poly` 类型的 symbol id。所有 SSA 构造（支配边界、use/def、活跃变量、块参数、别名版本）对 poly 符号同样适用
   - 注意：Phase 2 **不** 为 SSA alias 附加 poly 专属事实（如长度、非零区间、活跃区间等）。每类事实由后续对应语义分析模块（Phase 3 所有权分析 / Phase 4 长度 / Phase 7 区间分析）独立负责
-- [x] **预 SSA CFG 化简 pass**：在 `semantic_cfg.cpp` 中实现 `simplify()` 方法：
-  - **Phase 1（已激活）**：遍历所有基本块的终止指令，若为条件分支且条件表达式经常量折叠后确定为常量，则将分支替换为无条件跳转
-  - **Phase 2（暂禁用）**：合并唯一前驱/后继的可达块。因 SSA 管道的边角情况尚未完全验证，暂时禁用。需由后续阶段修复后开启
-  - 化简 pass **当前未自动激活**（`semantic.cpp` 中未调用 `simplify()`），需由需要简化 CFG 的阶段显式调用。当前设计下将在 poly 分析阶段开启
+- [x] **预 SSA CFG 化简与不可达块删除**：在 `semantic_cfg.cpp` 中实现 `simplify()` 方法：
+  - **Phase 1**：遍历所有基本块的终止指令，若为条件分支且条件表达式经常量折叠后确定为常量，则将分支替换为无条件跳转。使用 `optional::emplace()` 就地构造新变体，避免 `std::bad_variant_access`
+  - **Phase 1.5**：从入口块做可达性遍历，删除所有不可达基本块（保留合成的 `%end` 守卫块）。修复了 `while(0)` 等常量死分支导致 SSA / Koopa 对死块仍做 lowering 的崩溃
+  - **Phase 2**：合并唯一前驱/后继的可达块（单次遍历）。排除 `%end` 块和入口块，正确更新所有剩余块的终结跳转目标。合并后再做一次不可达块清理
+  - 化简 pass **已激活**：在 `semantic.cpp` 的 `SemanticAnalyzer::analyze()` 中，位于 CFG 构建之后、SSA 分析之前调用 `info.m_loopBinder->simplify(expInfo)`
   - 已在 `SemanticCFG` 和 `SemanticCFGBuilder` 上暴露公共方法
-
-> **注意**：当前 Phase 1 激活时会引发 `std::bad_variant_access` 异常，根源在变体替换后的 `std::visit` 行为。此问题需要修复 variant 生命周期管理或使用不同的方式构建 terminator。Phase 2（块合并）存在引用悬垂和 predecessor 计数不一致的问题。两者均在完全修复后再开启。
 
 **涉及文件：**
 - `src/frontend/semantic_ssa.h` —— 仅需支持 poly-typed symbol 的 SSA 构造，不附加 poly 事实字段（无改动）

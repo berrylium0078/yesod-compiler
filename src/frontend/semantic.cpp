@@ -148,6 +148,9 @@ SemanticOutput SemanticAnalyzer::analyze(const AST& ast, Ref<CompUnit> compUnit)
         info.m_typeAnalyzer->analyze(compUnit);
         info.m_loopBinder->analyze(compUnit);
 
+        // Pre-SSA CFG simplification: replace constant branches with jumps
+        info.m_loopBinder->simplify((*info.m_typeAnalyzer)->expInfoByExp());
+
         info.m_ssaAnalyzer = std::make_unique<SemanticSSAAnalyzer>(ast,
             *info.m_loopBinder->operator->(),
             *info.m_symbolResolver->operator->(),

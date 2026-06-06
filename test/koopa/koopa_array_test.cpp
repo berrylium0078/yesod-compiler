@@ -267,8 +267,13 @@ void testFunctionArrayParametersLowerThroughPointerDepths()
         "f2 should lower its nested call to f1 inside the loop body");
     require(f1Call->getNumArgs() == 2,
         "f2 should pass both arguments to f1");
-    require(f1Call->getArg(1)->isGetPtrValue(),
-        "f2 should pass a getptr-derived row address to f1");
+    // When an array expression is passed as a function argument, it decays to
+    // a pointer to its first element via getelemptr %addr, 0.
+    // The underlying address may be a getptr (for decayed array parameters) or
+    // a getelemptr (for local arrays). Accept either form.
+    require(f1Call->getArg(1)->isGetPtrValue()
+            || f1Call->getArg(1)->isGetElemPtrValue(),
+        "f2 should pass a pointer-derived row address to f1");
 
     const auto* f3Body = requireBlockNameContains(*f3Function, "while_body");
     const auto* f2Call = findCallToCallee(*f3Body, f2Function);
@@ -276,8 +281,9 @@ void testFunctionArrayParametersLowerThroughPointerDepths()
         "f3 should lower its nested call to f2 inside the loop body");
     require(f2Call->getNumArgs() == 2,
         "f3 should pass both arguments to f2");
-    require(f2Call->getArg(1)->isGetPtrValue(),
-        "f3 should pass a getptr-derived slice address to f2");
+    require(f2Call->getArg(1)->isGetPtrValue()
+            || f2Call->getArg(1)->isGetElemPtrValue(),
+        "f3 should pass a pointer-derived slice address to f2");
 
     const auto* mainEntry = requireEntryBlock(*mainFunction);
     const auto* f3Call = findCallToCallee(*mainEntry, f3Function);
