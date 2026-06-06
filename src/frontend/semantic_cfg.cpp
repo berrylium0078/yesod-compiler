@@ -1,8 +1,10 @@
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "frontend/semantic_cfg_impl.h"
+#include "frontend/semantic_type.h"
 
 namespace yesod::frontend {
 
@@ -33,14 +35,12 @@ const SemanticFunctionControlFlow* SemanticCFG::findControlFlow(
     return &controlFlowIt->second(m_controlFlowArena);
 }
 
-const SemanticControlFlowArena& SemanticCFG::controlFlowArena()
-    const
+const SemanticControlFlowArena& SemanticCFG::controlFlowArena() const
 {
     return m_controlFlowArena;
 }
 
-const std::vector<std::unique_ptr<Diagnostic>>&
-SemanticCFG::diagnostics() const
+const std::vector<std::unique_ptr<Diagnostic>>& SemanticCFG::diagnostics() const
 {
     return m_diagnostics;
 }
@@ -124,7 +124,7 @@ namespace detail {
                     }
                     buildFunctionControlFlow(funcDef);
                 },
-                [&](const auto&) { }, );
+                [&](const auto&) {}, );
         }
     }
 
@@ -200,17 +200,18 @@ namespace detail {
         m_owner.m_controlFlowByFuncDef.insert_or_assign(m_funcDef, cfg);
     }
 
-    Ref<SemanticBasicBlock> SemanticCFGBuilderImpl::FunctionBuilder::createBlock(
+    Ref<SemanticBasicBlock>
+    SemanticCFGBuilderImpl::FunctionBuilder::createBlock(
         const std::string& stem)
     {
         const std::string nameHint = stem == "entry" || stem == "end"
             ? stem
             : stem + "_" + std::to_string(m_owner.m_nextGeneratedBlockId++);
-        const Ref<SemanticBasicBlock> block = m_owner.m_controlFlowArena
-                                                  .alloc<SemanticBasicBlock>(
-                                                      SemanticBasicBlock {
-                                                          .nameHint = nameHint,
-                                                      });
+        const Ref<SemanticBasicBlock> block
+            = m_owner.m_controlFlowArena.alloc<SemanticBasicBlock>(
+                SemanticBasicBlock {
+                    .nameHint = nameHint,
+                });
         m_blocks.push_back(block);
         return block;
     }
@@ -261,7 +262,8 @@ namespace detail {
         }
     }
 
-    void SemanticCFGBuilderImpl::FunctionBuilder::appendBlockItem(BlockItem item)
+    void SemanticCFGBuilderImpl::FunctionBuilder::appendBlockItem(
+        BlockItem item)
     {
         MATCH(item)
         WITH([&](Decl decl) { appendDecl(decl); },
@@ -280,8 +282,7 @@ namespace detail {
         }
 
         MATCH(stmt)
-        WITH(
-            [&](Ref<IfStmt> ifStmt) { appendIfStmt(ifStmt); },
+        WITH([&](Ref<IfStmt> ifStmt) { appendIfStmt(ifStmt); },
             [&](Ref<WhileStmt> whileStmt) { appendWhileStmt(whileStmt); },
             [&](Ref<BreakStmt> breakStmt) {
                 m_owner.bindBreakStmt(breakStmt);
@@ -304,10 +305,13 @@ namespace detail {
             },
             [&](Ref<Block> block) { appendBlock(block); },
             [&](Ref<ReturnStmt> returnStmt) { appendReturnStmt(returnStmt); },
-            [&](Ref<ExpStmt> expStmt) { currentBlock().items.push_back(expStmt); });
+            [&](Ref<ExpStmt> expStmt) {
+                currentBlock().items.push_back(expStmt);
+            });
     }
 
-    void SemanticCFGBuilderImpl::FunctionBuilder::bindBlockOnly(Ref<Block> block)
+    void SemanticCFGBuilderImpl::FunctionBuilder::bindBlockOnly(
+        Ref<Block> block)
     {
         for (const auto item : block(m_owner.ast).items) {
             bindBlockItemOnly(item);
@@ -318,7 +322,7 @@ namespace detail {
         BlockItem item)
     {
         MATCH(item)
-        WITH([&](Decl) { }, [&](Stmt stmt) { bindStmtOnly(stmt); }, );
+        WITH([&](Decl) {}, [&](Stmt stmt) { bindStmtOnly(stmt); }, );
     }
 
     void SemanticCFGBuilderImpl::FunctionBuilder::bindStmtOnly(Stmt stmt)
@@ -330,11 +334,12 @@ namespace detail {
                 bindStmtOnly(ifStmt(m_owner.ast).elseBody);
             },
             [&](Ref<WhileStmt> whileStmt) {
-                m_owner.m_loopStack.push_back(SemanticCFGBuilderImpl::LoopContext {
-                    .whileStmt = whileStmt,
-                    .condBlock = *m_currentBlock,
-                    .endBlock = *m_currentBlock,
-                });
+                m_owner.m_loopStack.push_back(
+                    SemanticCFGBuilderImpl::LoopContext {
+                        .whileStmt = whileStmt,
+                        .condBlock = *m_currentBlock,
+                        .endBlock = *m_currentBlock,
+                    });
                 bindStmtOnly(whileStmt(m_owner.ast).body);
                 m_owner.m_loopStack.pop_back();
             },
@@ -343,10 +348,11 @@ namespace detail {
                 m_owner.bindContinueStmt(continueStmt);
             },
             [&](Ref<Block> block) { bindBlockOnly(block); },
-            [&](const auto&) { });
+            [&](const auto&) {});
     }
 
-    void SemanticCFGBuilderImpl::FunctionBuilder::appendIfStmt(Ref<IfStmt> ifStmt)
+    void SemanticCFGBuilderImpl::FunctionBuilder::appendIfStmt(
+        Ref<IfStmt> ifStmt)
     {
         const auto& parsedIfStmt = ifStmt(m_owner.ast);
         const Ref<SemanticBasicBlock> thenBlock = createBlock("if_then");
@@ -431,7 +437,8 @@ namespace detail {
             const Ref<SemanticBasicBlock> trueBlock = createBlock("bool_true");
             const Ref<SemanticBasicBlock> falseBlock
                 = createBlock("bool_false");
-            emitBooleanBranch(parsedReturnStmt.exp.ref(), trueBlock, falseBlock);
+            emitBooleanBranch(
+                parsedReturnStmt.exp.ref(), trueBlock, falseBlock);
 
             m_currentBlock = trueBlock;
             setReturnTerminator(SemanticValue { .kind = int32_t { 1 } });
@@ -453,7 +460,8 @@ namespace detail {
         if (const auto* binaryExp = std::get_if<Exp::Binary>(&parsedExp.kind);
             binaryExp != nullptr && isLogicalOperator(binaryExp->op)) {
             const Ref<SemanticBasicBlock> rhsBlock = createBlock(
-                binaryExp->op == BinaryOpKeyword::orOr ? "lor_rhs" : "land_rhs");
+                binaryExp->op == BinaryOpKeyword::orOr ? "lor_rhs"
+                                                       : "land_rhs");
             if (binaryExp->op == BinaryOpKeyword::orOr) {
                 emitBooleanBranch(binaryExp->lhs, trueTarget, rhsBlock);
                 m_currentBlock = rhsBlock;
@@ -472,6 +480,49 @@ namespace detail {
 
 } // namespace detail
 
+void SemanticCFG::simplify(
+    const std::unordered_map<Ref<Exp>, SemanticExpInfo>& expInfo)
+{
+    // Only Phase 1 is active: replace constant-condition branches with
+    // unconditional jumps. Phase 2 (block merging) is deferred until the
+    // SSA pipeline's edge-case handling is fully validated.
+    for (auto& [funcDef, funcCfgRef] : m_controlFlowByFuncDef) {
+        auto& funcCfg = funcCfgRef(m_controlFlowArena);
+        bool changed = true;
+
+        while (changed) {
+            changed = false;
+            for (auto block : funcCfg.blocks) {
+                auto& blockInfo = block(m_controlFlowArena);
+                if (!blockInfo.terminator.has_value()) {
+                    continue;
+                }
+                const auto* branch = std::get_if<SemanticBranchTerminator>(
+                    &*blockInfo.terminator);
+                if (branch == nullptr) {
+                    continue;
+                }
+                const auto infoIt = expInfo.find(branch->condition);
+                if (infoIt == expInfo.end()
+                    || !infoIt->second.m_constantValue.has_value()) {
+                    continue;
+                }
+                const bool constantVal
+                    = infoIt->second.m_constantValue.value() != 0;
+                // Replace branch with an unconditional jump.
+                // Build the jump value first, then assign to avoid valueless
+                // state.
+                SemanticBlockTerminator jumpVariant = SemanticJumpTerminator {
+                    .target
+                    = constantVal ? branch->trueTarget : branch->falseTarget,
+                };
+                blockInfo.terminator = std::move(jumpVariant);
+                changed = true;
+            }
+        }
+    }
+}
+
 SemanticCFGBuilder::SemanticCFGBuilder(const AST& ast)
     : m_impl(std::make_unique<detail::SemanticCFGBuilderImpl>(ast))
 {
@@ -482,6 +533,12 @@ SemanticCFGBuilder::~SemanticCFGBuilder() = default;
 void SemanticCFGBuilder::analyze(Ref<CompUnit> compUnit)
 {
     m_impl->analyze(compUnit);
+}
+
+void SemanticCFGBuilder::simplify(
+    const std::unordered_map<Ref<Exp>, SemanticExpInfo>& expInfo)
+{
+    m_impl->simplify(expInfo);
 }
 
 const SemanticCFG* SemanticCFGBuilder::operator->() const

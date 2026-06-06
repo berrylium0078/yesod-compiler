@@ -147,11 +147,13 @@ SemanticOutput SemanticAnalyzer::analyze(const AST& ast, Ref<CompUnit> compUnit)
         info.m_symbolResolver->analyze(compUnit);
         info.m_typeAnalyzer->analyze(compUnit);
         info.m_loopBinder->analyze(compUnit);
+
         info.m_ssaAnalyzer = std::make_unique<SemanticSSAAnalyzer>(ast,
-            *info.m_loopBinder->operator->(), *info.m_symbolResolver->operator->(),
+            *info.m_loopBinder->operator->(),
+            *info.m_symbolResolver->operator->(),
             *info.m_typeAnalyzer->operator->());
         info.m_ssaAnalyzer->analyze(compUnit);
-        
+
         auto typeAnalyzer = info.m_typeAnalyzer.get();
         auto symbolResolver = info.m_symbolResolver.get();
         auto loopBinder = info.m_loopBinder.get();
