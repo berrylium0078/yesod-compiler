@@ -99,4 +99,4 @@ Check if the coding style guidelines are followed, and if the code is well-struc
 
 Update the documentation in `doc/` directory as needed to reflect any changes in the project structure, coding style, or workflow. Ensure that the documentation is clear and comprehensive for future reference.
 
-Store your current progress in memory, including any implementation plans, proposed fixes, and documentation updates. This will allow you to keep track of your work and refer back to it as needed throughout the development process.
+Maintain the implementation plan `plan.md` and the instruction files in `.github/instructions/` directory to keep track of the project progress and guidelines. Update these files as necessary to reflect any changes in the project structure, coding style, or workflow.
