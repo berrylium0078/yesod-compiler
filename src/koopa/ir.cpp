@@ -593,11 +593,34 @@ namespace {
 
     void requireValueType(const Value& value, ValidationType expected,
         const std::unordered_map<std::string, ValidationType>& valueTypes,
-        const char* message)
+        const char* message, int32_t offset = -1)
     {
         if (!valueMatchesType(value, expected, valueTypes)) {
-            throw std::runtime_error(message);
+            std::string fullMessage;
+            if (offset >= 0) {
+                fullMessage = "at offset " + std::to_string(offset)
+                    + ": " + message;
+            } else {
+                fullMessage = message;
+            }
+            throw std::runtime_error(fullMessage);
         }
+    }
+
+    [[nodiscard]] int32_t sourceOffset(const Value& value)
+    {
+        return MATCH(value) WITH(
+            [](const Symbol& sym) { return sym.sourcePos.m_offset; },
+            [](const IntegerLiteral& lit) { return lit.sourcePos.m_offset; },
+            [](const UndefValue& undef) { return undef.sourcePos.m_offset; });
+    }
+
+    [[nodiscard]] int32_t sourceOffset(const std::optional<Value>& value)
+    {
+        if (value.has_value()) {
+            return sourceOffset(*value);
+        }
+        return -1;
     }
 
 } // namespace
@@ -605,7 +628,7 @@ namespace {
 void validate(const Program& program)
 {
     std::unordered_map<std::string, ValidationType> valueTypes;
-    std::unordered_map<std::string, ValidationType> pointeeTypes;
+    std::unordered_map<std::string, Type> pointeeTypes;
     std::unordered_set<std::string> combineSymbols;
 
     for (const auto& item : program.items) {
@@ -615,8 +638,7 @@ void validate(const Program& program)
                 if constexpr (std::same_as<Item, GlobalMemoryDef>) {
                     const auto& global = program[itemRef];
                     valueTypes[global.name.spelling] = ValidationType::pointer;
-                    pointeeTypes[global.name.spelling]
-                        = validationTypeOf(global.allocType);
+                    pointeeTypes[global.name.spelling] = global.allocType;
                 } else if constexpr (std::same_as<Item, FunctionDef>) {
                     const auto& function = program[itemRef];
                     for (const auto paramRef : function.params) {
@@ -658,7 +680,7 @@ void validate(const Program& program)
                 const auto& expr = program[ref];
                 const auto it = pointeeTypes.find(expr.source.spelling);
                 return it == pointeeTypes.end() ? ValidationType::unknown
-                                                : it->second;
+                                                : validationTypeOf(it->second);
             },
             [&](Ref<GetPointerExpr> ref) -> ValidationType {
                 (void)ref;
@@ -681,17 +703,22 @@ void validate(const Program& program)
                 if (isIntOnly) {
                     requireValueType(expr.lhs, ValidationType::integer,
                         valueTypes,
-                        "integer-only binary operator has non-int lhs");
+                        "integer-only binary operator has non-int lhs",
+                        expr.sourcePos.m_offset);
                     requireValueType(expr.rhs, ValidationType::integer,
                         valueTypes,
-                        "integer-only binary operator has non-int rhs");
+                        "integer-only binary operator has non-int rhs",
+                        expr.sourcePos.m_offset);
                 }
                 if (lhsType == ValidationType::poly
                     || lhsType == ValidationType::pv
                     || rhsType == ValidationType::poly
                     || rhsType == ValidationType::pv) {
-                    throw std::runtime_error("poly/pv values must use "
-                                             "dedicated pseudo-instructions");
+                    auto msg = std::string("at offset ")
+                        + std::to_string(expr.sourcePos.m_offset)
+                        + ": poly/pv values must use "
+                          "dedicated pseudo-instructions";
+                    throw std::runtime_error(msg);
                 }
                 switch (expr.op) {
                 case BinaryOp::ne:
@@ -714,13 +741,15 @@ void validate(const Program& program)
             },
             [&](Ref<UnaryPolyExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
+                auto offset = [&](const Value& v) { return sourceOffset(v); };
                 if (expr.op == UnaryPolyOp::ntt) {
                     requireValueType(expr.value, ValidationType::poly,
-                        valueTypes, "ntt expects a poly operand");
+                        valueTypes, "ntt expects a poly operand",
+                        offset(expr.value));
                     return ValidationType::pv;
                 }
                 requireValueType(expr.value, ValidationType::pv, valueTypes,
-                    "intt expects a pv operand");
+                    "intt expects a pv operand", offset(expr.value));
                 return ValidationType::poly;
             },
             [&](Ref<PvBinaryExpr> ref) -> ValidationType {
@@ -729,11 +758,14 @@ void validate(const Program& program)
                     = validationTypeOfValue(expr.lhs, valueTypes);
                 const auto rhsType
                     = validationTypeOfValue(expr.rhs, valueTypes);
+                auto offset = expr.sourcePos.m_offset;
                 if (expr.op == PvBinaryOp::add || expr.op == PvBinaryOp::sub) {
                     if (lhsType != ValidationType::pv
                         || rhsType != ValidationType::pv) {
-                        throw std::runtime_error(
-                            "pv_add/sub expect pv operands");
+                        auto msg = std::string("at offset ")
+                            + std::to_string(offset)
+                            + ": pv_add/sub expect pv operands";
+                        throw std::runtime_error(msg);
                     }
                 } else if (!((lhsType == ValidationType::pv
                                  && rhsType == ValidationType::pv)
@@ -747,13 +779,16 @@ void validate(const Program& program)
                                || (rhsType == ValidationType::pv
                                    && std::holds_alternative<IntegerLiteral>(
                                        expr.lhs)))) {
-                    throw std::runtime_error(
-                        "pv_mul expects pv/pv or pv/mint operands");
+                    auto msg = std::string("at offset ")
+                        + std::to_string(offset)
+                        + ": pv_mul expects pv/pv or pv/mint operands";
+                    throw std::runtime_error(msg);
                 }
                 return ValidationType::pv;
             },
             [&](Ref<CombineExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
+                auto offset = [&](const Value& v) { return sourceOffset(v); };
                 for (const auto& term : expr.terms) {
                     if (const auto* symbol = std::get_if<Symbol>(&term.value);
                         symbol != nullptr
@@ -762,33 +797,41 @@ void validate(const Program& program)
                             "combine term source cannot be another combine");
                     }
                     requireValueType(term.value, ValidationType::poly,
-                        valueTypes, "combine term source must be poly");
+                        valueTypes, "combine term source must be poly",
+                        offset(term.value));
                     requireValueType(term.start, ValidationType::integer,
-                        valueTypes, "combine term start must be int");
+                        valueTypes, "combine term start must be int",
+                        offset(term.start));
                     if (term.end.has_value()) {
                         requireValueType(*term.end, ValidationType::integer,
-                            valueTypes, "combine term end must be int");
+                            valueTypes, "combine term end must be int",
+                            offset(*term.end));
                     }
                     requireValueType(term.shift, ValidationType::integer,
-                        valueTypes, "combine term shift must be int");
+                        valueTypes, "combine term shift must be int",
+                        offset(term.shift));
                     requireValueType(term.scale, ValidationType::mint,
-                        valueTypes, "combine term scale must be mint");
+                        valueTypes, "combine term scale must be mint",
+                        offset(term.scale));
                 }
                 return ValidationType::poly;
             },
             [&](Ref<GetCoeffExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
                 requireValueType(expr.value, ValidationType::poly, valueTypes,
-                    "getcoeff expects a poly operand");
+                    "getcoeff expects a poly operand",
+                    sourceOffset(expr.value));
                 requireValueType(expr.index, ValidationType::integer,
-                    valueTypes, "getcoeff index must be int");
+                    valueTypes, "getcoeff index must be int",
+                    sourceOffset(expr.index));
                 return ValidationType::mint;
             },
             [&](Ref<PolyConstructExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
                 for (const auto& element : expr.elements) {
                     requireValueType(element, ValidationType::mint, valueTypes,
-                        "poly_construct elements must be mint");
+                        "poly_construct elements must be mint",
+                        sourceOffset(element));
                 }
                 return ValidationType::poly;
             },
@@ -796,11 +839,13 @@ void validate(const Program& program)
                 const auto& expr = program[ref];
                 if (expr.op == ConversionOp::int2mint) {
                     requireValueType(expr.value, ValidationType::integer,
-                        valueTypes, "int2mint expects an int operand");
+                        valueTypes, "int2mint expects an int operand",
+                        sourceOffset(expr.value));
                     return ValidationType::mint;
                 }
                 requireValueType(expr.value, ValidationType::mint, valueTypes,
-                    "mint2int expects a mint operand");
+                    "mint2int expects a mint operand",
+                    sourceOffset(expr.value));
                 return ValidationType::integer;
             });
     };
@@ -831,8 +876,7 @@ void validate(const Program& program)
                                                 &symbolDef.rhs)) {
                                             pointeeTypes[symbolDef.symbol
                                                              .spelling]
-                                                = validationTypeOf(
-                                                    program[*memRef].allocType);
+                                                = program[*memRef].allocType;
                                         } else if (const auto* getPtrRef
                                             = std::get_if<Ref<GetPointerExpr>>(
                                                 &symbolDef.rhs)) {
@@ -847,10 +891,26 @@ void validate(const Program& program)
                                                 Ref<GetElementPointerExpr>>(
                                                 &symbolDef.rhs)) {
                                             const auto& expr = program[*gepRef];
-                                            pointeeTypes[symbolDef.symbol
-                                                             .spelling]
-                                                = pointeeTypes[expr.source
-                                                                   .spelling];
+                                            const auto srcIt
+                                                = pointeeTypes.find(
+                                                    expr.source.spelling);
+                                            if (srcIt != pointeeTypes.end()
+                                                && std::holds_alternative<
+                                                    Ref<ArrayType>>(
+                                                    srcIt->second)) {
+                                                pointeeTypes[symbolDef.symbol
+                                                                 .spelling]
+                                                    = program[*std::get_if<
+                                                        Ref<ArrayType>>(
+                                                        &srcIt->second)]
+                                                          .elementType;
+                                            } else {
+                                                pointeeTypes[symbolDef.symbol
+                                                                 .spelling]
+                                                    = srcIt == pointeeTypes.end()
+                                                          ? Type { I32Type {} }
+                                                          : srcIt->second;
+                                            }
                                         }
                                     }
                                 },
