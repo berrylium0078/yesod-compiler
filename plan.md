@@ -194,7 +194,7 @@
     - `min(a, b)` / `max(a, b)`
   - 来源规则：
     - `poly(exp)` 构造：长度为 `exp`（当 exp 类型为 int）或 `!exp`（当 exp 类型为 poly，即复制场景）
-    - `p[n, m]` 切片：长度为 `clamp(m - n, 0, len(p))`（无效范围取 0）
+    - `p[n, m]` 切片：长度为 `m <= 0 || n >= m || n >= len(p) ? 0 : min(m, len(p))`
     - 二元运算 `a + b`、`a - b`、`a * b`：长度为 `max(len(a), len(b))`
     - 移位 `p >> k`、`p << k`：长度分别为 `max(len(p) - k, 0)` 和 `len(p) + k`
     - 函数返回值的 poly：从返回值元数据字段读取
