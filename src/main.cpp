@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -6,13 +7,11 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <algorithm>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
 #include "backend/llvm.h"
-#include "backend/riscv.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
@@ -214,8 +213,10 @@ std::string extractLlvmFunctionDefinitions(const std::string& llvmModule)
         }
 
         output << line << '\n';
-        braceDepth += static_cast<int>(std::count(line.begin(), line.end(), '{'));
-        braceDepth -= static_cast<int>(std::count(line.begin(), line.end(), '}'));
+        braceDepth
+            += static_cast<int>(std::count(line.begin(), line.end(), '{'));
+        braceDepth
+            -= static_cast<int>(std::count(line.begin(), line.end(), '}'));
         if (inFunction && braceDepth == 0) {
             output << '\n';
             inFunction = false;
@@ -274,7 +275,7 @@ bool buildMintRuntimeLlvmPrelude(std::string& prelude)
         return false;
     }
     if (!runCommand("clang -S -emit-llvm -O0 -target "
-            "riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32 "
+                    "riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32 "
             + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
         return false;
     }
@@ -282,27 +283,12 @@ bool buildMintRuntimeLlvmPrelude(std::string& prelude)
     return !prelude.empty();
 }
 
-bool buildMintRuntimeRiscvPrelude(std::string& prelude)
-{
-    TempFile runtimeSource(".c");
-    TempFile runtimeAsm(".S");
-    if (!writeTextFile(runtimeSource.path(), std::string(kMintRuntimeSource))) {
-        return false;
-    }
-    if (!runCommand("clang -S -O2 -target riscv32-unknown-linux-elf "
-            "-march=rv32im -mabi=ilp32 "
-            + runtimeSource.path() + " -o " + runtimeAsm.path())) {
-        return false;
-    }
-    prelude = readTextFile(runtimeAsm.path());
-    return !prelude.empty();
-}
-
 struct DiagInfo {
     std::size_t m_offset;
     std::string m_message;
     std::string kind; // "parse" or "semantic"
-    yesod::frontend::DiagnosticSeverity severity = yesod::frontend::DiagnosticSeverity::error;
+    yesod::frontend::DiagnosticSeverity severity
+        = yesod::frontend::DiagnosticSeverity::error;
 };
 
 static std::vector<std::size_t> buildLineStarts(const std::string& src)
@@ -319,43 +305,46 @@ static std::vector<std::size_t> buildLineStarts(const std::string& src)
 }
 
 static void printDiagnosticsAggregate(const std::string& inputPath,
-                                      const std::string& source,
-                                      std::vector<DiagInfo>& diags)
+    const std::string& source, std::vector<DiagInfo>& diags)
 {
-    if (diags.empty()) return;
+    if (diags.empty())
+        return;
 
-    std::sort(diags.begin(), diags.end(),
-              [](const DiagInfo& a, const DiagInfo& b) {
-                  return a.m_offset < b.m_offset;
-              });
+    std::sort(
+        diags.begin(), diags.end(), [](const DiagInfo& a, const DiagInfo& b) {
+            return a.m_offset < b.m_offset;
+        });
 
     const auto lineStarts = buildLineStarts(source);
 
     for (const auto& d : diags) {
         // map offset -> line/col
         const std::size_t offset = d.m_offset;
-        auto it = std::upper_bound(lineStarts.begin(), lineStarts.end(), offset);
+        auto it
+            = std::upper_bound(lineStarts.begin(), lineStarts.end(), offset);
         std::size_t line = 0;
         if (it == lineStarts.begin()) {
             line = 0;
         } else {
-            line = static_cast<std::size_t>(std::distance(lineStarts.begin(), it) - 1);
+            line = static_cast<std::size_t>(
+                std::distance(lineStarts.begin(), it) - 1);
         }
         const std::size_t col = offset - lineStarts[line] + 1;
 
         std::cerr << d.kind << ' '
-              << (d.severity == yesod::frontend::DiagnosticSeverity::warning
-                  ? "warning"
-                  : "error")
-              << " at " << inputPath << ":"
-                  << (line + 1) << ":" << col << " (offset " << offset << "): "
-                  << d.m_message << std::endl;
+                  << (d.severity == yesod::frontend::DiagnosticSeverity::warning
+                             ? "warning"
+                             : "error")
+                  << " at " << inputPath << ":" << (line + 1) << ":" << col
+                  << " (offset " << offset << "): " << d.m_message << std::endl;
 
         // print the source line and a caret
         const std::size_t lineBegin = lineStarts[line];
-        const std::size_t lineEnd = (line + 1 < lineStarts.size()) ? (lineStarts[line + 1] - 1)
-                                                                       : source.size();
-        const std::string lineText = source.substr(lineBegin, lineEnd - lineBegin);
+        const std::size_t lineEnd = (line + 1 < lineStarts.size())
+            ? (lineStarts[line + 1] - 1)
+            : source.size();
+        const std::string lineText
+            = source.substr(lineBegin, lineEnd - lineBegin);
         std::cerr << lineText << std::endl;
 
         std::string caret;
@@ -392,39 +381,6 @@ bool writeLlvmProgramToFile(
     return writeTextFile(path, llvmModule);
 }
 
-bool writePlainRiscvProgramToFile(
-    const koopa_ir::Program& program, const std::string& path)
-{
-    std::ofstream outputStream(path);
-    if (!outputStream) {
-        return false;
-    }
-
-    yesod::backend::RiscvGenerator generator;
-    generator.generate(program, outputStream);
-    return outputStream.good();
-}
-
-bool writeRiscvProgramToFile(
-    const koopa_ir::Program& program, const std::string& path)
-{
-    if (!programUsesMintRuntime(program)) {
-        return writePlainRiscvProgramToFile(program, path);
-    }
-
-    TempFile generatedAsm(".S");
-    if (!writePlainRiscvProgramToFile(program, generatedAsm.path())) {
-        return false;
-    }
-
-    std::string runtimePrelude;
-    if (!buildMintRuntimeRiscvPrelude(runtimePrelude)) {
-        return false;
-    }
-    return writeTextFile(
-        path, runtimePrelude + "\n" + readTextFile(generatedAsm.path()));
-}
-
 } // namespace
 
 int main(int argc, const char* argv[])
@@ -439,7 +395,7 @@ int main(int argc, const char* argv[])
     const std::string inputPath = argv[2];
     const std::string outputPath = argv[4];
 
-    if (mode != "-koopa" && mode != "-riscv" && mode != "-llvm") {
+    if (mode != "-koopa" && mode != "-llvm") {
         std::cerr << "unsupported mode: " << mode << std::endl;
         return 1;
     }
@@ -453,8 +409,8 @@ int main(int argc, const char* argv[])
             std::vector<DiagInfo> diags;
             diags.reserve(parseOutput.m_diagnostics.size());
             for (const auto& d : parseOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset),
-                    d->message, std::string("parse"), d->severity});
+                diags.push_back(DiagInfo { static_cast<std::size_t>(d->offset),
+                    d->message, std::string("parse"), d->severity });
             }
             printDiagnosticsAggregate(inputPath, source, diags);
             return 1;
@@ -465,15 +421,17 @@ int main(int argc, const char* argv[])
             std::move(parseOutput.m_ast), parseOutput.m_root.ref());
         if (!semanticOutput.success()) {
             std::vector<DiagInfo> diags;
-            // include any parse diagnostics (if present) and semantic diagnostics
-            diags.reserve(parseOutput.m_diagnostics.size() + semanticOutput.m_diagnostics.size());
+            // include any parse diagnostics (if present) and semantic
+            // diagnostics
+            diags.reserve(parseOutput.m_diagnostics.size()
+                + semanticOutput.m_diagnostics.size());
             for (const auto& d : parseOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset),
-                    d->message, std::string("parse"), d->severity});
+                diags.push_back(DiagInfo { static_cast<std::size_t>(d->offset),
+                    d->message, std::string("parse"), d->severity });
             }
             for (const auto& d : semanticOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset),
-                    d->message, std::string("semantic"), d->severity});
+                diags.push_back(DiagInfo { static_cast<std::size_t>(d->offset),
+                    d->message, std::string("semantic"), d->severity });
             }
             printDiagnosticsAggregate(inputPath, source, diags);
             return 1;
@@ -483,37 +441,26 @@ int main(int argc, const char* argv[])
             std::vector<DiagInfo> diags;
             diags.reserve(semanticOutput.m_diagnostics.size());
             for (const auto& d : semanticOutput.m_diagnostics) {
-                diags.push_back(DiagInfo{static_cast<std::size_t>(d->offset),
-                    d->message, std::string("semantic"), d->severity});
+                diags.push_back(DiagInfo { static_cast<std::size_t>(d->offset),
+                    d->message, std::string("semantic"), d->severity });
             }
             printDiagnosticsAggregate(inputPath, source, diags);
         }
 
         if (mode == "-koopa") {
             Generator generator;
-            auto program = generator.generateIr(
-                semanticOutput.m_ast, semanticOutput.m_root,
-                semanticOutput.m_info);
+            auto program = generator.generateIr(semanticOutput.m_ast,
+                semanticOutput.m_root, semanticOutput.m_info);
             if (!writeKoopaProgramToFile(*program, outputPath)) {
                 std::cerr << "failed to generate koopa IR" << std::endl;
                 return 1;
             }
-        } else if (mode == "-llvm") {
-            Generator generator;
-            auto program = generator.generateIr(
-                semanticOutput.m_ast, semanticOutput.m_root,
-                semanticOutput.m_info);
-            if (!writeLlvmProgramToFile(*program, outputPath)) {
-                std::cerr << "failed to generate LLVM IR" << std::endl;
-                return 1;
-            }
         } else {
             Generator generator;
-            auto program = generator.generateIr(
-                semanticOutput.m_ast, semanticOutput.m_root,
-                semanticOutput.m_info);
-            if (!writeRiscvProgramToFile(*program, outputPath)) {
-                std::cerr << "failed to generate RISC-V assembly" << std::endl;
+            auto program = generator.generateIr(semanticOutput.m_ast,
+                semanticOutput.m_root, semanticOutput.m_info);
+            if (!writeLlvmProgramToFile(*program, outputPath)) {
+                std::cerr << "failed to generate LLVM IR" << std::endl;
                 return 1;
             }
         }
