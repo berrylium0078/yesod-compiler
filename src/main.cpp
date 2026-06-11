@@ -359,6 +359,7 @@ static void printDiagnosticsAggregate(const std::string& inputPath,
 bool writeKoopaProgramToFile(
     const koopa_ir::Program& program, const std::string& path)
 {
+    koopa_ir::validate(program);
     return writeTextFile(path, koopa_ir::serializeToKoopa(program));
 }
 

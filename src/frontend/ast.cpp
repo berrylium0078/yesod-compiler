@@ -146,10 +146,7 @@ void AstVisitor::visitWhileStmt(Ref<WhileStmt> whileStmt)
     visitExp(whileStmt(m_ast).condition);
     visitStmt(whileStmt(m_ast).body);
 }
-void AstVisitor::visitBreakStmt(Ref<BreakStmt> breakStmt)
-{
-    (void)breakStmt;
-}
+void AstVisitor::visitBreakStmt(Ref<BreakStmt> breakStmt) { (void)breakStmt; }
 void AstVisitor::visitContinueStmt(Ref<ContinueStmt> continueStmt)
 {
     (void)continueStmt;
@@ -181,10 +178,26 @@ void AstVisitor::visitExp(Ref<Exp> exp_ref)
     MATCH(exp.kind)
     WITH([&](const Exp::Binary& binary) { visitBinaryExp(exp, binary); },
         [&](const Exp::Unary& unary) { visitUnaryExp(exp, unary); },
-    [&](const Exp::Cast& cast) { visitCastExp(exp, cast); },
+        [&](const Exp::Cast& cast) { visitCastExp(exp, cast); },
         [&](const Exp::Call& call) { visitCallExp(exp, call); },
         [&](const Exp::Slice& slice) { visitSliceExp(exp, slice); },
-        [&](const Exp::Subscript& subscript) { visitSubscriptExp(exp, subscript); },
+        [&](const Exp::Subscript& subscript) {
+            visitSubscriptExp(exp, subscript);
+        },
+        [&](const Exp::Ntt& ntt) { visitNttExp(exp, ntt); },
+        [&](const Exp::Intt& intt) { visitInttExp(exp, intt); },
+        [&](const Exp::PvBinary& binary) { visitPvBinaryExp(exp, binary); },
+        [&](const Exp::Combine& combine) { visitCombineExp(exp, combine); },
+        [&](const Exp::GetCoeff& getCoeff) { visitGetCoeffExp(exp, getCoeff); },
+        [&](const Exp::PolyConstruct& construct) {
+            visitPolyConstructExp(exp, construct);
+        },
+        [&](const Exp::IntToMint& conversion) {
+            visitIntToMintExp(exp, conversion);
+        },
+        [&](const Exp::MintToInt& conversion) {
+            visitMintToIntExp(exp, conversion);
+        },
         [&](const Exp::LVal& lVal) { visitLValExp(exp, lVal); },
         [&](const Exp::Number& number) { visitNumberExp(exp, number); });
 }
@@ -223,6 +236,59 @@ void AstVisitor::visitSubscriptExp(const Exp&, const Exp::Subscript& subscript)
 {
     visitExp(subscript.base);
     visitExp(subscript.index);
+}
+
+void AstVisitor::visitNttExp(const Exp&, const Exp::Ntt& ntt)
+{
+    visitExp(ntt.value);
+}
+
+void AstVisitor::visitInttExp(const Exp&, const Exp::Intt& intt)
+{
+    visitExp(intt.value);
+}
+
+void AstVisitor::visitPvBinaryExp(const Exp&, const Exp::PvBinary& binary)
+{
+    visitExp(binary.lhs);
+    visitExp(binary.rhs);
+}
+
+void AstVisitor::visitCombineExp(const Exp&, const Exp::Combine& combine)
+{
+    for (const auto& term : combine.terms) {
+        visitExp(term.value);
+        visitExp(term.start);
+        if (term.end != nullptr) {
+            visitExp(term.end.ref());
+        }
+        visitExp(term.shift);
+        visitExp(term.scale);
+    }
+}
+
+void AstVisitor::visitGetCoeffExp(const Exp&, const Exp::GetCoeff& getCoeff)
+{
+    visitExp(getCoeff.value);
+    visitExp(getCoeff.index);
+}
+
+void AstVisitor::visitPolyConstructExp(
+    const Exp&, const Exp::PolyConstruct& construct)
+{
+    for (const auto element : construct.elements) {
+        visitExp(element);
+    }
+}
+
+void AstVisitor::visitIntToMintExp(const Exp&, const Exp::IntToMint& conversion)
+{
+    visitExp(conversion.value);
+}
+
+void AstVisitor::visitMintToIntExp(const Exp&, const Exp::MintToInt& conversion)
+{
+    visitExp(conversion.value);
 }
 
 void AstVisitor::visitLValExp(const Exp&, const Exp::LVal& lVal)

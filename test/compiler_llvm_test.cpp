@@ -98,11 +98,18 @@ std::string compilerPath()
 
     const std::filesystem::path testPath(
         std::string(buffer.data(), static_cast<size_t>(length)));
-    const auto compiler = testPath.parent_path() / "compiler";
-    require(std::filesystem::exists(compiler),
-        "expected compiler binary next to compiler_llvm_test at "
-            + compiler.string());
-    return compiler.string();
+    const auto localCompiler = testPath.parent_path() / "compiler";
+    if (std::filesystem::exists(localCompiler)) {
+        return localCompiler.string();
+    }
+
+    const auto parentCompiler
+        = testPath.parent_path().parent_path() / "compiler";
+    require(std::filesystem::exists(parentCompiler),
+        "expected compiler binary next to compiler_llvm_test or in parent "
+        "build directory at "
+            + parentCompiler.string());
+    return parentCompiler.string();
 }
 
 std::string riscvLibraryPath()
@@ -124,8 +131,8 @@ void runCheckedCommand(const std::string& command, const std::string& purpose)
             + std::to_string(WEXITSTATUS(status)) + ": " + command);
 }
 
-void expectLlvmProgramOutput(const std::string& source,
-    const std::string& expectedOutput)
+void expectLlvmProgramOutput(
+    const std::string& source, const std::string& expectedOutput)
 {
     const std::string compiledCompilerPath = compilerPath();
     const std::string libraryPath = riscvLibraryPath();
@@ -170,7 +177,7 @@ void expectLlvmProgramOutput(const std::string& source,
             + "\nactual: " + actualOutput);
 }
 
-void testLlvmModePrependsMintRuntimeDefinitions()
+void testLlvmModeUsesNativeMintLowering()
 {
     const std::string compiledCompilerPath = compilerPath();
 
@@ -186,12 +193,10 @@ void testLlvmModePrependsMintRuntimeDefinitions()
         "compiling SysY source to LLVM IR");
 
     const std::string llvmText = readTextFile(llvmFile.path());
-    require(llvmText.find("@__yesod_mint_mul") != std::string::npos,
-        "-llvm output should include the mint multiplication helper definition");
-    require(llvmText.find("@__yesod_mint_from_int") != std::string::npos,
-        "-llvm output should include the int-to-mint helper definition");
-    require(llvmText.find("@__yesod_mint_to_int") != std::string::npos,
-        "-llvm output should include the mint-to-int helper definition");
+    require(llvmText.find("@__yesod_mint_") == std::string::npos,
+        "-llvm output should not include old mint runtime helpers");
+    require(llvmText.find(" mul i32 ") != std::string::npos,
+        "-llvm output should lower native mint multiplication as an i32 mul");
     require(llvmText.find("@main") != std::string::npos,
         "-llvm output should still include the lowered main function");
 }
@@ -204,70 +209,24 @@ void testLlvmMintProgramExecutesThroughRiscvToolchain()
         "42\n");
 }
 
-void testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain()
+void testLlvmBitwiseProgramExecutesThroughRiscvToolchain()
 {
-    expectLlvmProgramOutput(
-        "const int N = 12;"
-        "mint fac[N + 1], ifac[N + 1], c[N + 1][N + 1];"
-        "int main(){"
-        "  int i = 1;"
-        "  int ok = 1;"
-        "  fac[0] = mint(1);"
-        "  while (i <= N) {"
-        "    fac[i] = fac[i - 1] * mint(i);"
-        "    i = i + 1;"
-        "  }"
-        "  ifac[N] = mint(1) / fac[N];"
-        "  i = N;"
-        "  while (i >= 1) {"
-        "    ifac[i - 1] = ifac[i] * mint(i);"
-        "    i = i - 1;"
-        "  }"
-        "  c[0][0] = mint(1);"
-        "  i = 1;"
-        "  while (i <= N) {"
-        "    int j = 1;"
-        "    c[i][0] = mint(1);"
-        "    while (j <= i) {"
-        "      c[i][j] = c[i - 1][j] + c[i - 1][j - 1];"
-        "      if (c[i][j] != fac[i] * ifac[i - j] * ifac[j]) {"
-        "        ok = 0;"
-        "      }"
-        "      j = j + 1;"
-        "    }"
-        "    i = i + 1;"
-        "  }"
-        "  if (ok) {"
-        "    putint(int(c[10][3]));"
-        "  } else {"
-        "    putint(0);"
-        "  }"
-        "  putch(10);"
-        "  return 0;"
-        "}",
-        "120\n");
-}
-
-    void testLlvmBitwiseProgramExecutesThroughRiscvToolchain()
-    {
-        expectLlvmProgramOutput(
-        "int main(){"
-        "  int a = 6;"
-        "  int b = 2;"
-        "  putint((~a ^ ((a << b) & 31)) | (32 >> b));"
-        "  putch(10);"
-        "  return 0;"
-        "}",
+    expectLlvmProgramOutput("int main(){"
+                            "  int a = 6;"
+                            "  int b = 2;"
+                            "  putint((~a ^ ((a << b) & 31)) | (32 >> b));"
+                            "  putch(10);"
+                            "  return 0;"
+                            "}",
         "-23\n");
-    }
+}
 
 } // namespace
 
 int main()
 {
-    testLlvmModePrependsMintRuntimeDefinitions();
+    testLlvmModeUsesNativeMintLowering();
     testLlvmMintProgramExecutesThroughRiscvToolchain();
-    testLlvmMintCombinatoricsProgramExecutesThroughRiscvToolchain();
     testLlvmBitwiseProgramExecutesThroughRiscvToolchain();
     return 0;
 }

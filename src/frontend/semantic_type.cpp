@@ -318,7 +318,7 @@ namespace detail {
                         visitFuncDef(funcDef);
                     }
                 },
-                [&](const auto&) { });
+                [&](const auto&) {});
         }
     }
 
@@ -417,15 +417,16 @@ namespace detail {
 
             size_t nextIndex = 0;
             bool hasRemainingWarning = false;
-            auto analyzedInit = analyzeConstInitVal(
-                parsedConstDef.constInitVal.ref(), objectType, true, nextIndex,
-                hasRemainingWarning);
+            auto analyzedInit
+                = analyzeConstInitVal(parsedConstDef.constInitVal.ref(),
+                    objectType, true, nextIndex, hasRemainingWarning);
 
             if (!parsedConstDef.shape.empty()) {
                 analyzedInit.m_isConstant = false;
                 analyzedInit.m_constantValue = 0;
             } else {
-                if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                if (analyzedInit.m_type.isVoid()
+                    || analyzedInit.m_type.isArray()) {
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         parsedConstDef.sourcePos.m_offset,
                         "const initializer must produce a scalar value");
@@ -437,7 +438,8 @@ namespace detail {
                 }
             }
 
-            const auto resolvedConstId = resolvedSymbolId(parsedConstDef.identifier);
+            const auto resolvedConstId
+                = resolvedSymbolId(parsedConstDef.identifier);
             if (!resolvedConstId.has_value()) {
                 continue;
             }
@@ -465,7 +467,8 @@ namespace detail {
                     hasRemainingWarning);
             }
 
-            const auto resolvedVarId = resolvedSymbolId(parsedVarDef.identifier);
+            const auto resolvedVarId
+                = resolvedSymbolId(parsedVarDef.identifier);
             if (!resolvedVarId.has_value()) {
                 continue;
             }
@@ -505,9 +508,9 @@ namespace detail {
                         "assignment target must designate a scalar object");
                 }
 
-                const auto* objectInfo
-                    = symbol != nullptr && symbol->isObject() ? &symbol->object()
-                                                              : nullptr;
+                const auto* objectInfo = symbol != nullptr && symbol->isObject()
+                    ? &symbol->object()
+                    : nullptr;
                 if (objectInfo != nullptr && objectInfo->m_isConst) {
                     const auto& identifier = lVal.identifier(m_ast);
                     recordDiagnostic<AssignToConstDiagnostic>(
@@ -515,16 +518,19 @@ namespace detail {
                         "cannot assign to const '" + symbol->name + "'");
                 }
 
-                auto currentType = objectInfo != nullptr ? objectInfo->m_type
-                                                         : SemanticType::makeInteger();
+                auto currentType = objectInfo != nullptr
+                    ? objectInfo->m_type
+                    : SemanticType::makeInteger();
                 for (const auto index : lVal.indices) {
                     const auto analyzedIndex = analyzeExp(index);
-                    if (analyzedIndex.m_type.kind != SemanticTypeKind::integer) {
+                    if (analyzedIndex.m_type.kind
+                        != SemanticTypeKind::integer) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             index(m_ast).sourcePos.m_offset,
                             "array subscript must produce an integer value");
                     }
-                    if (!currentType.isArray() || currentType.m_elementType == nullptr) {
+                    if (!currentType.isArray()
+                        || currentType.m_elementType == nullptr) {
                         const auto& identifier = lVal.identifier(m_ast);
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             identifier.sourcePos.m_offset,
@@ -561,16 +567,17 @@ namespace detail {
                 const auto* symbol = boundSymbolId.has_value()
                     ? findSymbolById(*boundSymbolId)
                     : nullptr;
-                const auto* objectInfo
-                    = symbol != nullptr && symbol->isObject() ? &symbol->object()
-                                                              : nullptr;
+                const auto* objectInfo = symbol != nullptr && symbol->isObject()
+                    ? &symbol->object()
+                    : nullptr;
                 if (objectInfo == nullptr) {
                     return;
                 }
 
                 auto targetType = objectInfo->m_type;
                 for (size_t i = 0; i < lVal.indices.size(); ++i) {
-                    if (!targetType.isArray() || targetType.m_elementType == nullptr) {
+                    if (!targetType.isArray()
+                        || targetType.m_elementType == nullptr) {
                         break;
                     }
                     targetType = *targetType.m_elementType;
@@ -581,10 +588,11 @@ namespace detail {
                 if (targetType != analyzedExp.m_type) {
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         assignStmt(m_ast).sourcePos.m_offset,
-                        "assignment rhs type does not match lhs type; use an explicit cast for int/mint conversion");
+                        "assignment rhs type does not match lhs type; use an "
+                        "explicit cast for int/mint conversion");
                 }
             },
-            [&](const auto&) { });
+            [&](const auto&) {});
     }
 
     void SemanticTypeAnalyzerImpl::visitExpStmt(Ref<ExpStmt> expStmt)
@@ -626,7 +634,8 @@ namespace detail {
         }
         if (*m_currentFuncReturnType != analyzedExp.m_type) {
             recordDiagnostic<ReturnTypeMismatchDiagnostic>(offset,
-                "return expression type does not match function return type; use an explicit cast for int/mint conversion");
+                "return expression type does not match function return type; "
+                "use an explicit cast for int/mint conversion");
         }
     }
 
@@ -653,9 +662,12 @@ namespace detail {
             // Shift: poly << int, poly >> int
             if (binary.op == BinaryOpKeyword::shl
                 || binary.op == BinaryOpKeyword::sar) {
-                if (!lhs.m_type.isPoly() || rhs.m_type.kind != SemanticTypeKind::integer) {
-                    recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                        "shift expects a poly left operand and an int right operand");
+                if (!lhs.m_type.isPoly()
+                    || rhs.m_type.kind != SemanticTypeKind::integer) {
+                    recordDiagnostic<TypeMismatchDiagnostic>(
+                        exp.sourcePos.m_offset,
+                        "shift expects a poly left operand and an int right "
+                        "operand");
                     return binaryExp;
                 }
                 binaryExp.m_type = SemanticType::makePoly();
@@ -686,8 +698,8 @@ namespace detail {
                     binaryExp.m_valueKind = ExpType::poly;
                     return binaryExp;
                 }
-                recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "type mismatch in poly arithmetic");
+                recordDiagnostic<TypeMismatchDiagnostic>(
+                    exp.sourcePos.m_offset, "type mismatch in poly arithmetic");
                 return binaryExp;
             }
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
@@ -730,7 +742,8 @@ namespace detail {
             rhs = normalizeToArithmetic(std::move(rhs));
             if (lhs.m_type != rhs.m_type) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "comparison operands must have the same type; use an explicit cast for int/mint conversion");
+                    "comparison operands must have the same type; use an "
+                    "explicit cast for int/mint conversion");
                 break;
             }
             binaryExp.m_type = SemanticType::makeBoolean();
@@ -749,7 +762,8 @@ namespace detail {
             rhs = normalizeToArithmetic(std::move(rhs));
             if (lhs.m_type != rhs.m_type) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "comparison operands must have the same type; use an explicit cast for int/mint conversion");
+                    "comparison operands must have the same type; use an "
+                    "explicit cast for int/mint conversion");
                 break;
             }
             binaryExp.m_type = SemanticType::makeBoolean();
@@ -769,7 +783,8 @@ namespace detail {
             rhs = normalizeToArithmetic(std::move(rhs));
             if (lhs.m_type != rhs.m_type) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "arithmetic operands must have the same type; use an explicit cast for int/mint conversion");
+                    "arithmetic operands must have the same type; use an "
+                    "explicit cast for int/mint conversion");
                 break;
             }
             binaryExp.m_type = lhs.m_type;
@@ -817,7 +832,8 @@ namespace detail {
                     if (folded.warnedOutOfRange) {
                         recordDiagnostic<ShiftOperandOutOfRangeDiagnostic>(
                             binary.rhs(m_ast).sourcePos.m_offset,
-                            "shift operand is outside [0, 32); constant folding applies modulo 32",
+                            "shift operand is outside [0, 32); constant "
+                            "folding applies modulo 32",
                             DiagnosticSeverity::warning);
                     }
                 } else {
@@ -849,7 +865,8 @@ namespace detail {
                     .m_constantValue = 0,
                 };
             }
-            if (unary.op == UnaryOpKeyword::plus || unary.op == UnaryOpKeyword::minus) {
+            if (unary.op == UnaryOpKeyword::plus
+                || unary.op == UnaryOpKeyword::minus) {
                 return operand;
             }
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
@@ -868,8 +885,9 @@ namespace detail {
                 .m_type = unary.op == UnaryOpKeyword::bang
                     ? SemanticType::makeBoolean()
                     : SemanticType::makeInteger(),
-                .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
-                                                                : ExpType::integer,
+                .m_valueKind = unary.op == UnaryOpKeyword::bang
+                    ? ExpType::boolean
+                    : ExpType::integer,
                 .m_isConstant = false,
                 .m_constantValue = 0,
             };
@@ -907,7 +925,8 @@ namespace detail {
                     .m_isConstant = true,
                     .m_constantValue = unary.op == UnaryOpKeyword::minus
                             && operand.m_type.kind == SemanticTypeKind::mint
-                        ? normalizeMintValue(-static_cast<int64_t>(operand.m_constantValue))
+                        ? normalizeMintValue(
+                              -static_cast<int64_t>(operand.m_constantValue))
                         : *folded,
                 };
             }
@@ -915,12 +934,13 @@ namespace detail {
         return AnalyzedExp {
             .m_type = unary.op == UnaryOpKeyword::bang
                 ? SemanticType::makeBoolean()
-                : unary.op == UnaryOpKeyword::tilde ? SemanticType::makeInteger()
-                                                    : operand.m_type,
-            .m_valueKind = unary.op == UnaryOpKeyword::bang
-                ? ExpType::boolean
-                : unary.op == UnaryOpKeyword::tilde ? ExpType::integer
-                                                    : operand.m_type.valueKind(),
+                : unary.op == UnaryOpKeyword::tilde
+                ? SemanticType::makeInteger()
+                : operand.m_type,
+            .m_valueKind = unary.op == UnaryOpKeyword::bang ? ExpType::boolean
+                : unary.op == UnaryOpKeyword::tilde
+                ? ExpType::integer
+                : operand.m_type.valueKind(),
             .m_isConstant = false,
             .m_constantValue = 0,
         };
@@ -951,7 +971,8 @@ namespace detail {
         if (operand.m_valueKind == ExpType::voidType
             || operand.m_valueKind == ExpType::array) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                "explicit casts only support scalar int/mint values; arrays must be converted element by element");
+                "explicit casts only support scalar int/mint values; arrays "
+                "must be converted element by element");
             return AnalyzedExp {
                 .m_type = targetType,
                 .m_valueKind = targetType.valueKind(),
@@ -989,14 +1010,16 @@ namespace detail {
         const auto boundSymbolId = resolvedSymbolId(call.funcName);
         const bool hasDeclaration = boundSymbolId.has_value()
             && m_symbolResolver->hasDeclaration(*boundSymbolId);
-        const auto* calleeSymbol
-            = boundSymbolId.has_value() ? findSymbolById(*boundSymbolId) : nullptr;
+        const auto* calleeSymbol = boundSymbolId.has_value()
+            ? findSymbolById(*boundSymbolId)
+            : nullptr;
 
         if (!hasDeclaration) {
             for (const auto arg : call.params) {
                 const auto analyzedArg = analyzeExp(arg);
                 if (analyzedArg.m_valueKind == ExpType::voidType) {
-                    recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
+                    recordDiagnostic<TypeMismatchDiagnostic>(
+                        exp.sourcePos.m_offset,
                         "call arguments must produce scalar values");
                 }
             }
@@ -1009,12 +1032,15 @@ namespace detail {
         }
 
         if (calleeSymbol != nullptr && !calleeSymbol->isFunction()) {
-            recordDiagnostic<InvalidCallTargetDiagnostic>(exp.sourcePos.m_offset,
+            recordDiagnostic<InvalidCallTargetDiagnostic>(
+                exp.sourcePos.m_offset,
                 "call target '" + calleeSymbol->name + "' is not a function");
         }
         if (calleeSymbol != nullptr && calleeSymbol->isFunction()
-            && calleeSymbol->function().m_paramTypes.size() != call.params.size()) {
-            recordDiagnostic<CallArityMismatchDiagnostic>(exp.sourcePos.m_offset,
+            && calleeSymbol->function().m_paramTypes.size()
+                != call.params.size()) {
+            recordDiagnostic<CallArityMismatchDiagnostic>(
+                exp.sourcePos.m_offset,
                 "call to '" + calleeSymbol->name
                     + "' uses the wrong number of arguments");
         }
@@ -1027,10 +1053,11 @@ namespace detail {
             }
             if (calleeSymbol != nullptr && calleeSymbol->isFunction()
                 && i < calleeSymbol->function().m_paramTypes.size()
-                && !typesMatchForCall(
-                    calleeSymbol->function().m_paramTypes[i], analyzedArg.m_type)) {
+                && !typesMatchForCall(calleeSymbol->function().m_paramTypes[i],
+                    analyzedArg.m_type)) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                    "call argument type does not match parameter type; use an explicit cast for int/mint conversion");
+                    "call argument type does not match parameter type; use an "
+                    "explicit cast for int/mint conversion");
             }
         }
 
@@ -1051,8 +1078,9 @@ namespace detail {
         const Exp& exp, const Exp::LVal& lVal)
     {
         const auto boundSymbolId = resolvedSymbolId(lVal.identifier);
-        const auto* symbol
-            = boundSymbolId.has_value() ? findSymbolById(*boundSymbolId) : nullptr;
+        const auto* symbol = boundSymbolId.has_value()
+            ? findSymbolById(*boundSymbolId)
+            : nullptr;
 
         if (symbol != nullptr && symbol->isFunction()) {
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
@@ -1079,7 +1107,8 @@ namespace detail {
                 currentType = SemanticType::makeMint();
                 continue;
             }
-            if (!currentType.isArray() || currentType.m_elementType == nullptr) {
+            if (!currentType.isArray()
+                || currentType.m_elementType == nullptr) {
                 recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
                     "subscripted expression is not an array");
                 currentType = SemanticType::makeInteger();
@@ -1180,7 +1209,9 @@ namespace detail {
             [&](const Exp::Binary& binary) {
                 return analyzeBinaryExp(exp, binary);
             },
-            [&](const Exp::Unary& unary) { return analyzeUnaryExp(exp, unary); },
+            [&](const Exp::Unary& unary) {
+                return analyzeUnaryExp(exp, unary);
+            },
             [&](const Exp::Cast& cast) { return analyzeCastExp(exp, cast); },
             [&](const Exp::Call& call) { return analyzeCallExp(exp, call); },
             [&](const Exp::LVal& lVal) { return analyzeLValExp(exp, lVal); },
@@ -1189,6 +1220,90 @@ namespace detail {
             },
             [&](const Exp::Subscript& subscript) {
                 return analyzeSubscriptExp(exp, subscript);
+            },
+            [&](const Exp::Ntt& ntt) {
+                (void)analyzeExp(ntt.value);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makePv(),
+                    .m_valueKind = ExpType::pv,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::Intt& intt) {
+                (void)analyzeExp(intt.value);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makePoly(),
+                    .m_valueKind = ExpType::poly,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::PvBinary& binary) {
+                (void)analyzeExp(binary.lhs);
+                (void)analyzeExp(binary.rhs);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makePv(),
+                    .m_valueKind = ExpType::pv,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::Combine& combine) {
+                for (const auto& term : combine.terms) {
+                    (void)analyzeExp(term.value);
+                    (void)analyzeExp(term.start);
+                    if (term.end != nullptr) {
+                        (void)analyzeExp(term.end.ref());
+                    }
+                    (void)analyzeExp(term.shift);
+                    (void)analyzeExp(term.scale);
+                }
+                return AnalyzedExp {
+                    .m_type = SemanticType::makePoly(),
+                    .m_valueKind = ExpType::poly,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::GetCoeff& getCoeff) {
+                (void)analyzeExp(getCoeff.value);
+                (void)analyzeExp(getCoeff.index);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makeMint(),
+                    .m_valueKind = ExpType::mint,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::PolyConstruct& construct) {
+                for (const auto element : construct.elements) {
+                    (void)analyzeExp(element);
+                }
+                return AnalyzedExp {
+                    .m_type = SemanticType::makePoly(),
+                    .m_valueKind = ExpType::poly,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::IntToMint& conversion) {
+                (void)analyzeExp(conversion.value);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makeMint(),
+                    .m_valueKind = ExpType::mint,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
+            },
+            [&](const Exp::MintToInt& conversion) {
+                (void)analyzeExp(conversion.value);
+                return AnalyzedExp {
+                    .m_type = SemanticType::makeInteger(),
+                    .m_valueKind = ExpType::integer,
+                    .m_isConstant = false,
+                    .m_constantValue = 0,
+                };
             },
             [&](const Exp::Number& number) {
                 return AnalyzedExp {
@@ -1214,7 +1329,8 @@ namespace detail {
         if (analyzedExp.m_valueKind == ExpType::voidType
             || analyzedExp.m_valueKind == ExpType::array
             || analyzedExp.m_valueKind == ExpType::mint) {
-            recordDiagnostic<TypeMismatchDiagnostic>(exp(m_ast).sourcePos.m_offset,
+            recordDiagnostic<TypeMismatchDiagnostic>(
+                exp(m_ast).sourcePos.m_offset,
                 "condition expression must produce an integer value");
             analyzedExp.m_type = SemanticType::makeBoolean();
             analyzedExp.m_valueKind = ExpType::boolean;
@@ -1231,7 +1347,8 @@ namespace detail {
         bool allowUnsizedFirstDimension)
     {
         auto objectType = lowerBType(bType);
-        for (auto dimIt = dimensions.rbegin(); dimIt != dimensions.rend(); ++dimIt) {
+        for (auto dimIt = dimensions.rbegin(); dimIt != dimensions.rend();
+             ++dimIt) {
             const auto analyzedDim = analyzeExp(*dimIt);
             if (analyzedDim.m_type.kind != SemanticTypeKind::integer
                 || !analyzedDim.m_isConstant) {
@@ -1240,7 +1357,8 @@ namespace detail {
                 objectType = SemanticType::makeArray(objectType, 0);
                 continue;
             }
-            objectType = SemanticType::makeArray(objectType, analyzedDim.m_constantValue);
+            objectType = SemanticType::makeArray(
+                objectType, analyzedDim.m_constantValue);
         }
         if (allowUnsizedFirstDimension) {
             objectType = SemanticType::makeUnsizedArray(objectType);
@@ -1276,14 +1394,17 @@ namespace detail {
                 if (!expectedType.isArray()) {
                     analyzedInit = analyzeExp(expr);
                     ++nextIndex;
-                    if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                    if (analyzedInit.m_type.isVoid()
+                        || analyzedInit.m_type.isArray()) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
                             "const initializer must produce a scalar value");
                     } else if (analyzedInit.m_type != expectedType) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
-                            "const initializer type does not match declaration type; use an explicit cast for int/mint conversion");
+                            "const initializer type does not match declaration "
+                            "type; use an explicit cast for int/mint "
+                            "conversion");
                     }
                     if (!analyzedInit.m_isConstant) {
                         recordDiagnostic<NonConstantConstInitializerDiagnostic>(
@@ -1291,7 +1412,9 @@ namespace detail {
                             "const initializer must be a constant expression");
                     }
                 } else {
-                    const std::vector<Ref<ConstInitVal>> singleton { constInitVal };
+                    const std::vector<Ref<ConstInitVal>> singleton {
+                        constInitVal
+                    };
                     size_t nextValueIndex = 0;
                     analyzedInit = analyzeConstInitSequence(singleton,
                         nextValueIndex, expectedType, hasRemainingWarning);
@@ -1351,7 +1474,8 @@ namespace detail {
         }
 
         for (int32_t i = 0;
-            i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
+             i < expectedType.m_arrayLength && nextValueIndex < values.size();
+             ++i) {
             MATCH(values[nextValueIndex](m_ast).kind)
             WITH(
                 [&](Ref<Exp>) {
@@ -1375,9 +1499,10 @@ namespace detail {
         };
     }
 
-    SemanticTypeAnalyzerImpl::AnalyzedExp SemanticTypeAnalyzerImpl::analyzeInitVal(
-        Ref<InitVal> initVal, const SemanticType& expectedType, bool isGlobal,
-        bool isOutermost, size_t& nextIndex, bool& hasRemainingWarning)
+    SemanticTypeAnalyzerImpl::AnalyzedExp
+    SemanticTypeAnalyzerImpl::analyzeInitVal(Ref<InitVal> initVal,
+        const SemanticType& expectedType, bool isGlobal, bool isOutermost,
+        size_t& nextIndex, bool& hasRemainingWarning)
     {
         const auto& init = initVal(m_ast);
         AnalyzedExp analyzedInit {
@@ -1402,25 +1527,30 @@ namespace detail {
                 if (!expectedType.isArray()) {
                     analyzedInit = analyzeExp(initAlt);
                     ++nextIndex;
-                    if (analyzedInit.m_type.isVoid() || analyzedInit.m_type.isArray()) {
+                    if (analyzedInit.m_type.isVoid()
+                        || analyzedInit.m_type.isArray()) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
                             "variable initializer must produce a scalar value");
                     } else if (analyzedInit.m_type != expectedType) {
                         recordDiagnostic<TypeMismatchDiagnostic>(
                             init.sourcePos.m_offset,
-                            "variable initializer type does not match declaration type; use an explicit cast for int/mint conversion");
+                            "variable initializer type does not match "
+                            "declaration type; use an explicit cast for "
+                            "int/mint conversion");
                     }
                     if (isGlobal && !analyzedInit.m_isConstant) {
-                        recordDiagnostic<NonConstantGlobalInitializerDiagnostic>(
+                        recordDiagnostic<
+                            NonConstantGlobalInitializerDiagnostic>(
                             init.sourcePos.m_offset,
                             "global initializer must be a constant expression");
                     }
                 } else {
                     const std::vector<Ref<InitVal>> singleton { initVal };
                     size_t nextValueIndex = 0;
-                    analyzedInit = analyzeInitSequence(singleton, nextValueIndex,
-                        expectedType, isGlobal, hasRemainingWarning);
+                    analyzedInit
+                        = analyzeInitSequence(singleton, nextValueIndex,
+                            expectedType, isGlobal, hasRemainingWarning);
                     nextIndex += nextValueIndex;
                 }
             },
@@ -1428,8 +1558,9 @@ namespace detail {
                 if (!expectedType.isArray()) {
                     if (!initAlt.empty()) {
                         size_t consumed = 0;
-                        analyzedInit = analyzeInitVal(initAlt.front(), expectedType,
-                            isGlobal, false, consumed, hasRemainingWarning);
+                        analyzedInit
+                            = analyzeInitVal(initAlt.front(), expectedType,
+                                isGlobal, false, consumed, hasRemainingWarning);
                         nextIndex += consumed;
                     }
                     if (initAlt.size() > 1) {
@@ -1453,7 +1584,8 @@ namespace detail {
     SemanticTypeAnalyzerImpl::AnalyzedExp
     SemanticTypeAnalyzerImpl::analyzeInitSequence(
         const std::vector<Ref<InitVal>>& values, size_t& nextValueIndex,
-        const SemanticType& expectedType, bool isGlobal, bool& hasRemainingWarning)
+        const SemanticType& expectedType, bool isGlobal,
+        bool& hasRemainingWarning)
     {
         if (!expectedType.isArray()) {
             if (nextValueIndex >= values.size()) {
@@ -1466,8 +1598,8 @@ namespace detail {
             }
 
             size_t consumed = 0;
-            auto analyzedInit = analyzeInitVal(values[nextValueIndex], expectedType,
-                isGlobal, false, consumed, hasRemainingWarning);
+            auto analyzedInit = analyzeInitVal(values[nextValueIndex],
+                expectedType, isGlobal, false, consumed, hasRemainingWarning);
             ++nextValueIndex;
             return analyzedInit;
         }
@@ -1477,7 +1609,8 @@ namespace detail {
         }
 
         for (int32_t i = 0;
-            i < expectedType.m_arrayLength && nextValueIndex < values.size(); ++i) {
+             i < expectedType.m_arrayLength && nextValueIndex < values.size();
+             ++i) {
             MATCH(values[nextValueIndex](m_ast).kind)
             WITH(
                 [&](Ref<Exp>) {
@@ -1515,8 +1648,8 @@ namespace detail {
     }
 
     SemanticSymbol SemanticTypeAnalyzerImpl::makeObjectSymbol(int32_t symbolId,
-        Ref<Identifier> ident, bool isConst, std::optional<int32_t> constantValue,
-        const SemanticType& type) const
+        Ref<Identifier> ident, bool isConst,
+        std::optional<int32_t> constantValue, const SemanticType& type) const
     {
         const auto& identifier = ident(m_ast);
         const std::string symbolName = type.isArray()
@@ -1545,19 +1678,23 @@ namespace detail {
     }
 
     SemanticTypeAnalyzerImpl::AnalyzedExp
-    SemanticTypeAnalyzerImpl::normalizeToArithmetic(AnalyzedExp analyzedExp) const
+    SemanticTypeAnalyzerImpl::normalizeToArithmetic(
+        AnalyzedExp analyzedExp) const
     {
         if (analyzedExp.m_valueKind == ExpType::voidType
             || analyzedExp.m_valueKind == ExpType::array
             || analyzedExp.m_valueKind == ExpType::integer
-            || analyzedExp.m_valueKind == ExpType::mint) {
+            || analyzedExp.m_valueKind == ExpType::mint
+            || analyzedExp.m_valueKind == ExpType::poly
+            || analyzedExp.m_valueKind == ExpType::pv) {
             return analyzedExp;
         }
 
         analyzedExp.m_type = SemanticType::makeInteger();
         analyzedExp.m_valueKind = ExpType::integer;
         if (analyzedExp.m_isConstant) {
-            analyzedExp.m_constantValue = analyzedExp.m_constantValue != 0 ? 1 : 0;
+            analyzedExp.m_constantValue
+                = analyzedExp.m_constantValue != 0 ? 1 : 0;
         }
         return analyzedExp;
     }
@@ -1567,14 +1704,17 @@ namespace detail {
     {
         if (analyzedExp.m_valueKind == ExpType::voidType
             || analyzedExp.m_valueKind == ExpType::array
-            || analyzedExp.m_valueKind == ExpType::boolean) {
+            || analyzedExp.m_valueKind == ExpType::boolean
+            || analyzedExp.m_valueKind == ExpType::poly
+            || analyzedExp.m_valueKind == ExpType::pv) {
             return analyzedExp;
         }
 
         analyzedExp.m_type = SemanticType::makeBoolean();
         analyzedExp.m_valueKind = ExpType::boolean;
         if (analyzedExp.m_isConstant) {
-            analyzedExp.m_constantValue = analyzedExp.m_constantValue != 0 ? 1 : 0;
+            analyzedExp.m_constantValue
+                = analyzedExp.m_constantValue != 0 ? 1 : 0;
         }
         return analyzedExp;
     }
@@ -1595,8 +1735,8 @@ namespace detail {
 
 SemanticTypeAnalyzer::SemanticTypeAnalyzer(
     const AST& ast, const SemanticSymbolResolver& symbolResult)
-    : m_impl(std::make_unique<detail::SemanticTypeAnalyzerImpl>(
-        ast, symbolResult))
+    : m_impl(
+          std::make_unique<detail::SemanticTypeAnalyzerImpl>(ast, symbolResult))
 {
 }
 

@@ -21,124 +21,10 @@ namespace {
     std::unique_ptr<koopa_ir::Program> generateIrProgram(const AST& ast,
         Ptr<CompUnit> compUnit, const SemanticInfo& semanticInfo);
 
-    constexpr int32_t kMintMod = 998244353;
-    constexpr uint32_t kMintR2 = 932051910u;
-    constexpr uint32_t kMintNegInv = 998244351u;
-
-    enum class MintHelper {
-        add,
-        sub,
-        mul,
-        div,
-        fromInt,
-        toInt,
-    };
-
     [[nodiscard]] bool isMintType(const SemanticType& type)
     {
         return type.kind == SemanticTypeKind::mint;
     }
-
-    [[nodiscard]] uint32_t normalizeMintConstant(int32_t value)
-    {
-        int64_t normalized = static_cast<int64_t>(value) % kMintMod;
-        if (normalized < 0) {
-            normalized += kMintMod;
-        }
-        return static_cast<uint32_t>(normalized);
-    }
-
-    [[nodiscard]] uint32_t montgomeryReduce(uint64_t value)
-    {
-        const uint32_t factor = static_cast<uint32_t>(value) * kMintNegInv;
-        uint64_t reduced
-            = (value + static_cast<uint64_t>(factor) * kMintMod) >> 32;
-        if (reduced >= static_cast<uint64_t>(kMintMod)) {
-            reduced -= kMintMod;
-        }
-        return static_cast<uint32_t>(reduced);
-    }
-
-    [[nodiscard]] uint32_t encodeMintConstant(int32_t value)
-    {
-        return montgomeryReduce(
-            static_cast<uint64_t>(normalizeMintConstant(value)) * kMintR2);
-    }
-
-    [[nodiscard]] const char* mintHelperName(MintHelper helper)
-    {
-        switch (helper) {
-        case MintHelper::add:
-            return "__yesod_mint_add";
-        case MintHelper::sub:
-            return "__yesod_mint_sub";
-        case MintHelper::mul:
-            return "__yesod_mint_mul";
-        case MintHelper::div:
-            return "__yesod_mint_div";
-        case MintHelper::fromInt:
-            return "__yesod_mint_from_int";
-        case MintHelper::toInt:
-            return "__yesod_mint_to_int";
-        }
-
-        throw std::runtime_error("unknown mint helper kind");
-    }
-
-    class MintRuntimeUseVisitor : public AstVisitor {
-    public:
-        explicit MintRuntimeUseVisitor(const AST& ast)
-            : AstVisitor(ast)
-        {
-        }
-
-        [[nodiscard]] bool usesMintRuntime() const { return m_usesMintRuntime; }
-
-    protected:
-        void visitFuncDef(Ref<FuncDef> funcDef) override
-        {
-            if (funcDef(m_ast).m_funcType == FuncTypeKeyword::mintKeyword) {
-                m_usesMintRuntime = true;
-            }
-            AstVisitor::visitFuncDef(funcDef);
-        }
-
-        void visitFuncFParam(const FuncFParam& funcFParam) override
-        {
-            if (funcFParam.bType == BTypeKeyword::mintKeyword) {
-                m_usesMintRuntime = true;
-            }
-            AstVisitor::visitFuncFParam(funcFParam);
-        }
-
-        void visitConstDecl(Ref<ConstDecl> constDecl) override
-        {
-            if (constDecl(m_ast).bType == BTypeKeyword::mintKeyword) {
-                m_usesMintRuntime = true;
-            }
-            AstVisitor::visitConstDecl(constDecl);
-        }
-
-        void visitVarDecl(Ref<VarDecl> varDecl) override
-        {
-            if (varDecl(m_ast).bType == BTypeKeyword::mintKeyword) {
-                m_usesMintRuntime = true;
-            }
-            AstVisitor::visitVarDecl(varDecl);
-        }
-
-        void visitCastExp(const Exp& exp, const Exp::Cast& cast) override
-        {
-            (void)exp;
-            if (cast.targetType == BTypeKeyword::mintKeyword) {
-                m_usesMintRuntime = true;
-            }
-            AstVisitor::visitCastExp(exp, cast);
-        }
-
-    private:
-        bool m_usesMintRuntime = false;
-    };
 
     size_t countScalarSlots(const SemanticType& type)
     {
@@ -186,7 +72,7 @@ namespace {
 
         const size_t elementSlots = countScalarSlots(*type.m_elementType);
         for (int32_t i = 0;
-            i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
+             i < type.m_arrayLength && nextValueIndex < values.size(); ++i) {
             const auto& child = values[nextValueIndex](ast);
             MATCH(child.kind)
             WITH(
@@ -318,15 +204,20 @@ namespace {
         return koopa_ir::Symbol { .sourcePos = {}, .spelling = spelling };
     }
 
-    [[nodiscard]] koopa_ir::Type lowerSemanticTypeToIr(koopa_ir::Program& program,
-        const SemanticType& semanticType,
+    [[nodiscard]] koopa_ir::Type lowerSemanticTypeToIr(
+        koopa_ir::Program& program, const SemanticType& semanticType,
         bool decayUnsizedArrayToPointer = true)
     {
         switch (semanticType.kind) {
         case SemanticTypeKind::integer:
-        case SemanticTypeKind::mint:
         case SemanticTypeKind::boolean:
             return koopa_ir::I32Type {};
+        case SemanticTypeKind::mint:
+            return koopa_ir::MintType {};
+        case SemanticTypeKind::poly:
+            return koopa_ir::PolyType {};
+        case SemanticTypeKind::pv:
+            return koopa_ir::PvType {};
         case SemanticTypeKind::voidType:
             throw std::runtime_error(
                 "void type should only appear as an omitted IR return type");
@@ -334,12 +225,14 @@ namespace {
             if (semanticType.m_elementType == nullptr) {
                 throw std::runtime_error("array type is missing element type");
             }
-            if (semanticType.m_arrayLength == -1 && decayUnsizedArrayToPointer) {
-                return program.alloc<koopa_ir::PointerType>(koopa_ir::PointerType {
-                    .sourcePos = {},
-                    .pointeeType = lowerSemanticTypeToIr(
-                        program, *semanticType.m_elementType, false),
-                });
+            if (semanticType.m_arrayLength == -1
+                && decayUnsizedArrayToPointer) {
+                return program.alloc<koopa_ir::PointerType>(
+                    koopa_ir::PointerType {
+                        .sourcePos = {},
+                        .pointeeType = lowerSemanticTypeToIr(
+                            program, *semanticType.m_elementType, false),
+                    });
             }
             return program.alloc<koopa_ir::ArrayType>(koopa_ir::ArrayType {
                 .sourcePos = {},
@@ -352,7 +245,8 @@ namespace {
         throw std::runtime_error("unsupported semantic type for IR lowering");
     }
 
-    [[nodiscard]] bool isZeroInitializer(const koopa_ir::Initializer& initializer,
+    [[nodiscard]] bool isZeroInitializer(
+        const koopa_ir::Initializer& initializer,
         const koopa_ir::Program& program)
     {
         return MATCH(initializer) WITH(
@@ -385,16 +279,15 @@ namespace {
                 return koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 };
             }
 
-            const auto constantValue = semanticInfo.findConstantValue(exp_nn.ref());
+            const auto constantValue
+                = semanticInfo.findConstantValue(exp_nn.ref());
             if (!constantValue.has_value()) {
                 throw std::runtime_error(
                     "global array initializer element must be constant");
             }
             return koopa_ir::IntegerLiteral {
                 .sourcePos = {},
-                .value = isMintType(type)
-                    ? static_cast<int32_t>(encodeMintConstant(*constantValue))
-                    : *constantValue,
+                .value = *constantValue,
             };
         }
 
@@ -405,16 +298,16 @@ namespace {
         std::vector<koopa_ir::Initializer> elements;
         elements.reserve(static_cast<size_t>(type.m_arrayLength));
         for (int32_t i = 0; i < type.m_arrayLength; ++i) {
-            elements.push_back(generateGlobalInitializerToIr(
-                program, *type.m_elementType, scalarExprs, nextScalarIndex,
-                semanticInfo));
+            elements.push_back(
+                generateGlobalInitializerToIr(program, *type.m_elementType,
+                    scalarExprs, nextScalarIndex, semanticInfo));
         }
 
         if (elements.empty()) {
             return koopa_ir::ZeroInit {};
         }
-        if (std::all_of(elements.begin(), elements.end(),
-                [&](const auto& element) {
+        if (std::all_of(
+                elements.begin(), elements.end(), [&](const auto& element) {
                     return isZeroInitializer(element, program);
                 })) {
             return koopa_ir::ZeroInit {};
@@ -435,7 +328,8 @@ namespace {
         return lowerSemanticTypeToIr(program, type);
     }
 
-    [[nodiscard]] koopa_ir::StoreValue toStoreValue(const koopa_ir::Value& value)
+    [[nodiscard]] koopa_ir::StoreValue toStoreValue(
+        const koopa_ir::Value& value)
     {
         return MATCH(value) WITH(
             [&](const koopa_ir::Symbol& symbol) {
@@ -489,8 +383,8 @@ namespace {
             break;
         }
 
-        throw std::runtime_error(
-            "short-circuit binary expression should lower through boolean branching");
+        throw std::runtime_error("short-circuit binary expression should lower "
+                                 "through boolean branching");
     }
 
     struct IrAddress {
@@ -510,9 +404,9 @@ namespace {
         const frontend::SemanticFunctionSSA* m_ssa = nullptr;
         std::unordered_map<int64_t, koopa_ir::Value> m_valueByAliasKey;
         std::unordered_map<int32_t, std::string> m_functionBySymbolId;
-        std::unordered_map<Ref<frontend::SemanticBasicBlock>, Ref<koopa_ir::BasicBlock>>
+        std::unordered_map<Ref<frontend::SemanticBasicBlock>,
+            Ref<koopa_ir::BasicBlock>>
             m_basicBlockBySemanticBlock;
-        std::unordered_map<std::string, std::string> m_mintHelperByName;
         std::unordered_set<Ref<koopa_ir::BasicBlock>> m_terminatedBlocks;
         std::unordered_set<std::string> m_usedSymbolNames;
         SemanticType m_functionReturnType = SemanticType::makeVoid();
@@ -530,7 +424,8 @@ namespace {
         [[nodiscard]] std::string makeUniqueLocalName(
             const frontend::SemanticSymbol& symbol)
         {
-            const std::string baseName = "%" + normalizeIdentifierStem(symbol.name);
+            const std::string baseName
+                = "%" + normalizeIdentifierStem(symbol.name);
             if (m_usedSymbolNames.insert(baseName).second) {
                 return baseName;
             }
@@ -552,11 +447,13 @@ namespace {
                 ^ static_cast<uint32_t>(alias.m_version);
         }
 
-        void bindAlias(Ref<frontend::Identifier> identifier, koopa_ir::Value value)
+        void bindAlias(
+            Ref<frontend::Identifier> identifier, koopa_ir::Value value)
         {
             const auto alias = m_semanticInfo->findAlias(identifier);
             if (!alias.has_value()) {
-                throw std::runtime_error("identifier is missing semantic SSA alias");
+                throw std::runtime_error(
+                    "identifier is missing semantic SSA alias");
             }
             m_valueByAliasKey[aliasKey(*alias)] = std::move(value);
         }
@@ -573,16 +470,6 @@ namespace {
                 throw std::runtime_error(message);
             }
             return valueIt->second;
-        }
-
-        [[nodiscard]] std::string requireMintHelper(MintHelper helper) const
-        {
-            const auto helperIt = m_mintHelperByName.find(mintHelperName(helper));
-            if (helperIt == m_mintHelperByName.end()) {
-                throw std::runtime_error(
-                    "mint helper is missing a lowered declaration");
-            }
-            return helperIt->second;
         }
 
         void pushStatement(koopa_ir::Statement statement)
@@ -605,8 +492,8 @@ namespace {
         [[nodiscard]] koopa_ir::Value emitNamedRhs(
             koopa_ir::SymbolRhs rhs, const std::string& name)
         {
-            auto defRef = m_program->alloc<koopa_ir::SymbolDef>(
-                koopa_ir::SymbolDef {
+            auto defRef
+                = m_program->alloc<koopa_ir::SymbolDef>(koopa_ir::SymbolDef {
                     .sourcePos = {},
                     .symbol = makeIrSymbol(name),
                     .rhs = std::move(rhs),
@@ -616,8 +503,8 @@ namespace {
             return makeIrSymbol(name);
         }
 
-        [[nodiscard]] koopa_ir::Value emitAlloc(const SemanticType& type,
-            const std::string& name)
+        [[nodiscard]] koopa_ir::Value emitAlloc(
+            const SemanticType& type, const std::string& name)
         {
             auto rhsRef = m_program->alloc<koopa_ir::MemoryDeclaration>(
                 koopa_ir::MemoryDeclaration {
@@ -630,19 +517,20 @@ namespace {
 
         [[nodiscard]] koopa_ir::Value emitLoad(const koopa_ir::Symbol& source)
         {
-            auto rhsRef = m_program->alloc<koopa_ir::LoadExpr>(koopa_ir::LoadExpr {
-                .sourcePos = {},
-                .source = source,
-                .annotations = {},
-            });
+            auto rhsRef
+                = m_program->alloc<koopa_ir::LoadExpr>(koopa_ir::LoadExpr {
+                    .sourcePos = {},
+                    .source = source,
+                    .annotations = {},
+                });
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
         }
 
-        [[nodiscard]] koopa_ir::Value emitBinary(koopa_ir::BinaryOp op,
-            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        [[nodiscard]] koopa_ir::Value emitBinary(
+            koopa_ir::BinaryOp op, koopa_ir::Value lhs, koopa_ir::Value rhs)
         {
-            auto rhsRef = m_program->alloc<koopa_ir::BinaryExpr>(
-                koopa_ir::BinaryExpr {
+            auto rhsRef
+                = m_program->alloc<koopa_ir::BinaryExpr>(koopa_ir::BinaryExpr {
                     .sourcePos = {},
                     .op = op,
                     .lhs = std::move(lhs),
@@ -678,21 +566,112 @@ namespace {
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
         }
 
-        [[nodiscard]] koopa_ir::Value emitCall(
-            const std::string& callee, std::vector<koopa_ir::Value> args,
-            bool hasReturnValue)
+        [[nodiscard]] koopa_ir::Value emitCall(const std::string& callee,
+            std::vector<koopa_ir::Value> args, bool hasReturnValue)
         {
-            auto callRef = m_program->alloc<koopa_ir::CallExpr>(koopa_ir::CallExpr {
-                .sourcePos = {},
-                .callee = makeIrSymbol(callee),
-                .args = std::move(args),
-                .annotations = {},
-            });
+            auto callRef
+                = m_program->alloc<koopa_ir::CallExpr>(koopa_ir::CallExpr {
+                    .sourcePos = {},
+                    .callee = makeIrSymbol(callee),
+                    .args = std::move(args),
+                    .annotations = {},
+                });
             if (!hasReturnValue) {
                 pushStatement(callRef);
                 return koopa_ir::UndefValue {};
             }
             return emitNamedRhs(callRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitUnaryPoly(
+            koopa_ir::UnaryPolyOp op, koopa_ir::Value value)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::UnaryPolyExpr>(
+                koopa_ir::UnaryPolyExpr {
+                    .sourcePos = {},
+                    .op = op,
+                    .value = std::move(value),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitPvBinary(
+            koopa_ir::PvBinaryOp op, koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::PvBinaryExpr>(
+                koopa_ir::PvBinaryExpr {
+                    .sourcePos = {},
+                    .op = op,
+                    .lhs = std::move(lhs),
+                    .rhs = std::move(rhs),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitCombine(
+            std::vector<koopa_ir::CombineTerm> terms)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::CombineExpr>(
+                koopa_ir::CombineExpr {
+                    .sourcePos = {},
+                    .terms = std::move(terms),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitGetCoeff(
+            koopa_ir::Value value, koopa_ir::Value index)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::GetCoeffExpr>(
+                koopa_ir::GetCoeffExpr {
+                    .sourcePos = {},
+                    .value = std::move(value),
+                    .index = std::move(index),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitPolyConstruct(
+            std::vector<koopa_ir::Value> elements)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::PolyConstructExpr>(
+                koopa_ir::PolyConstructExpr {
+                    .sourcePos = {},
+                    .elements = std::move(elements),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitConversion(
+            koopa_ir::ConversionOp op, koopa_ir::Value value)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::ConversionExpr>(
+                koopa_ir::ConversionExpr {
+                    .sourcePos = {},
+                    .op = op,
+                    .value = std::move(value),
+                    .annotations = {},
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitIntAdd(
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            return emitBinary(
+                koopa_ir::BinaryOp::add, std::move(lhs), std::move(rhs));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitMintMul(
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            return emitBinary(
+                koopa_ir::BinaryOp::mul, std::move(lhs), std::move(rhs));
         }
 
         [[nodiscard]] koopa_ir::Symbol requireSymbolValue(
@@ -713,8 +692,8 @@ namespace {
                     .value = std::nullopt,
                     .annotations = {},
                 });
-            auto blockRef = m_program->alloc<koopa_ir::BasicBlock>(
-                koopa_ir::BasicBlock {
+            auto blockRef
+                = m_program->alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
                     .sourcePos = {},
                     .label = makeIrSymbol(
                         "%" + stem + "_" + std::to_string(m_nextBlockId++)),
@@ -760,20 +739,21 @@ namespace {
                 [&](int32_t constantValue) -> koopa_ir::Value {
                     return koopa_ir::IntegerLiteral {
                         .sourcePos = {},
-                        .value = isMintType(m_functionReturnType)
-                            ? static_cast<int32_t>(
-                                  encodeMintConstant(constantValue))
-                            : constantValue,
+                        .value = constantValue,
                     };
                 },
-                [&](Ref<Exp> exp) -> koopa_ir::Value { return generateExp(exp); });
+                [&](Ref<Exp> exp) -> koopa_ir::Value {
+                    return generateExp(exp);
+                });
         }
 
-        void generateSemanticBlock(Ref<frontend::SemanticBasicBlock> semanticBlockRef)
+        void generateSemanticBlock(
+            Ref<frontend::SemanticBasicBlock> semanticBlockRef)
         {
             const auto& semanticBlock
                 = semanticBlockRef(m_semanticInfo->controlFlowArena());
-            const auto ssaBlockIt = m_ssa->m_blockInfoByBlock.find(semanticBlockRef);
+            const auto ssaBlockIt
+                = m_ssa->m_blockInfoByBlock.find(semanticBlockRef);
             if (ssaBlockIt == m_ssa->m_blockInfoByBlock.end()) {
                 throw std::runtime_error(
                     "semantic basic block is missing SSA info");
@@ -785,7 +765,8 @@ namespace {
             }
             for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
                 const auto& blockParam = (*m_program)[block.params[i]];
-                m_valueByAliasKey[aliasKey(ssaBlockIt->second.m_params[i].m_alias)]
+                m_valueByAliasKey[aliasKey(
+                    ssaBlockIt->second.m_params[i].m_alias)]
                     = blockParam.symbol;
             }
             for (const auto& item : semanticBlock.items) {
@@ -795,7 +776,8 @@ namespace {
                 throw std::runtime_error(
                     "semantic basic block is missing terminator");
             }
-            generateSemanticTerminator(semanticBlockRef, *semanticBlock.terminator);
+            generateSemanticTerminator(
+                semanticBlockRef, *semanticBlock.terminator);
         }
 
         void generateSemanticBlockItem(
@@ -809,32 +791,36 @@ namespace {
                 [&](Ref<ExpStmt> expStmt) { generateExpStmt(expStmt.ptr()); });
         }
 
-        void generateSemanticTerminator(Ref<frontend::SemanticBasicBlock> source,
+        void generateSemanticTerminator(
+            Ref<frontend::SemanticBasicBlock> source,
             const frontend::SemanticBlockTerminator& terminator)
         {
             auto& state = *this;
             MATCH(terminator)
             WITH(
                 [&](const frontend::SemanticJumpTerminator& jump) {
-                    state.setTerminator(state.m_program->alloc<
-                        koopa_ir::JumpTerminator>(koopa_ir::JumpTerminator {
-                        .sourcePos = {},
-                        .target = (*state.m_program)
+                    state.setTerminator(
+                        state.m_program->alloc<koopa_ir::JumpTerminator>(
+                            koopa_ir::JumpTerminator {
+                                .sourcePos = {},
+                                .target
+                                = (*state.m_program)
                                       [state.m_basicBlockBySemanticBlock.at(
-                                          jump.target)]
+                                           jump.target)]
                                           .label,
-                        .args = state.edgeArgs(source, jump.target),
-                        .annotations = {},
-                    }));
+                                .args = state.edgeArgs(source, jump.target),
+                                .annotations = {},
+                            }));
                 },
                 [&](const frontend::SemanticBranchTerminator& branch) {
-                    auto trueTarget
-                        = state.m_basicBlockBySemanticBlock.at(branch.trueTarget);
-                    auto falseTarget
-                        = state.m_basicBlockBySemanticBlock.at(branch.falseTarget);
+                    auto trueTarget = state.m_basicBlockBySemanticBlock.at(
+                        branch.trueTarget);
+                    auto falseTarget = state.m_basicBlockBySemanticBlock.at(
+                        branch.falseTarget);
                     koopa_ir::Value condition;
                     if (const auto constantValue
-                        = state.m_semanticInfo->findConstantValue(branch.condition);
+                        = state.m_semanticInfo->findConstantValue(
+                            branch.condition);
                         constantValue.has_value()) {
                         condition = koopa_ir::IntegerLiteral {
                             .sourcePos = {},
@@ -843,28 +829,36 @@ namespace {
                     } else {
                         condition = state.generateExp(branch.condition);
                     }
-                    state.setTerminator(state.m_program->alloc<
-                        koopa_ir::BranchTerminator>(koopa_ir::BranchTerminator {
-                        .sourcePos = {},
-                        .condition = std::move(condition),
-                        .trueTarget = (*state.m_program)[trueTarget].label,
-                        .trueArgs = state.edgeArgs(source, branch.trueTarget),
-                        .falseTarget = (*state.m_program)[falseTarget].label,
-                        .falseArgs = state.edgeArgs(source, branch.falseTarget),
-                        .annotations = {},
-                    }));
+                    state.setTerminator(
+                        state.m_program->alloc<koopa_ir::BranchTerminator>(
+                            koopa_ir::BranchTerminator {
+                                .sourcePos = {},
+                                .condition = std::move(condition),
+                                .trueTarget
+                                = (*state.m_program)[trueTarget].label,
+                                .trueArgs
+                                = state.edgeArgs(source, branch.trueTarget),
+                                .falseTarget
+                                = (*state.m_program)[falseTarget].label,
+                                .falseArgs
+                                = state.edgeArgs(source, branch.falseTarget),
+                                .annotations = {},
+                            }));
                 },
-                [&](const frontend::SemanticReturnTerminator& returnTerminator) {
+                [&](const frontend::SemanticReturnTerminator&
+                        returnTerminator) {
                     std::optional<koopa_ir::Value> value;
                     if (returnTerminator.value.has_value()) {
-                        value = state.generateSemanticValue(*returnTerminator.value);
+                        value = state.generateSemanticValue(
+                            *returnTerminator.value);
                     }
-                    state.setTerminator(state.m_program->alloc<
-                        koopa_ir::ReturnTerminator>(koopa_ir::ReturnTerminator {
-                        .sourcePos = {},
-                        .value = std::move(value),
-                        .annotations = {},
-                    }));
+                    state.setTerminator(
+                        state.m_program->alloc<koopa_ir::ReturnTerminator>(
+                            koopa_ir::ReturnTerminator {
+                                .sourcePos = {},
+                                .value = std::move(value),
+                                .annotations = {},
+                            }));
                 });
         }
 
@@ -895,7 +889,8 @@ namespace {
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
-                                        "scalar const initializer should be a scalar expression");
+                                        "scalar const initializer should be a "
+                                        "scalar expression");
                                 });
                             continue;
                         }
@@ -906,8 +901,9 @@ namespace {
                         state.m_storageBySymbolId[symbol.m_id] = allocName;
 
                         if (type.isArray()) {
-                            auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                                parsedConstDef.constInitVal.ref(), type);
+                            auto scalarExprs
+                                = flattenArrayInitializer(state.m_ast,
+                                    parsedConstDef.constInitVal.ref(), type);
                             size_t nextScalarIndex = 0;
                             state.generateLocalArrayInitializer(
                                 makeIrSymbol(allocName), type, scalarExprs,
@@ -923,14 +919,14 @@ namespace {
                                 auto storeRef = state.m_program->alloc<
                                     koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
                                     .sourcePos = {},
-                                    .value = toStoreValue(
-                                        state.generateExp(initAlt)),
+                                    .value
+                                    = toStoreValue(state.generateExp(initAlt)),
                                     .destination = makeIrSymbol(allocName),
                                     .annotations = {},
                                 });
                                 state.pushStatement(storeRef);
                             },
-                            [&](const auto&) { });
+                            [&](const auto&) {});
                     }
                 },
                 [&](Ptr<VarDecl> declAlt) {
@@ -957,7 +953,8 @@ namespace {
                                     },
                                     [&](const auto&) {
                                         throw std::runtime_error(
-                                            "scalar var initializer should be a scalar expression");
+                                            "scalar var initializer should be "
+                                            "a scalar expression");
                                     });
                             } else {
                                 state.bindAlias(resolvedVarDef.identifier,
@@ -971,11 +968,23 @@ namespace {
                         (void)state.emitAlloc(type, allocName);
                         state.m_storageBySymbolId[symbol.m_id] = allocName;
                         if (!resolvedVarDef.initVal) {
+                            if (type.isPoly()) {
+                                auto storeRef = state.m_program->alloc<
+                                    koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                                    .sourcePos = {},
+                                    .value
+                                    = toStoreValue(state.emitPolyConstruct({})),
+                                    .destination = makeIrSymbol(allocName),
+                                    .annotations = {},
+                                });
+                                state.pushStatement(storeRef);
+                            }
                             continue;
                         }
                         if (type.isArray()) {
-                            auto scalarExprs = flattenArrayInitializer(state.m_ast,
-                                resolvedVarDef.initVal.ref(), type);
+                            auto scalarExprs
+                                = flattenArrayInitializer(state.m_ast,
+                                    resolvedVarDef.initVal.ref(), type);
                             size_t nextScalarIndex = 0;
                             state.generateLocalArrayInitializer(
                                 makeIrSymbol(allocName), type, scalarExprs,
@@ -983,21 +992,22 @@ namespace {
                             continue;
                         }
 
-                        const auto& initVal = resolvedVarDef.initVal(state.m_ast);
+                        const auto& initVal
+                            = resolvedVarDef.initVal(state.m_ast);
                         MATCH(initVal.kind)
                         WITH(
                             [&](Ref<Exp> initAlt) {
                                 auto storeRef = state.m_program->alloc<
                                     koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
                                     .sourcePos = {},
-                                    .value = toStoreValue(
-                                        state.generateExp(initAlt)),
+                                    .value
+                                    = toStoreValue(state.generateExp(initAlt)),
                                     .destination = makeIrSymbol(allocName),
                                     .annotations = {},
                                 });
                                 state.pushStatement(storeRef);
                             },
-                            [&](const auto&) { });
+                            [&](const auto&) {});
                     }
                 });
         }
@@ -1016,11 +1026,11 @@ namespace {
                         return;
                     }
                     const auto address = generateLValueAddress(expAlt);
-                    auto storeRef
-                        = m_program->alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                    auto storeRef = m_program->alloc<koopa_ir::StoreStmt>(
+                        koopa_ir::StoreStmt {
                             .sourcePos = {},
-                            .value = toStoreValue(
-                                generateExp(parsedAssignStmt.exp)),
+                            .value
+                            = toStoreValue(generateExp(parsedAssignStmt.exp)),
                             .destination = address.symbol,
                             .annotations = {},
                         });
@@ -1040,16 +1050,235 @@ namespace {
             }
         }
 
+        [[nodiscard]] bool expHasType(Ref<Exp> exp, SemanticTypeKind kind) const
+        {
+            const auto type = m_semanticInfo->findExpType(exp);
+            return type.has_value() && type->kind == kind;
+        }
+
+        [[nodiscard]] koopa_ir::Value mintValueForExp(Ref<Exp> exp)
+        {
+            auto value = generateExp(exp);
+            const auto type = m_semanticInfo->findExpType(exp);
+            if (type.has_value() && type->kind == SemanticTypeKind::integer) {
+                return emitConversion(
+                    koopa_ir::ConversionOp::int2mint, std::move(value));
+            }
+            return value;
+        }
+
+        [[nodiscard]] koopa_ir::Value generatePolyConstructFromCast(
+            const Exp::Cast& cast)
+        {
+            std::vector<koopa_ir::Value> elements;
+            elements.push_back(mintValueForExp(cast.value));
+            return emitPolyConstruct(std::move(elements));
+        }
+
+        [[nodiscard]] koopa_ir::Value generatePolyConvolution(
+            const Exp::Binary& binaryExp)
+        {
+            auto lhsPv = emitUnaryPoly(
+                koopa_ir::UnaryPolyOp::ntt, generateExp(binaryExp.lhs));
+            auto rhsPv = emitUnaryPoly(
+                koopa_ir::UnaryPolyOp::ntt, generateExp(binaryExp.rhs));
+            auto product = emitPvBinary(
+                koopa_ir::PvBinaryOp::mul, std::move(lhsPv), std::move(rhsPv));
+            return emitUnaryPoly(
+                koopa_ir::UnaryPolyOp::intt, std::move(product));
+        }
+
+        [[nodiscard]] koopa_ir::Value generatePolyBaseValue(Ref<Exp> exp)
+        {
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> koopa_ir::Value {
+                    if (expAlt.op == BinaryOpKeyword::star
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        return generatePolyConvolution(expAlt);
+                    }
+                    return emitCombine(generatePolyLinearTerms(exp));
+                },
+                [&](Exp::Cast expAlt) -> koopa_ir::Value {
+                    if (expAlt.targetType == BTypeKeyword::polyKeyword) {
+                        return generatePolyConstructFromCast(expAlt);
+                    }
+                    return generateExp(expAlt.value);
+                },
+                [&](Exp::Call expAlt) -> koopa_ir::Value {
+                    const auto& symbol = requireSymbolForIdentifier(
+                        expAlt.funcName, *m_semanticInfo,
+                        "call target is missing a symbol binding");
+                    const auto functionIt
+                        = m_functionBySymbolId.find(symbol.m_id);
+                    if (functionIt == m_functionBySymbolId.end()) {
+                        throw std::runtime_error("call target is missing a "
+                                                 "lowered function binding");
+                    }
+                    std::vector<koopa_ir::Value> args;
+                    args.reserve(expAlt.params.size());
+                    for (const auto arg_nn : expAlt.params) {
+                        args.push_back(generateExp(arg_nn));
+                    }
+                    return emitCall(functionIt->second, std::move(args), true);
+                },
+                [&](Exp::LVal expAlt) -> koopa_ir::Value {
+                    auto address = generateLValueAddress(expAlt);
+                    return emitLoad(address.symbol);
+                },
+                [&](Exp::PolyConstruct expAlt) -> koopa_ir::Value {
+                    std::vector<koopa_ir::Value> elements;
+                    elements.reserve(expAlt.elements.size());
+                    for (const auto element : expAlt.elements) {
+                        elements.push_back(mintValueForExp(element));
+                    }
+                    return emitPolyConstruct(std::move(elements));
+                },
+                [&](const auto&) -> koopa_ir::Value {
+                    return emitCombine(generatePolyLinearTerms(exp));
+                });
+        }
+
+        [[nodiscard]] koopa_ir::CombineTerm makeIdentityPolyTerm(
+            koopa_ir::Value value)
+        {
+            return koopa_ir::CombineTerm {
+                .value = std::move(value),
+                .start
+                = koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                .end = std::nullopt,
+                .shift
+                = koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                .scale
+                = koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 1 },
+            };
+        }
+
+        void scaleTerms(
+            std::vector<koopa_ir::CombineTerm>& terms, koopa_ir::Value scale)
+        {
+            for (auto& term : terms) {
+                term.scale = emitMintMul(std::move(term.scale), scale);
+            }
+        }
+
+        void shiftTerms(
+            std::vector<koopa_ir::CombineTerm>& terms, koopa_ir::Value shift)
+        {
+            for (auto& term : terms) {
+                term.start = emitIntAdd(std::move(term.start), shift);
+                if (term.end.has_value()) {
+                    term.end = emitIntAdd(std::move(*term.end), shift);
+                }
+                term.shift = emitIntAdd(std::move(term.shift), shift);
+            }
+        }
+
+        void sliceTerms(std::vector<koopa_ir::CombineTerm>& terms,
+            koopa_ir::Value start, koopa_ir::Value end)
+        {
+            for (auto& term : terms) {
+                term.start = emitIntAdd(start, term.shift);
+                term.end = emitIntAdd(end, term.shift);
+            }
+        }
+
+        [[nodiscard]] std::vector<koopa_ir::CombineTerm>
+        generatePolyLinearTerms(Ref<Exp> exp)
+        {
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> std::vector<koopa_ir::CombineTerm> {
+                    if ((expAlt.op == BinaryOpKeyword::plus
+                            || expAlt.op == BinaryOpKeyword::minus)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        auto terms = generatePolyLinearTerms(expAlt.lhs);
+                        auto rhsTerms = generatePolyLinearTerms(expAlt.rhs);
+                        if (expAlt.op == BinaryOpKeyword::minus) {
+                            scaleTerms(rhsTerms,
+                                koopa_ir::IntegerLiteral {
+                                    .sourcePos = {}, .value = -1 });
+                        }
+                        terms.insert(terms.end(),
+                            std::make_move_iterator(rhsTerms.begin()),
+                            std::make_move_iterator(rhsTerms.end()));
+                        return terms;
+                    }
+                    if (expAlt.op == BinaryOpKeyword::star) {
+                        if (expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                            && !expHasType(
+                                expAlt.rhs, SemanticTypeKind::poly)) {
+                            auto terms = generatePolyLinearTerms(expAlt.lhs);
+                            scaleTerms(terms, mintValueForExp(expAlt.rhs));
+                            return terms;
+                        }
+                        if (!expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                            && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                            auto terms = generatePolyLinearTerms(expAlt.rhs);
+                            scaleTerms(terms, mintValueForExp(expAlt.lhs));
+                            return terms;
+                        }
+                    }
+                    if ((expAlt.op == BinaryOpKeyword::sar
+                            || expAlt.op == BinaryOpKeyword::shl)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)) {
+                        auto terms = generatePolyLinearTerms(expAlt.lhs);
+                        auto shift = generateExp(expAlt.rhs);
+                        if (expAlt.op == BinaryOpKeyword::shl) {
+                            shift = emitBinary(koopa_ir::BinaryOp::sub,
+                                koopa_ir::IntegerLiteral {
+                                    .sourcePos = {}, .value = 0 },
+                                std::move(shift));
+                        }
+                        shiftTerms(terms, std::move(shift));
+                        return terms;
+                    }
+                    return { makeIdentityPolyTerm(generatePolyBaseValue(exp)) };
+                },
+                [&](Exp::Slice expAlt) -> std::vector<koopa_ir::CombineTerm> {
+                    auto terms = generatePolyLinearTerms(expAlt.base);
+                    sliceTerms(terms, generateExp(expAlt.start),
+                        generateExp(expAlt.end));
+                    return terms;
+                },
+                [&](const auto&) -> std::vector<koopa_ir::CombineTerm> {
+                    return { makeIdentityPolyTerm(generatePolyBaseValue(exp)) };
+                });
+        }
+
+        [[nodiscard]] koopa_ir::Value generatePolyExpression(Ref<Exp> exp)
+        {
+            const auto& parsedExp = exp(m_ast);
+            if (const auto* binary = std::get_if<Exp::Binary>(&parsedExp.kind);
+                binary != nullptr && binary->op == BinaryOpKeyword::star
+                && expHasType(binary->lhs, SemanticTypeKind::poly)
+                && expHasType(binary->rhs, SemanticTypeKind::poly)) {
+                return generatePolyConvolution(*binary);
+            }
+            if (std::holds_alternative<Exp::Cast>(parsedExp.kind)
+                || std::holds_alternative<Exp::Call>(parsedExp.kind)
+                || std::holds_alternative<Exp::LVal>(parsedExp.kind)
+                || std::holds_alternative<Exp::PolyConstruct>(parsedExp.kind)) {
+                return generatePolyBaseValue(exp);
+            }
+            return emitCombine(generatePolyLinearTerms(exp));
+        }
+
         [[nodiscard]] koopa_ir::Value generateExp(Ref<Exp> exp)
         {
-            if (const auto constantValue = m_semanticInfo->findConstantValue(exp);
+            const auto semanticType = m_semanticInfo->findExpType(exp);
+            if (semanticType.has_value()
+                && semanticType->kind == SemanticTypeKind::poly) {
+                return generatePolyExpression(exp);
+            }
+            if (const auto constantValue
+                = m_semanticInfo->findConstantValue(exp);
                 constantValue.has_value()) {
-                const auto semanticType = m_semanticInfo->findExpType(exp);
                 return koopa_ir::IntegerLiteral {
                     .sourcePos = {},
-                    .value = semanticType.has_value() && isMintType(*semanticType)
-                        ? static_cast<int32_t>(encodeMintConstant(*constantValue))
-                        : *constantValue,
+                    .value = *constantValue,
                 };
             }
 
@@ -1076,26 +1305,29 @@ namespace {
                     }
                     const bool targetIsMint
                         = expAlt.targetType == BTypeKeyword::mintKeyword;
+                    const bool targetIsInt
+                        = expAlt.targetType == BTypeKeyword::intKeyword;
                     if (targetIsMint
                         && operandType->kind == SemanticTypeKind::integer) {
-                        return emitCall(requireMintHelper(MintHelper::fromInt),
-                            { std::move(value) }, true);
+                        return emitConversion(
+                            koopa_ir::ConversionOp::int2mint, std::move(value));
                     }
-                    if (!targetIsMint
+                    if (targetIsInt
                         && operandType->kind == SemanticTypeKind::mint) {
-                        return emitCall(requireMintHelper(MintHelper::toInt),
-                            { std::move(value) }, true);
+                        return emitConversion(
+                            koopa_ir::ConversionOp::mint2int, std::move(value));
                     }
                     return value;
                 },
                 [&](Exp::Call expAlt) -> koopa_ir::Value {
-                    const auto& symbol = requireSymbolForIdentifier(expAlt.funcName,
-                        *m_semanticInfo,
+                    const auto& symbol = requireSymbolForIdentifier(
+                        expAlt.funcName, *m_semanticInfo,
                         "call target is missing a symbol binding");
-                    const auto functionIt = m_functionBySymbolId.find(symbol.m_id);
+                    const auto functionIt
+                        = m_functionBySymbolId.find(symbol.m_id);
                     if (functionIt == m_functionBySymbolId.end()) {
-                        throw std::runtime_error(
-                            "call target is missing a lowered function binding");
+                        throw std::runtime_error("call target is missing a "
+                                                 "lowered function binding");
                     }
                     std::vector<koopa_ir::Value> args;
                     args.reserve(expAlt.params.size());
@@ -1108,15 +1340,88 @@ namespace {
                 },
                 [&](Exp::Slice expAlt) -> koopa_ir::Value {
                     (void)expAlt;
-                    throw std::runtime_error(
-                        "poly slice operations are not yet supported in IR generation");
+                    return generatePolyExpression(exp);
                 },
                 [&](Exp::Subscript expAlt) -> koopa_ir::Value {
-                    (void)expAlt;
-                    throw std::runtime_error(
-                        "poly subscript operations are not yet supported in IR generation");
+                    return emitGetCoeff(
+                        generateExp(expAlt.base), generateExp(expAlt.index));
+                },
+                [&](Exp::Ntt expAlt) -> koopa_ir::Value {
+                    return emitUnaryPoly(
+                        koopa_ir::UnaryPolyOp::ntt, generateExp(expAlt.value));
+                },
+                [&](Exp::Intt expAlt) -> koopa_ir::Value {
+                    return emitUnaryPoly(
+                        koopa_ir::UnaryPolyOp::intt, generateExp(expAlt.value));
+                },
+                [&](Exp::PvBinary expAlt) -> koopa_ir::Value {
+                    koopa_ir::PvBinaryOp op = koopa_ir::PvBinaryOp::add;
+                    switch (expAlt.op) {
+                    case PvBinaryOpKeyword::add:
+                        op = koopa_ir::PvBinaryOp::add;
+                        break;
+                    case PvBinaryOpKeyword::sub:
+                        op = koopa_ir::PvBinaryOp::sub;
+                        break;
+                    case PvBinaryOpKeyword::mul:
+                        op = koopa_ir::PvBinaryOp::mul;
+                        break;
+                    }
+                    return emitPvBinary(
+                        op, generateExp(expAlt.lhs), generateExp(expAlt.rhs));
+                },
+                [&](Exp::Combine expAlt) -> koopa_ir::Value {
+                    std::vector<koopa_ir::CombineTerm> terms;
+                    terms.reserve(expAlt.terms.size());
+                    for (const auto& term : expAlt.terms) {
+                        terms.push_back(koopa_ir::CombineTerm {
+                            .value = generateExp(term.value),
+                            .start = generateExp(term.start),
+                            .end = term.end == nullptr
+                                ? std::nullopt
+                                : std::make_optional(
+                                      generateExp(term.end.ref())),
+                            .shift = generateExp(term.shift),
+                            .scale = mintValueForExp(term.scale),
+                        });
+                    }
+                    return emitCombine(std::move(terms));
+                },
+                [&](Exp::GetCoeff expAlt) -> koopa_ir::Value {
+                    return emitGetCoeff(
+                        generateExp(expAlt.value), generateExp(expAlt.index));
+                },
+                [&](Exp::PolyConstruct expAlt) -> koopa_ir::Value {
+                    std::vector<koopa_ir::Value> elements;
+                    elements.reserve(expAlt.elements.size());
+                    for (const auto element : expAlt.elements) {
+                        elements.push_back(mintValueForExp(element));
+                    }
+                    return emitPolyConstruct(std::move(elements));
+                },
+                [&](Exp::IntToMint expAlt) -> koopa_ir::Value {
+                    return emitConversion(koopa_ir::ConversionOp::int2mint,
+                        generateExp(expAlt.value));
+                },
+                [&](Exp::MintToInt expAlt) -> koopa_ir::Value {
+                    return emitConversion(koopa_ir::ConversionOp::mint2int,
+                        generateExp(expAlt.value));
                 },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
+                    const auto& lvalSymbol = requireSymbolForIdentifier(
+                        expAlt.identifier, *m_semanticInfo,
+                        "lvalue is missing a symbol binding");
+                    if (lvalSymbol.isObject()
+                        && lvalSymbol.object().m_type.isPoly()
+                        && expAlt.indices.size() == 1) {
+                        Exp::LVal baseLVal {
+                            .identifier = expAlt.identifier,
+                            .indices = {},
+                        };
+                        auto baseAddress = generateLValueAddress(baseLVal);
+                        return emitGetCoeff(emitLoad(baseAddress.symbol),
+                            generateExp(expAlt.indices.front()));
+                    }
                     if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
                         && expAlt.indices.empty()) {
                         return requireAliasValue(expAlt.identifier,
@@ -1126,8 +1431,7 @@ namespace {
                     const auto expType = m_semanticInfo->findExpType(exp);
                     if (expType.has_value() && expType->isArray()) {
                         if (address.pointeeType.isArray()) {
-                            return emitGetElementPointer(
-                                address.symbol,
+                            return emitGetElementPointer(address.symbol,
                                 koopa_ir::IntegerLiteral {
                                     .sourcePos = {},
                                     .value = 0,
@@ -1148,33 +1452,47 @@ namespace {
         [[nodiscard]] koopa_ir::Value generateBinaryExpValue(
             const Exp::Binary& binaryExp)
         {
+            const auto lhsType = m_semanticInfo->findExpType(binaryExp.lhs);
+            const auto rhsType = m_semanticInfo->findExpType(binaryExp.rhs);
+            if ((lhsType.has_value() && lhsType->kind == SemanticTypeKind::poly)
+                || (rhsType.has_value()
+                    && rhsType->kind == SemanticTypeKind::poly)) {
+                if (binaryExp.op == BinaryOpKeyword::star && lhsType.has_value()
+                    && rhsType.has_value()
+                    && lhsType->kind == SemanticTypeKind::poly
+                    && rhsType->kind == SemanticTypeKind::poly) {
+                    return generatePolyConvolution(binaryExp);
+                }
+                throw std::runtime_error("poly binary expression should lower "
+                                         "through generatePolyExpression");
+            }
+
             auto lhs = generateExp(binaryExp.lhs);
             auto rhs = generateExp(binaryExp.rhs);
-            const auto lhsType = m_semanticInfo->findExpType(binaryExp.lhs);
             if (lhsType.has_value() && isMintType(*lhsType)) {
                 switch (binaryExp.op) {
                 case BinaryOpKeyword::plus:
-                    return emitCall(requireMintHelper(MintHelper::add),
-                        { std::move(lhs), std::move(rhs) }, true);
+                    return emitBinary(koopa_ir::BinaryOp::add, std::move(lhs),
+                        std::move(rhs));
                 case BinaryOpKeyword::minus:
-                    return emitCall(requireMintHelper(MintHelper::sub),
-                        { std::move(lhs), std::move(rhs) }, true);
+                    return emitBinary(koopa_ir::BinaryOp::sub, std::move(lhs),
+                        std::move(rhs));
                 case BinaryOpKeyword::star:
-                    return emitCall(requireMintHelper(MintHelper::mul),
-                        { std::move(lhs), std::move(rhs) }, true);
+                    return emitBinary(koopa_ir::BinaryOp::mul, std::move(lhs),
+                        std::move(rhs));
                 case BinaryOpKeyword::slash:
-                    return emitCall(requireMintHelper(MintHelper::div),
-                        { std::move(lhs), std::move(rhs) }, true);
+                    return emitBinary(koopa_ir::BinaryOp::div, std::move(lhs),
+                        std::move(rhs));
                 case BinaryOpKeyword::less:
                 case BinaryOpKeyword::greater:
                 case BinaryOpKeyword::lessEqual:
                 case BinaryOpKeyword::greaterEqual:
                 case BinaryOpKeyword::equal:
                 case BinaryOpKeyword::notEqual:
-                    lhs = emitCall(requireMintHelper(MintHelper::toInt),
-                        { std::move(lhs) }, true);
-                    rhs = emitCall(requireMintHelper(MintHelper::toInt),
-                        { std::move(rhs) }, true);
+                    lhs = emitConversion(
+                        koopa_ir::ConversionOp::mint2int, std::move(lhs));
+                    rhs = emitConversion(
+                        koopa_ir::ConversionOp::mint2int, std::move(rhs));
                     break;
                 case BinaryOpKeyword::percent:
                 case BinaryOpKeyword::shl:
@@ -1183,11 +1501,13 @@ namespace {
                 case BinaryOpKeyword::bitXor:
                 case BinaryOpKeyword::bitOr:
                     throw std::runtime_error(
-                        "mint bitwise and shift expressions should be rejected semantically");
+                        "mint bitwise and shift expressions should be rejected "
+                        "semantically");
                 case BinaryOpKeyword::andAnd:
                 case BinaryOpKeyword::orOr:
                     throw std::runtime_error(
-                        "short-circuit binary expression should lower through boolean branching");
+                        "short-circuit binary expression should lower through "
+                        "boolean branching");
                 }
             }
             return emitBinary(lowerBinaryOpToIr(binaryExp.op), std::move(lhs),
@@ -1204,17 +1524,18 @@ namespace {
                 case UnaryOpKeyword::plus:
                     return operand;
                 case UnaryOpKeyword::minus:
-                    return emitCall(requireMintHelper(MintHelper::sub),
-                        { koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
-                            std::move(operand) },
-                        true);
+                    return emitBinary(koopa_ir::BinaryOp::sub,
+                        koopa_ir::IntegerLiteral {
+                            .sourcePos = {}, .value = 0 },
+                        std::move(operand));
                 case UnaryOpKeyword::bang:
                     return emitBinary(koopa_ir::BinaryOp::eq,
-                        koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
+                        koopa_ir::IntegerLiteral {
+                            .sourcePos = {}, .value = 0 },
                         std::move(operand));
                 case UnaryOpKeyword::tilde:
-                    throw std::runtime_error(
-                        "mint bitwise-not expressions should be rejected semantically");
+                    throw std::runtime_error("mint bitwise-not expressions "
+                                             "should be rejected semantically");
                 }
             }
 
@@ -1232,7 +1553,8 @@ namespace {
                     koopa_ir::IntegerLiteral { .sourcePos = {}, .value = 0 },
                     std::move(operand));
             case UnaryOpKeyword::tilde:
-                return emitBinary(koopa_ir::BinaryOp::bitXor, std::move(operand),
+                return emitBinary(koopa_ir::BinaryOp::bitXor,
+                    std::move(operand),
                     koopa_ir::IntegerLiteral { .sourcePos = {}, .value = -1 });
             }
             throw std::runtime_error("unsupported unary operator");
@@ -1308,7 +1630,8 @@ namespace {
             Ref<koopa_ir::BasicBlock> trueBlock,
             Ref<koopa_ir::BasicBlock> falseBlock)
         {
-            if (const auto constantValue = m_semanticInfo->findConstantValue(exp);
+            if (const auto constantValue
+                = m_semanticInfo->findConstantValue(exp);
                 constantValue.has_value()) {
                 setTerminator(m_program->alloc<koopa_ir::BranchTerminator>(
                     koopa_ir::BranchTerminator {
@@ -1385,8 +1708,8 @@ namespace {
         }
 
         void generateLocalArrayInitializer(const koopa_ir::Symbol& address,
-            const SemanticType& type,
-            const std::vector<Ptr<Exp>>& scalarExprs, size_t& nextScalarIndex)
+            const SemanticType& type, const std::vector<Ptr<Exp>>& scalarExprs,
+            size_t& nextScalarIndex)
         {
             if (!type.isArray()) {
                 koopa_ir::Value initValue = koopa_ir::IntegerLiteral {
@@ -1399,8 +1722,8 @@ namespace {
                         initValue = generateExp(exp_nn.ref());
                     }
                 }
-                auto storeRef
-                    = m_program->alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                auto storeRef = m_program->alloc<koopa_ir::StoreStmt>(
+                    koopa_ir::StoreStmt {
                         .sourcePos = {},
                         .value = toStoreValue(initValue),
                         .destination = address,
@@ -1415,16 +1738,15 @@ namespace {
             }
 
             for (int32_t i = 0; i < type.m_arrayLength; ++i) {
-                const auto elementAddress = requireSymbolValue(
-                    emitGetElementPointer(address,
-                        koopa_ir::IntegerLiteral {
-                            .sourcePos = {},
-                            .value = i,
-                        }),
-                    "array element address should lower to a symbol");
-                generateLocalArrayInitializer(
-                    elementAddress, *type.m_elementType, scalarExprs,
-                    nextScalarIndex);
+                const auto elementAddress
+                    = requireSymbolValue(emitGetElementPointer(address,
+                                             koopa_ir::IntegerLiteral {
+                                                 .sourcePos = {},
+                                                 .value = i,
+                                             }),
+                        "array element address should lower to a symbol");
+                generateLocalArrayInitializer(elementAddress,
+                    *type.m_elementType, scalarExprs, nextScalarIndex);
             }
         }
 
@@ -1474,7 +1796,8 @@ namespace {
                         "pointer arithmetic should produce a symbol");
                 }
 
-                if (currentType.isArray() && currentType.m_elementType != nullptr) {
+                if (currentType.isArray()
+                    && currentType.m_elementType != nullptr) {
                     currentType = *currentType.m_elementType;
                 }
             }
@@ -1485,24 +1808,6 @@ namespace {
             };
         }
     };
-
-    [[nodiscard]] Ref<koopa_ir::FunctionDecl> createMintHelperDeclIr(
-        koopa_ir::Program& program, MintHelper helper)
-    {
-        const size_t paramCount = helper == MintHelper::fromInt
-                || helper == MintHelper::toInt
-            ? 1
-            : 2;
-        std::vector<koopa_ir::Type> paramTypes(
-            paramCount, koopa_ir::Type { koopa_ir::I32Type {} });
-        return program.alloc<koopa_ir::FunctionDecl>(koopa_ir::FunctionDecl {
-            .sourcePos = {},
-            .name = makeIrSymbol(makeFunctionName(mintHelperName(helper))),
-            .paramTypes = std::move(paramTypes),
-            .returnType = koopa_ir::Type { koopa_ir::I32Type {} },
-            .annotations = {},
-        });
-    }
 
     [[nodiscard]] Ref<koopa_ir::FunctionDecl> createExternalFunctionDeclIr(
         koopa_ir::Program& program, const SemanticSymbol& symbol)
@@ -1517,8 +1822,8 @@ namespace {
             .sourcePos = {},
             .name = makeIrSymbol(makeFunctionName(symbol.name)),
             .paramTypes = std::move(paramTypes),
-            .returnType = lowerOptionalReturnTypeToIr(
-                program, funcInfo.m_returnType),
+            .returnType
+            = lowerOptionalReturnTypeToIr(program, funcInfo.m_returnType),
             .annotations = {},
         });
     }
@@ -1528,8 +1833,7 @@ namespace {
         Ref<koopa_ir::BasicBlock> entryBlockRef)
     {
         auto& function = program[functionRef];
-        std::unordered_map<std::string, Ref<koopa_ir::BasicBlock>>
-            blockByLabel;
+        std::unordered_map<std::string, Ref<koopa_ir::BasicBlock>> blockByLabel;
         blockByLabel.reserve(function.blocks.size());
         for (const auto blockRef : function.blocks) {
             blockByLabel.insert_or_assign(
@@ -1550,13 +1854,13 @@ namespace {
             WITH(
                 [&](Ref<koopa_ir::BranchTerminator> terminatorRef) {
                     const auto& terminator = program[terminatorRef];
-                    if (const auto trueIt = blockByLabel.find(
-                            terminator.trueTarget.spelling);
+                    if (const auto trueIt
+                        = blockByLabel.find(terminator.trueTarget.spelling);
                         trueIt != blockByLabel.end()) {
                         worklist.push_back(trueIt->second);
                     }
-                    if (const auto falseIt = blockByLabel.find(
-                            terminator.falseTarget.spelling);
+                    if (const auto falseIt
+                        = blockByLabel.find(terminator.falseTarget.spelling);
                         falseIt != blockByLabel.end()) {
                         worklist.push_back(falseIt->second);
                     }
@@ -1569,18 +1873,18 @@ namespace {
                         worklist.push_back(targetIt->second);
                     }
                 },
-                [&](Ref<koopa_ir::ReturnTerminator>) { });
+                [&](Ref<koopa_ir::ReturnTerminator>) {});
         }
 
-        std::erase_if(function.blocks,
-            [&](Ref<koopa_ir::BasicBlock> blockRef) {
-                // Always keep the synthesized %end block (default return guard),
-                // even if it's unreachable from entry (e.g., function returns early).
-                if (program[blockRef].label.spelling == "%end") {
-                    return false;
-                }
-                return !reachableBlocks.contains(blockRef);
-            });
+        std::erase_if(function.blocks, [&](Ref<koopa_ir::BasicBlock> blockRef) {
+            // Always keep the synthesized %end block (default return guard),
+            // even if it's unreachable from entry (e.g., function returns
+            // early).
+            if (program[blockRef].label.spelling == "%end") {
+                return false;
+            }
+            return !reachableBlocks.contains(blockRef);
+        });
     }
 
     [[nodiscard]] Ref<koopa_ir::FunctionDef> createFunctionDefIr(
@@ -1589,8 +1893,9 @@ namespace {
     {
         const auto& parsedFuncDef = funcDef(ast);
         const auto& identifier = parsedFuncDef.identifier(ast);
-        const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
-            semanticInfo, "function definition is missing a symbol binding");
+        const auto& symbol
+            = requireSymbolForIdentifier(parsedFuncDef.identifier, semanticInfo,
+                "function definition is missing a symbol binding");
         const auto& funcInfo = symbol.function();
         std::vector<Ref<koopa_ir::FunctionParameter>> params;
         params.reserve(funcInfo.m_paramTypes.size());
@@ -1599,7 +1904,8 @@ namespace {
                 koopa_ir::FunctionParameter {
                     .sourcePos = {},
                     .symbol = makeIrSymbol("%arg" + std::to_string(i)),
-                    .type = lowerSemanticTypeToIr(program, funcInfo.m_paramTypes[i]),
+                    .type
+                    = lowerSemanticTypeToIr(program, funcInfo.m_paramTypes[i]),
                     .annotations = {},
                 }));
         }
@@ -1607,7 +1913,8 @@ namespace {
             .sourcePos = {},
             .name = makeIrSymbol(makeFunctionName(identifier.name)),
             .params = std::move(params),
-            .returnType = lowerOptionalReturnTypeToIr(program, funcInfo.m_returnType),
+            .returnType
+            = lowerOptionalReturnTypeToIr(program, funcInfo.m_returnType),
             .blocks = {},
             .annotations = {},
         });
@@ -1640,13 +1947,16 @@ namespace {
                         koopa_ir::GlobalMemoryDef {
                             .sourcePos = {},
                             .name = makeIrSymbol(makeGlobalName(symbol.name)),
-                            .allocType = lowerSemanticTypeToIr(program, type, false),
-                            .initializer = generateGlobalInitializerToIr(program, type,
+                            .allocType
+                            = lowerSemanticTypeToIr(program, type, false),
+                            .initializer
+                            = generateGlobalInitializerToIr(program, type,
                                 scalarExprs, nextScalarIndex, semanticInfo),
                             .annotations = {},
                         });
                     program.items.push_back(globalRef);
-                    globalStorageBySymbolId[symbol.m_id] = makeGlobalName(symbol.name);
+                    globalStorageBySymbolId[symbol.m_id]
+                        = makeGlobalName(symbol.name);
                 }
             },
             [&](Ptr<VarDecl> declAlt) {
@@ -1673,28 +1983,28 @@ namespace {
                                     = semanticInfo.findConstantValue(initAlt);
                                 if (!constantValue.has_value()) {
                                     throw std::runtime_error(
-                                        "global variable initializer must be constant");
+                                        "global variable initializer must be "
+                                        "constant");
                                 }
                                 initValue = koopa_ir::IntegerLiteral {
                                     .sourcePos = {},
-                                    .value = isMintType(type)
-                                        ? static_cast<int32_t>(
-                                              encodeMintConstant(*constantValue))
-                                        : *constantValue,
+                                    .value = *constantValue,
                                 };
                             },
-                            [&](const auto&) { });
+                            [&](const auto&) {});
                     }
                     auto globalRef = program.alloc<koopa_ir::GlobalMemoryDef>(
                         koopa_ir::GlobalMemoryDef {
                             .sourcePos = {},
                             .name = makeIrSymbol(makeGlobalName(symbol.name)),
-                            .allocType = lowerSemanticTypeToIr(program, type, false),
+                            .allocType
+                            = lowerSemanticTypeToIr(program, type, false),
                             .initializer = std::move(initValue),
                             .annotations = {},
                         });
                     program.items.push_back(globalRef);
-                    globalStorageBySymbolId[symbol.m_id] = makeGlobalName(symbol.name);
+                    globalStorageBySymbolId[symbol.m_id]
+                        = makeGlobalName(symbol.name);
                 }
             });
     }
@@ -1703,7 +2013,6 @@ namespace {
         Ptr<FuncDef> funcDef, const SemanticInfo& semanticInfo,
         const std::unordered_map<int32_t, std::string>& globalStorageBySymbolId,
         const std::unordered_map<int32_t, std::string>& functionBySymbolId,
-        const std::unordered_map<std::string, std::string>& mintHelperByName,
         Ref<koopa_ir::FunctionDef> functionRef)
     {
         const auto& parsedFuncDef = funcDef(ast);
@@ -1713,8 +2022,9 @@ namespace {
                 "function definition is missing semantic control flow");
         }
 
-        const auto& symbol = requireSymbolForIdentifier(parsedFuncDef.identifier,
-            semanticInfo, "function definition is missing a symbol binding");
+        const auto& symbol
+            = requireSymbolForIdentifier(parsedFuncDef.identifier, semanticInfo,
+                "function definition is missing a symbol binding");
         const auto* ssa = semanticInfo.findSSA(funcDef.ref());
         if (ssa == nullptr) {
             throw std::runtime_error(
@@ -1732,19 +2042,18 @@ namespace {
             .m_semanticInfo = &semanticInfo,
             .m_program = &program,
             .m_function = functionRef,
-            .m_currentBasicBlock = program.alloc<koopa_ir::BasicBlock>(
-                koopa_ir::BasicBlock {
-                    .sourcePos = {},
-                    .label = makeIrSymbol("%placeholder"),
-                    .params = {},
-                    .statements = {},
-                    .terminator = placeholderRef,
-                    .annotations = {},
-                }),
+            .m_currentBasicBlock
+            = program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = {},
+                .label = makeIrSymbol("%placeholder"),
+                .params = {},
+                .statements = {},
+                .terminator = placeholderRef,
+                .annotations = {},
+            }),
             .m_storageBySymbolId = globalStorageBySymbolId,
             .m_ssa = ssa,
             .m_functionBySymbolId = functionBySymbolId,
-            .m_mintHelperByName = mintHelperByName,
             .m_functionReturnType = symbol.function().m_returnType,
         };
 
@@ -1753,8 +2062,8 @@ namespace {
         const auto& controlFlowArena = semanticInfo.controlFlowArena();
         for (const auto semanticBlockRef : controlFlow->blocks) {
             const auto& semanticBlock = semanticBlockRef(controlFlowArena);
-            auto blockRef = program.alloc<koopa_ir::BasicBlock>(
-                koopa_ir::BasicBlock {
+            auto blockRef
+                = program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
                     .sourcePos = {},
                     .label = makeIrSymbol("%" + semanticBlock.nameHint),
                     .params = {},
@@ -1762,7 +2071,8 @@ namespace {
                     .terminator = placeholderRef,
                     .annotations = {},
                 });
-            const auto ssaBlockIt = ssa->m_blockInfoByBlock.find(semanticBlockRef);
+            const auto ssaBlockIt
+                = ssa->m_blockInfoByBlock.find(semanticBlockRef);
             if (ssaBlockIt == ssa->m_blockInfoByBlock.end()) {
                 throw std::runtime_error(
                     "semantic basic block is missing SSA info");
@@ -1772,17 +2082,18 @@ namespace {
                 const auto& param = ssaBlockIt->second.m_params[i];
                 const auto* blockParamSymbol
                     = semanticInfo.findSymbolById(param.m_symbolId);
-                if (blockParamSymbol == nullptr || !blockParamSymbol->isObject()) {
+                if (blockParamSymbol == nullptr
+                    || !blockParamSymbol->isObject()) {
                     throw std::runtime_error(
                         "basic block parameter is missing object type");
                 }
                 block.params.push_back(program.alloc<koopa_ir::BlockParameter>(
                     koopa_ir::BlockParameter {
                         .sourcePos = {},
-                        .symbol = makeIrSymbol(block.label.spelling + "_arg"
-                            + std::to_string(i)),
-                        .type = lowerSemanticTypeToIr(program,
-                            blockParamSymbol->object().m_type, false),
+                        .symbol = makeIrSymbol(
+                            block.label.spelling + "_arg" + std::to_string(i)),
+                        .type = lowerSemanticTypeToIr(
+                            program, blockParamSymbol->object().m_type, false),
                         .annotations = {},
                     }));
             }
@@ -1804,14 +2115,16 @@ namespace {
                     funcFParam.identifier, program[function.params[i]].symbol);
                 continue;
             }
-            const std::string allocName = state.makeUniqueLocalName(paramSymbol);
+            const std::string allocName
+                = state.makeUniqueLocalName(paramSymbol);
             (void)state.emitAlloc(paramSymbol.object().m_type, allocName);
-            auto storeRef = program.alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
-                .sourcePos = {},
-                .value = program[function.params[i]].symbol,
-                .destination = makeIrSymbol(allocName),
-                .annotations = {},
-            });
+            auto storeRef
+                = program.alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
+                    .sourcePos = {},
+                    .value = program[function.params[i]].symbol,
+                    .destination = makeIrSymbol(allocName),
+                    .annotations = {},
+                });
             state.pushStatement(storeRef);
             state.m_storageBySymbolId[paramSymbol.m_id] = allocName;
         }
@@ -1832,21 +2145,8 @@ namespace {
         const auto& parsedCompUnit = compUnit(ast);
         std::unordered_map<int32_t, std::string> globalStorageBySymbolId;
         std::unordered_map<int32_t, std::string> functionBySymbolId;
-        std::unordered_map<std::string, std::string> mintHelperByName;
         std::unordered_map<int32_t, size_t> symbolUseCount;
         std::unordered_set<int32_t> definedFunctionSymbolIds;
-
-        MintRuntimeUseVisitor mintRuntimeUseVisitor(ast);
-        mintRuntimeUseVisitor.traverse(compUnit.ref());
-        if (mintRuntimeUseVisitor.usesMintRuntime()) {
-            for (const auto helper : { MintHelper::add, MintHelper::sub,
-                     MintHelper::mul, MintHelper::div, MintHelper::fromInt,
-                     MintHelper::toInt }) {
-                const auto helperName = makeFunctionName(mintHelperName(helper));
-                mintHelperByName.emplace(mintHelperName(helper), helperName);
-                program->items.push_back(createMintHelperDeclIr(*program, helper));
-            }
-        }
 
         for (const auto& [identifier_nn, symbolId] :
             semanticInfo.symbolIdByIdentifier()) {
@@ -1866,11 +2166,12 @@ namespace {
                         = semanticInfo.findSymbol(funcDef.identifier);
                     if (functionSymbol == nullptr) {
                         throw std::runtime_error(
-                            "function declaration missing semantic symbol during lowering");
+                            "function declaration missing semantic symbol "
+                            "during lowering");
                     }
                     definedFunctionSymbolIds.insert(functionSymbol->m_id);
                 },
-                [&](const auto&) { });
+                [&](const auto&) {});
         }
 
         for (const auto& [symbolId, symbol] : semanticInfo.symbolById()) {
@@ -1884,27 +2185,29 @@ namespace {
                 continue;
             }
 
-            auto [it, inserted]
-                = functionBySymbolId.try_emplace(symbolId, makeFunctionName(symbol.name));
+            auto [it, inserted] = functionBySymbolId.try_emplace(
+                symbolId, makeFunctionName(symbol.name));
             if (!inserted) {
                 continue;
             }
-            program->items.push_back(createExternalFunctionDeclIr(*program, symbol));
+            program->items.push_back(
+                createExternalFunctionDeclIr(*program, symbol));
         }
 
         for (const auto topLevelItem : parsedCompUnit.topLevelItems) {
             MATCH(topLevelItem)
             WITH(
                 [&](Decl topLevelAlt) {
-                    generateGlobalDeclIr(topLevelAlt, *program, ast, semanticInfo,
-                        globalStorageBySymbolId);
+                    generateGlobalDeclIr(topLevelAlt, *program, ast,
+                        semanticInfo, globalStorageBySymbolId);
                 },
                 [&](Ptr<FuncDef> topLevelAlt) {
                     const auto& symbol = requireSymbolForIdentifier(
                         topLevelAlt(ast).identifier, semanticInfo,
                         "function declaration is missing a symbol binding");
-                    auto [functionIt, inserted] = functionBySymbolId.try_emplace(
-                        symbol.m_id, makeFunctionName(symbol.name));
+                    auto [functionIt, inserted]
+                        = functionBySymbolId.try_emplace(
+                            symbol.m_id, makeFunctionName(symbol.name));
                     if (!inserted) {
                         return;
                     }
@@ -1925,11 +2228,11 @@ namespace {
                     auto functionRef = createFunctionDefIr(
                         *program, ast, topLevelAlt.ptr(), semanticInfo);
                     program->items.push_back(functionRef);
-                    generateFuncDefIr(*program, ast, topLevelAlt.ptr(), semanticInfo,
-                        globalStorageBySymbolId, functionBySymbolId,
-                        mintHelperByName, functionRef);
+                    generateFuncDefIr(*program, ast, topLevelAlt.ptr(),
+                        semanticInfo, globalStorageBySymbolId,
+                        functionBySymbolId, functionRef);
                 },
-                [&](const auto&) { });
+                [&](const auto&) {});
         }
 
         return program;

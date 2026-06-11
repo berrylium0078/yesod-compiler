@@ -70,7 +70,7 @@ struct AstTestHelperBase {
         for (const auto topLevelItem : compUnit.topLevelItems) {
             const auto funcDef_nn = MATCH(topLevelItem) WITH(
                 [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
-                [](const auto&) { return Ptr<FuncDef> { }; }, );
+                [](const auto&) { return Ptr<FuncDef> {}; }, );
             if (funcDef_nn) {
                 return funcDef_nn.ref();
             }
@@ -226,7 +226,7 @@ struct AstTestHelperBase {
     {
         return MATCH(stmt)
             WITH([](const Ref<BreakStmt>& breakStmt) { return breakStmt; },
-                [](const auto&) -> Ref<BreakStmt>{
+                [](const auto&) -> Ref<BreakStmt> {
                     fail("expected break statement variant");
                 });
     }
@@ -360,6 +360,10 @@ struct AstTestHelperBase {
                     fail("cannot evaluate subscript expression");
                     std::unreachable();
                 },
+                [](const auto&) -> int32_t {
+                    fail("cannot evaluate rewrite-only expression");
+                    std::unreachable();
+                },
                 [&](const Exp::Binary& binary) -> int32_t {
                     const auto lhsValue = self.evaluateExp(binary.lhs);
                     const auto rhsValue = self.evaluateExp(binary.rhs);
@@ -491,7 +495,7 @@ struct AstTestHelperBase {
         for (const auto topLevelItem : compUnit_nn(self.ast()).topLevelItems) {
             const auto funcDef = MATCH(topLevelItem) WITH(
                 [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
-                [](const auto&) { return Ptr<FuncDef> { }; }, );
+                [](const auto&) { return Ptr<FuncDef> {}; }, );
             if (funcDef != nullptr
                 && funcDef(self.ast()).identifier(self.ast()).name
                     == expectedName) {
@@ -524,7 +528,7 @@ inline Ref<FuncDef> firstFuncDef(const Ref<CompUnit>& compUnit_nn)
     for (const auto topLevelItem : compUnit_nn(currentAst()).topLevelItems) {
         const auto funcDef = MATCH(topLevelItem) WITH(
             [](const Ref<FuncDef>& funcDef_nn) { return funcDef_nn.ptr(); },
-            [](const auto&) { return Ptr<FuncDef> { }; });
+            [](const auto&) { return Ptr<FuncDef> {}; });
         if (funcDef)
             return funcDef.ref();
     }

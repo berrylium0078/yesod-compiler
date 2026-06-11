@@ -50,10 +50,14 @@ using yesod::Ref;
  *     [":" Type] "{" {Block} "}";
  *
  * Representation decisions:
- * - Recursive types and aggregate initializers use Ref<T> into Program-owned arenas.
- * - Non-recursive leaves (symbols, literals, annotations) stay embedded by value.
- * - Statements and top-level items use std::variant to preserve grammar alternatives.
- * - Optional return types and return values use std::optional because they are not AST links.
+ * - Recursive types and aggregate initializers use Ref<T> into Program-owned
+ * arenas.
+ * - Non-recursive leaves (symbols, literals, annotations) stay embedded by
+ * value.
+ * - Statements and top-level items use std::variant to preserve grammar
+ * alternatives.
+ * - Optional return types and return values use std::optional because they are
+ * not AST links.
  */
 
 struct SourcePos {
@@ -97,6 +101,18 @@ struct I32Type {
     SourcePos sourcePos;
 };
 
+struct MintType {
+    SourcePos sourcePos;
+};
+
+struct PolyType {
+    SourcePos sourcePos;
+};
+
+struct PvType {
+    SourcePos sourcePos;
+};
+
 struct ArrayType;
 struct PointerType;
 struct FunctionType;
@@ -107,6 +123,12 @@ struct GetPointerExpr;
 struct GetElementPointerExpr;
 struct BinaryExpr;
 struct CallExpr;
+struct UnaryPolyExpr;
+struct PvBinaryExpr;
+struct CombineExpr;
+struct GetCoeffExpr;
+struct PolyConstructExpr;
+struct ConversionExpr;
 struct SymbolDef;
 struct StoreStmt;
 struct BranchTerminator;
@@ -120,10 +142,29 @@ struct FunctionDef;
 struct GlobalMemoryDef;
 struct Program;
 
-using Type = std::variant<I32Type, Ref<ArrayType>, Ref<PointerType>, Ref<FunctionType>>;
+using Type = std::variant<I32Type, MintType, PolyType, PvType, Ref<ArrayType>,
+    Ref<PointerType>, Ref<FunctionType>>;
 using Value = std::variant<Symbol, IntegerLiteral, UndefValue>;
-using Initializer = std::variant<IntegerLiteral, UndefValue, ZeroInit, Ref<AggregateInitializer>>;
-using StoreValue = std::variant<Symbol, IntegerLiteral, UndefValue, ZeroInit, Ref<AggregateInitializer>>;
+using Initializer = std::variant<IntegerLiteral, UndefValue, ZeroInit,
+    Ref<AggregateInitializer>>;
+using StoreValue = std::variant<Symbol, IntegerLiteral, UndefValue, ZeroInit,
+    Ref<AggregateInitializer>>;
+
+enum class UnaryPolyOp {
+    ntt,
+    intt,
+};
+
+enum class PvBinaryOp {
+    add,
+    sub,
+    mul,
+};
+
+enum class ConversionOp {
+    int2mint,
+    mint2int,
+};
 
 enum class BinaryOp {
     ne,
@@ -208,9 +249,59 @@ struct CallExpr {
     AnnotationList annotations;
 };
 
+struct UnaryPolyExpr {
+    SourcePos sourcePos;
+    UnaryPolyOp op = UnaryPolyOp::ntt;
+    Value value;
+    AnnotationList annotations;
+};
+
+struct PvBinaryExpr {
+    SourcePos sourcePos;
+    PvBinaryOp op = PvBinaryOp::add;
+    Value lhs;
+    Value rhs;
+    AnnotationList annotations;
+};
+
+struct CombineTerm {
+    Value value;
+    Value start;
+    std::optional<Value> end;
+    Value shift;
+    Value scale;
+};
+
+struct CombineExpr {
+    SourcePos sourcePos;
+    std::vector<CombineTerm> terms;
+    AnnotationList annotations;
+};
+
+struct GetCoeffExpr {
+    SourcePos sourcePos;
+    Value value;
+    Value index;
+    AnnotationList annotations;
+};
+
+struct PolyConstructExpr {
+    SourcePos sourcePos;
+    std::vector<Value> elements;
+    AnnotationList annotations;
+};
+
+struct ConversionExpr {
+    SourcePos sourcePos;
+    ConversionOp op = ConversionOp::int2mint;
+    Value value;
+    AnnotationList annotations;
+};
+
 using SymbolRhs = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>,
     Ref<GetPointerExpr>, Ref<GetElementPointerExpr>, Ref<BinaryExpr>,
-    Ref<CallExpr>>;
+    Ref<CallExpr>, Ref<UnaryPolyExpr>, Ref<PvBinaryExpr>, Ref<CombineExpr>,
+    Ref<GetCoeffExpr>, Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
 
 struct SymbolDef {
     SourcePos sourcePos;
@@ -251,7 +342,8 @@ struct ReturnTerminator {
     AnnotationList annotations;
 };
 
-using Terminator = std::variant<Ref<BranchTerminator>, Ref<JumpTerminator>, Ref<ReturnTerminator>>;
+using Terminator = std::variant<Ref<BranchTerminator>, Ref<JumpTerminator>,
+    Ref<ReturnTerminator>>;
 
 struct BlockParameter {
     SourcePos sourcePos;
@@ -301,22 +393,23 @@ struct GlobalMemoryDef {
     AnnotationList annotations;
 };
 
-using TopLevelItem = std::variant<Ref<GlobalMemoryDef>, Ref<FunctionDecl>, Ref<FunctionDef>>;
+using TopLevelItem
+    = std::variant<Ref<GlobalMemoryDef>, Ref<FunctionDecl>, Ref<FunctionDef>>;
 
 struct Program {
     using NodeArena = Arena<ArrayType, PointerType, FunctionType,
         AggregateInitializer, MemoryDeclaration, LoadExpr, GetPointerExpr,
-        GetElementPointerExpr, BinaryExpr, CallExpr, SymbolDef, StoreStmt,
-        BranchTerminator, JumpTerminator, ReturnTerminator, BlockParameter,
-        BasicBlock, FunctionParameter, FunctionDecl, FunctionDef,
-        GlobalMemoryDef>;
+        GetElementPointerExpr, BinaryExpr, CallExpr, UnaryPolyExpr,
+        PvBinaryExpr, CombineExpr, GetCoeffExpr, PolyConstructExpr,
+        ConversionExpr, SymbolDef, StoreStmt, BranchTerminator, JumpTerminator,
+        ReturnTerminator, BlockParameter, BasicBlock, FunctionParameter,
+        FunctionDecl, FunctionDef, GlobalMemoryDef>;
 
     SourcePos sourcePos;
     AnnotationList annotations;
     std::vector<TopLevelItem> items;
 
-    template <typename T, typename... Args>
-    Ref<T> alloc(Args&&... args)
+    template <typename T, typename... Args> Ref<T> alloc(Args&&... args)
     {
         return m_nodes.alloc<T>(std::forward<Args>(args)...);
     }
@@ -338,11 +431,15 @@ private:
 };
 
 std::string_view toString(BinaryOp op);
+std::string_view toString(UnaryPolyOp op);
+std::string_view toString(PvBinaryOp op);
+std::string_view toString(ConversionOp op);
 bool hasReturnType(const FunctionType& type);
 bool hasReturnValue(const ReturnTerminator& terminator);
 bool usesSsaExtension(const BranchTerminator& terminator);
 bool usesSsaExtension(const JumpTerminator& terminator);
 bool usesSsaExtension(const BasicBlock& block, const Program& program);
+void validate(const Program& program);
 std::string serializeToKoopa(const Program& program);
 
 } // namespace yesod::koopa::ir

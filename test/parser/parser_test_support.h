@@ -29,8 +29,7 @@ static_assert(
     std::is_same_v<decltype(std::declval<ReturnStmt>().exp), Ptr<Exp>>);
 static_assert(
     std::is_same_v<decltype(std::declval<AssignStmt>().lval), Ref<Exp>>);
-static_assert(
-    std::is_same_v<decltype(std::declval<ExpStmt>().exp), Ptr<Exp>>);
+static_assert(std::is_same_v<decltype(std::declval<ExpStmt>().exp), Ptr<Exp>>);
 static_assert(
     std::is_same_v<decltype(std::declval<IfStmt>().condition), Ref<Exp>>);
 static_assert(std::is_same_v<decltype(std::declval<IfStmt>().thenBody), Stmt>);
@@ -43,7 +42,7 @@ static_assert(std::is_enum_v<BinaryOpKeyword>);
 static_assert(std::variant_size_v<Decl> == 2);
 static_assert(std::variant_size_v<Stmt> == 8);
 static_assert(std::variant_size_v<BlockItem> == 2);
-static_assert(std::variant_size_v<Exp::Kind> == 8);
+static_assert(std::variant_size_v<Exp::Kind> == 16);
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -140,7 +139,8 @@ public:
     }
     const Exp::Subscript& requireSubscriptExp(const Ref<Exp>& exp_nn)
     {
-        const auto* subscript = std::get_if<Exp::Subscript>(&exp_nn(ast()).kind);
+        const auto* subscript
+            = std::get_if<Exp::Subscript>(&exp_nn(ast()).kind);
         require(subscript != nullptr, "expected subscript expression");
         return *subscript;
     }
@@ -257,6 +257,9 @@ public:
                 },
                 [](const Exp::Subscript&) -> int32_t {
                     fail("cannot evaluate subscript expression");
+                },
+                [](const auto&) -> int32_t {
+                    fail("cannot evaluate rewrite-only expression");
                 },
                 [&](const Exp::Binary& binary) -> int32_t {
                     const auto lhsValue = evaluateExp(binary.lhs);

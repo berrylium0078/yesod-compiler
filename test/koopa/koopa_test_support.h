@@ -17,21 +17,21 @@
 
 #include "koopa.h"
 
-#include "test_support.h"
 #include "frontend/ast.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
+#include "test_support.h"
 
 namespace yesod::test_support::koopa {
 
 namespace frontend = yesod::frontend;
 namespace koopa_ir = yesod::koopa::ir;
 
-using yesod::test_support::TestBase;
-using yesod::test_support::OutputAstBase;
 using yesod::test_support::fail;
+using yesod::test_support::OutputAstBase;
 using yesod::test_support::require;
+using yesod::test_support::TestBase;
 
 using TopLevelItem = decltype(frontend::CompUnit::topLevelItems.front());
 
@@ -106,22 +106,13 @@ public:
     }
     [[nodiscard]] bool isLoadValue() const { return m_kind == Kind::load; }
     [[nodiscard]] bool isStoreValue() const { return m_kind == Kind::store; }
-    [[nodiscard]] bool isGetPtrValue() const
-    {
-        return m_kind == Kind::getPtr;
-    }
+    [[nodiscard]] bool isGetPtrValue() const { return m_kind == Kind::getPtr; }
     [[nodiscard]] bool isGetElemPtrValue() const
     {
         return m_kind == Kind::getElemPtr;
     }
-    [[nodiscard]] bool isBinaryValue() const
-    {
-        return m_kind == Kind::binary;
-    }
-    [[nodiscard]] bool isBranchValue() const
-    {
-        return m_kind == Kind::branch;
-    }
+    [[nodiscard]] bool isBinaryValue() const { return m_kind == Kind::binary; }
+    [[nodiscard]] bool isBranchValue() const { return m_kind == Kind::branch; }
     [[nodiscard]] bool isJumpValue() const { return m_kind == Kind::jump; }
     [[nodiscard]] bool isCallValue() const { return m_kind == Kind::call; }
     [[nodiscard]] bool isReturnValue() const { return m_kind == Kind::ret; }
@@ -464,15 +455,20 @@ public:
 
     [[nodiscard]] bool isEntry() const { return m_isEntry; }
     [[nodiscard]] size_t getNumParams() const { return m_params.size(); }
-    [[nodiscard]] Value* getParam(size_t index) const { return m_params.at(index); }
+    [[nodiscard]] Value* getParam(size_t index) const
+    {
+        return m_params.at(index);
+    }
     [[nodiscard]] const std::vector<Value*>& params() const { return m_params; }
     [[nodiscard]] size_t getNumInsts() const { return m_insts.size(); }
-    [[nodiscard]] Value* getInst(size_t index) const { return m_insts.at(index); }
+    [[nodiscard]] Value* getInst(size_t index) const
+    {
+        return m_insts.at(index);
+    }
     [[nodiscard]] const std::vector<Value*>& insts() const { return m_insts; }
     [[nodiscard]] const std::string& getName() const { return m_name; }
 
-    template <typename T, typename... Args>
-    T* addParam(Args&&... args)
+    template <typename T, typename... Args> T* addParam(Args&&... args)
     {
         auto value = std::make_unique<T>(std::forward<Args>(args)...);
         auto* ptr = value.get();
@@ -481,8 +477,7 @@ public:
         return ptr;
     }
 
-    template <typename T, typename... Args>
-    T* addInst(Args&&... args)
+    template <typename T, typename... Args> T* addInst(Args&&... args)
     {
         auto value = std::make_unique<T>(std::forward<Args>(args)...);
         auto* ptr = value.get();
@@ -508,15 +503,20 @@ public:
     }
 
     [[nodiscard]] size_t getNumParams() const { return m_params.size(); }
-    [[nodiscard]] Value* getParam(size_t index) const { return m_params.at(index); }
+    [[nodiscard]] Value* getParam(size_t index) const
+    {
+        return m_params.at(index);
+    }
     [[nodiscard]] const std::vector<Value*>& params() const { return m_params; }
     [[nodiscard]] size_t getNumBBs() const { return m_bbs.size(); }
-    [[nodiscard]] BasicBlock* getBB(size_t index) const { return m_bbs.at(index); }
+    [[nodiscard]] BasicBlock* getBB(size_t index) const
+    {
+        return m_bbs.at(index);
+    }
     [[nodiscard]] const std::vector<BasicBlock*>& bbs() const { return m_bbs; }
     [[nodiscard]] const std::string& getName() const { return m_name; }
 
-    template <typename T, typename... Args>
-    T* addParam(Args&&... args)
+    template <typename T, typename... Args> T* addParam(Args&&... args)
     {
         auto value = std::make_unique<T>(std::forward<Args>(args)...);
         auto* ptr = value.get();
@@ -548,11 +548,16 @@ public:
     [[nodiscard]] Value* getVal(size_t index) const { return m_vals.at(index); }
     [[nodiscard]] const std::vector<Value*>& vals() const { return m_vals; }
     [[nodiscard]] size_t getNumFuncs() const { return m_funcs.size(); }
-    [[nodiscard]] Function* getFunc(size_t index) const { return m_funcs.at(index); }
-    [[nodiscard]] const std::vector<Function*>& funcs() const { return m_funcs; }
+    [[nodiscard]] Function* getFunc(size_t index) const
+    {
+        return m_funcs.at(index);
+    }
+    [[nodiscard]] const std::vector<Function*>& funcs() const
+    {
+        return m_funcs;
+    }
 
-    template <typename T, typename... Args>
-    T* addGlobal(Args&&... args)
+    template <typename T, typename... Args> T* addGlobal(Args&&... args)
     {
         auto value = std::make_unique<T>(std::forward<Args>(args)...);
         auto* ptr = value.get();
@@ -616,370 +621,440 @@ inline frontend::ParseOutput parseRoot(const std::string& source)
 
 namespace detail {
 
-inline koopa_raw_binary_op toRawBinaryOp(koopa_ir::BinaryOp op)
-{
-    switch (op) {
-    case koopa_ir::BinaryOp::ne:
-        return KOOPA_RBO_NOT_EQ;
-    case koopa_ir::BinaryOp::eq:
-        return KOOPA_RBO_EQ;
-    case koopa_ir::BinaryOp::gt:
-        return KOOPA_RBO_GT;
-    case koopa_ir::BinaryOp::lt:
-        return KOOPA_RBO_LT;
-    case koopa_ir::BinaryOp::ge:
-        return KOOPA_RBO_GE;
-    case koopa_ir::BinaryOp::le:
-        return KOOPA_RBO_LE;
-    case koopa_ir::BinaryOp::add:
-        return KOOPA_RBO_ADD;
-    case koopa_ir::BinaryOp::sub:
-        return KOOPA_RBO_SUB;
-    case koopa_ir::BinaryOp::mul:
-        return KOOPA_RBO_MUL;
-    case koopa_ir::BinaryOp::div:
-        return KOOPA_RBO_DIV;
-    case koopa_ir::BinaryOp::mod:
-        return KOOPA_RBO_MOD;
-    case koopa_ir::BinaryOp::bitAnd:
-        return KOOPA_RBO_AND;
-    case koopa_ir::BinaryOp::bitOr:
-        return KOOPA_RBO_OR;
-    case koopa_ir::BinaryOp::bitXor:
-        return KOOPA_RBO_XOR;
-    case koopa_ir::BinaryOp::shl:
-        return KOOPA_RBO_SHL;
-    case koopa_ir::BinaryOp::shr:
-        return KOOPA_RBO_SHR;
-    case koopa_ir::BinaryOp::sar:
-        return KOOPA_RBO_SAR;
-    }
-
-    throw std::runtime_error("unsupported Koopa IR binary op");
-}
-
-class IrProgramViewBuilder {
-public:
-    explicit IrProgramViewBuilder(const koopa_ir::Program& program)
-        : m_ir(program)
+    inline koopa_raw_binary_op toRawBinaryOp(koopa_ir::BinaryOp op)
     {
-    }
-
-    [[nodiscard]] std::unique_ptr<Program> build()
-    {
-        auto program = std::make_unique<Program>();
-
-        for (const auto& item : m_ir.items) {
-            std::visit(
-                [&](auto itemRef) {
-                    using Item = std::remove_cvref_t<decltype(m_ir[itemRef])>;
-                    if constexpr (std::same_as<Item, koopa_ir::GlobalMemoryDef>) {
-                        const auto& global = m_ir[itemRef];
-                        auto* value
-                            = program->addGlobal<GlobalAllocValue>(global.name.spelling);
-                        value->setInitVal(lowerInitializer(global.initializer));
-                        m_globalsByName.emplace(global.name.spelling, value);
-                    } else if constexpr (std::same_as<Item, koopa_ir::FunctionDecl>) {
-                        const auto& function = m_ir[itemRef];
-                        auto* viewFunction = program->addFunction(function.name.spelling);
-                        m_functionsByName.emplace(function.name.spelling, viewFunction);
-                    } else if constexpr (std::same_as<Item, koopa_ir::FunctionDef>) {
-                        const auto& function = m_ir[itemRef];
-                        auto* viewFunction = program->addFunction(function.name.spelling);
-                        m_functionsByName.emplace(function.name.spelling, viewFunction);
-                    }
-                },
-                item);
+        switch (op) {
+        case koopa_ir::BinaryOp::ne:
+            return KOOPA_RBO_NOT_EQ;
+        case koopa_ir::BinaryOp::eq:
+            return KOOPA_RBO_EQ;
+        case koopa_ir::BinaryOp::gt:
+            return KOOPA_RBO_GT;
+        case koopa_ir::BinaryOp::lt:
+            return KOOPA_RBO_LT;
+        case koopa_ir::BinaryOp::ge:
+            return KOOPA_RBO_GE;
+        case koopa_ir::BinaryOp::le:
+            return KOOPA_RBO_LE;
+        case koopa_ir::BinaryOp::add:
+            return KOOPA_RBO_ADD;
+        case koopa_ir::BinaryOp::sub:
+            return KOOPA_RBO_SUB;
+        case koopa_ir::BinaryOp::mul:
+            return KOOPA_RBO_MUL;
+        case koopa_ir::BinaryOp::div:
+            return KOOPA_RBO_DIV;
+        case koopa_ir::BinaryOp::mod:
+            return KOOPA_RBO_MOD;
+        case koopa_ir::BinaryOp::bitAnd:
+            return KOOPA_RBO_AND;
+        case koopa_ir::BinaryOp::bitOr:
+            return KOOPA_RBO_OR;
+        case koopa_ir::BinaryOp::bitXor:
+            return KOOPA_RBO_XOR;
+        case koopa_ir::BinaryOp::shl:
+            return KOOPA_RBO_SHL;
+        case koopa_ir::BinaryOp::shr:
+            return KOOPA_RBO_SHR;
+        case koopa_ir::BinaryOp::sar:
+            return KOOPA_RBO_SAR;
         }
 
-        size_t functionIndex = 0;
-        for (const auto& item : m_ir.items) {
-            std::visit(
-                [&](auto itemRef) {
-                    using Item = std::remove_cvref_t<decltype(m_ir[itemRef])>;
-                    if constexpr (std::same_as<Item, koopa_ir::FunctionDecl>) {
-                        fillFunctionDecl(m_ir[itemRef], *program->getFunc(functionIndex++));
-                    } else if constexpr (std::same_as<Item, koopa_ir::FunctionDef>) {
-                        fillFunctionDef(m_ir[itemRef], *program->getFunc(functionIndex++));
-                    }
-                },
-                item);
-        }
-
-        return program;
+        throw std::runtime_error("unsupported Koopa IR binary op");
     }
 
-private:
-    struct FunctionContext {
-        Function* function = nullptr;
-        std::unordered_map<std::string, Value*> valuesBySymbol;
-        std::unordered_map<std::string, BasicBlock*> blocksByLabel;
-    };
-
-    const koopa_ir::Program& m_ir;
-    std::unordered_map<std::string, GlobalAllocValue*> m_globalsByName;
-    std::unordered_map<std::string, Function*> m_functionsByName;
-
-    [[nodiscard]] std::unique_ptr<Value> lowerInitializer(
-        const koopa_ir::Initializer& initializer)
-    {
-        return std::visit(
-            [&](const auto& initAlt) -> std::unique_ptr<Value> {
-                using Init = std::remove_cvref_t<decltype(initAlt)>;
-                if constexpr (std::same_as<Init, koopa_ir::IntegerLiteral>) {
-                    return std::make_unique<IntegerValue>(initAlt.value);
-                } else if constexpr (std::same_as<Init, koopa_ir::UndefValue>) {
-                    return std::make_unique<UndefValue>();
-                } else if constexpr (std::same_as<Init, koopa_ir::ZeroInit>) {
-                    return std::make_unique<ZeroInitValue>();
-                } else {
-                    const auto& aggregate = m_ir[initAlt];
-                    auto value = std::make_unique<AggregateValue>();
-                    for (const auto& element : aggregate.elements) {
-                        value->pushElement(lowerInitializer(element));
-                    }
-                    return value;
-                }
-            },
-            initializer);
-    }
-
-    [[nodiscard]] Value* lookupValue(
-        std::string_view symbol, const FunctionContext& context) const
-    {
-        const std::string spelling(symbol);
-        if (const auto valueIt = context.valuesBySymbol.find(spelling);
-            valueIt != context.valuesBySymbol.end()) {
-            return valueIt->second;
-        }
-        if (const auto globalIt = m_globalsByName.find(spelling);
-            globalIt != m_globalsByName.end()) {
-            return globalIt->second;
-        }
-        throw std::runtime_error("unknown Koopa value symbol in test view: " + spelling);
-    }
-
-    [[nodiscard]] Function* lookupFunction(std::string_view symbol) const
-    {
-        const auto functionIt = m_functionsByName.find(std::string(symbol));
-        if (functionIt == m_functionsByName.end()) {
-            throw std::runtime_error("unknown Koopa callee symbol in test view");
-        }
-        return functionIt->second;
-    }
-
-    [[nodiscard]] BasicBlock* lookupBlock(
-        std::string_view label, const FunctionContext& context) const
-    {
-        const auto blockIt = context.blocksByLabel.find(std::string(label));
-        if (blockIt == context.blocksByLabel.end()) {
-            throw std::runtime_error("unknown Koopa basic block label in test view");
-        }
-        return blockIt->second;
-    }
-
-    [[nodiscard]] Value* lowerValueOperand(const koopa_ir::Value& value,
-        Value& owner, const FunctionContext& context)
-    {
-        return std::visit(
-            [&](const auto& valueAlt) -> Value* {
-                using Operand = std::remove_cvref_t<decltype(valueAlt)>;
-                if constexpr (std::same_as<Operand, koopa_ir::Symbol>) {
-                    return lookupValue(valueAlt.spelling, context);
-                } else if constexpr (std::same_as<Operand, koopa_ir::IntegerLiteral>) {
-                    return owner.adopt(std::make_unique<IntegerValue>(valueAlt.value));
-                } else {
-                    return owner.adopt(std::make_unique<UndefValue>());
-                }
-            },
-            value);
-    }
-
-    [[nodiscard]] Value* lowerStoreOperand(const koopa_ir::StoreValue& value,
-        Value& owner, const FunctionContext& context)
-    {
-        return std::visit(
-            [&](const auto& valueAlt) -> Value* {
-                using Operand = std::remove_cvref_t<decltype(valueAlt)>;
-                if constexpr (std::same_as<Operand, koopa_ir::Symbol>) {
-                    return lookupValue(valueAlt.spelling, context);
-                } else if constexpr (std::same_as<Operand, koopa_ir::IntegerLiteral>) {
-                    return owner.adopt(std::make_unique<IntegerValue>(valueAlt.value));
-                } else if constexpr (std::same_as<Operand, koopa_ir::UndefValue>) {
-                    return owner.adopt(std::make_unique<UndefValue>());
-                } else if constexpr (std::same_as<Operand, koopa_ir::ZeroInit>) {
-                    return owner.adopt(std::make_unique<ZeroInitValue>());
-                } else {
-                    return owner.adopt(lowerInitializer(koopa_ir::Initializer { valueAlt }));
-                }
-            },
-            value);
-    }
-
-    void fillFunctionDecl(const koopa_ir::FunctionDecl& function, Function& view)
-    {
-        for (size_t index = 0; index < function.paramTypes.size(); ++index) {
-            (void)view.addParam<FuncArgRefValue>(index);
-        }
-    }
-
-    void fillFunctionDef(const koopa_ir::FunctionDef& function, Function& view)
-    {
-        FunctionContext context { .function = &view };
-
-        for (size_t index = 0; index < function.params.size(); ++index) {
-            const auto& param = m_ir[function.params[index]];
-            auto* paramValue = view.addParam<FuncArgRefValue>(index);
-            context.valuesBySymbol.emplace(param.symbol.spelling, paramValue);
+    class IrProgramViewBuilder {
+    public:
+        explicit IrProgramViewBuilder(const koopa_ir::Program& program)
+            : m_ir(program)
+        {
         }
 
-        for (size_t blockIndex = 0; blockIndex < function.blocks.size(); ++blockIndex) {
-            const auto& block = m_ir[function.blocks[blockIndex]];
-            auto* blockView
-                = view.addBlock(blockIndex == 0, block.label.spelling);
-            context.blocksByLabel.emplace(block.label.spelling, blockView);
-        }
+        [[nodiscard]] std::unique_ptr<Program> build()
+        {
+            auto program = std::make_unique<Program>();
 
-        for (size_t blockIndex = 0; blockIndex < function.blocks.size(); ++blockIndex) {
-            const auto& block = m_ir[function.blocks[blockIndex]];
-            auto* blockView = view.getBB(blockIndex);
-
-            for (size_t paramIndex = 0; paramIndex < block.params.size(); ++paramIndex) {
-                const auto& param = m_ir[block.params[paramIndex]];
-                auto* paramValue = blockView->addParam<BlockArgRefValue>(paramIndex);
-                context.valuesBySymbol[param.symbol.spelling] = paramValue;
-            }
-
-            for (const auto& statement : block.statements) {
+            for (const auto& item : m_ir.items) {
                 std::visit(
-                    [&](auto statementRef) {
-                        using Statement
-                            = std::remove_cvref_t<decltype(m_ir[statementRef])>;
-                        if constexpr (std::same_as<Statement, koopa_ir::SymbolDef>) {
-                            lowerSymbolDef(m_ir[statementRef], *blockView, context);
-                        } else if constexpr (std::same_as<Statement, koopa_ir::StoreStmt>) {
-                            lowerStoreStmt(m_ir[statementRef], *blockView, context);
-                        } else if constexpr (std::same_as<Statement, koopa_ir::CallExpr>) {
-                            (void)lowerCallExpr(
-                                m_ir[statementRef], *blockView, context, std::nullopt);
+                    [&](auto itemRef) {
+                        using Item
+                            = std::remove_cvref_t<decltype(m_ir[itemRef])>;
+                        if constexpr (std::same_as<Item,
+                                          koopa_ir::GlobalMemoryDef>) {
+                            const auto& global = m_ir[itemRef];
+                            auto* value = program->addGlobal<GlobalAllocValue>(
+                                global.name.spelling);
+                            value->setInitVal(
+                                lowerInitializer(global.initializer));
+                            m_globalsByName.emplace(
+                                global.name.spelling, value);
+                        } else if constexpr (std::same_as<Item,
+                                                 koopa_ir::FunctionDecl>) {
+                            const auto& function = m_ir[itemRef];
+                            auto* viewFunction
+                                = program->addFunction(function.name.spelling);
+                            m_functionsByName.emplace(
+                                function.name.spelling, viewFunction);
+                        } else if constexpr (std::same_as<Item,
+                                                 koopa_ir::FunctionDef>) {
+                            const auto& function = m_ir[itemRef];
+                            auto* viewFunction
+                                = program->addFunction(function.name.spelling);
+                            m_functionsByName.emplace(
+                                function.name.spelling, viewFunction);
                         }
                     },
-                    statement);
+                    item);
             }
 
-            std::visit(
-                [&](auto terminatorRef) {
-                    using Terminator
-                        = std::remove_cvref_t<decltype(m_ir[terminatorRef])>;
-                    if constexpr (std::same_as<Terminator, koopa_ir::BranchTerminator>) {
-                        lowerBranch(m_ir[terminatorRef], *blockView, context);
-                    } else if constexpr (std::same_as<Terminator, koopa_ir::JumpTerminator>) {
-                        lowerJump(m_ir[terminatorRef], *blockView, context);
+            size_t functionIndex = 0;
+            for (const auto& item : m_ir.items) {
+                std::visit(
+                    [&](auto itemRef) {
+                        using Item
+                            = std::remove_cvref_t<decltype(m_ir[itemRef])>;
+                        if constexpr (std::same_as<Item,
+                                          koopa_ir::FunctionDecl>) {
+                            fillFunctionDecl(m_ir[itemRef],
+                                *program->getFunc(functionIndex++));
+                        } else if constexpr (std::same_as<Item,
+                                                 koopa_ir::FunctionDef>) {
+                            fillFunctionDef(m_ir[itemRef],
+                                *program->getFunc(functionIndex++));
+                        }
+                    },
+                    item);
+            }
+
+            return program;
+        }
+
+    private:
+        struct FunctionContext {
+            Function* function = nullptr;
+            std::unordered_map<std::string, Value*> valuesBySymbol;
+            std::unordered_map<std::string, BasicBlock*> blocksByLabel;
+        };
+
+        const koopa_ir::Program& m_ir;
+        std::unordered_map<std::string, GlobalAllocValue*> m_globalsByName;
+        std::unordered_map<std::string, Function*> m_functionsByName;
+
+        [[nodiscard]] std::unique_ptr<Value> lowerInitializer(
+            const koopa_ir::Initializer& initializer)
+        {
+            return std::visit(
+                [&](const auto& initAlt) -> std::unique_ptr<Value> {
+                    using Init = std::remove_cvref_t<decltype(initAlt)>;
+                    if constexpr (std::same_as<Init,
+                                      koopa_ir::IntegerLiteral>) {
+                        return std::make_unique<IntegerValue>(initAlt.value);
+                    } else if constexpr (std::same_as<Init,
+                                             koopa_ir::UndefValue>) {
+                        return std::make_unique<UndefValue>();
+                    } else if constexpr (std::same_as<Init,
+                                             koopa_ir::ZeroInit>) {
+                        return std::make_unique<ZeroInitValue>();
                     } else {
-                        lowerReturn(m_ir[terminatorRef], *blockView, context);
+                        const auto& aggregate = m_ir[initAlt];
+                        auto value = std::make_unique<AggregateValue>();
+                        for (const auto& element : aggregate.elements) {
+                            value->pushElement(lowerInitializer(element));
+                        }
+                        return value;
                     }
                 },
-                block.terminator);
+                initializer);
         }
-    }
 
-    void lowerSymbolDef(const koopa_ir::SymbolDef& symbolDef, BasicBlock& block,
-        FunctionContext& context)
-    {
-        Value* definedValue = std::visit(
-            [&](auto rhsRef) -> Value* {
-                using Rhs = std::remove_cvref_t<decltype(m_ir[rhsRef])>;
-                if constexpr (std::same_as<Rhs, koopa_ir::MemoryDeclaration>) {
-                    return block.addInst<AllocValue>(symbolDef.symbol.spelling);
-                } else if constexpr (std::same_as<Rhs, koopa_ir::LoadExpr>) {
-                    const auto& loadExpr = m_ir[rhsRef];
-                    auto* value = block.addInst<LoadValue>(symbolDef.symbol.spelling);
-                    value->setSource(lookupValue(loadExpr.source.spelling, context));
-                    return value;
-                } else if constexpr (std::same_as<Rhs, koopa_ir::GetPointerExpr>) {
-                    const auto& getPtrExpr = m_ir[rhsRef];
-                    auto* value = block.addInst<GetPtrValue>(symbolDef.symbol.spelling);
-                    value->setSource(lookupValue(getPtrExpr.source.spelling, context));
-                    value->setIndex(lowerValueOperand(getPtrExpr.index, *value, context));
-                    return value;
-                } else if constexpr (std::same_as<Rhs, koopa_ir::GetElementPointerExpr>) {
-                    const auto& getElemPtrExpr = m_ir[rhsRef];
-                    auto* value = block.addInst<GetElemPtrValue>(symbolDef.symbol.spelling);
-                    value->setSource(
-                        lookupValue(getElemPtrExpr.source.spelling, context));
-                    value->setIndex(
-                        lowerValueOperand(getElemPtrExpr.index, *value, context));
-                    return value;
-                } else if constexpr (std::same_as<Rhs, koopa_ir::BinaryExpr>) {
-                    const auto& binaryExpr = m_ir[rhsRef];
-                    auto* value = block.addInst<BinaryValue>(
-                        toRawBinaryOp(binaryExpr.op), symbolDef.symbol.spelling);
-                    value->setLhs(lowerValueOperand(binaryExpr.lhs, *value, context));
-                    value->setRhs(lowerValueOperand(binaryExpr.rhs, *value, context));
-                    return value;
-                } else {
-                    return lowerCallExpr(
-                        m_ir[rhsRef], block, context, symbolDef.symbol.spelling);
+        [[nodiscard]] Value* lookupValue(
+            std::string_view symbol, const FunctionContext& context) const
+        {
+            const std::string spelling(symbol);
+            if (const auto valueIt = context.valuesBySymbol.find(spelling);
+                valueIt != context.valuesBySymbol.end()) {
+                return valueIt->second;
+            }
+            if (const auto globalIt = m_globalsByName.find(spelling);
+                globalIt != m_globalsByName.end()) {
+                return globalIt->second;
+            }
+            throw std::runtime_error(
+                "unknown Koopa value symbol in test view: " + spelling);
+        }
+
+        [[nodiscard]] Function* lookupFunction(std::string_view symbol) const
+        {
+            const auto functionIt = m_functionsByName.find(std::string(symbol));
+            if (functionIt == m_functionsByName.end()) {
+                throw std::runtime_error(
+                    "unknown Koopa callee symbol in test view");
+            }
+            return functionIt->second;
+        }
+
+        [[nodiscard]] BasicBlock* lookupBlock(
+            std::string_view label, const FunctionContext& context) const
+        {
+            const auto blockIt = context.blocksByLabel.find(std::string(label));
+            if (blockIt == context.blocksByLabel.end()) {
+                throw std::runtime_error(
+                    "unknown Koopa basic block label in test view");
+            }
+            return blockIt->second;
+        }
+
+        [[nodiscard]] Value* lowerValueOperand(const koopa_ir::Value& value,
+            Value& owner, const FunctionContext& context)
+        {
+            return std::visit(
+                [&](const auto& valueAlt) -> Value* {
+                    using Operand = std::remove_cvref_t<decltype(valueAlt)>;
+                    if constexpr (std::same_as<Operand, koopa_ir::Symbol>) {
+                        return lookupValue(valueAlt.spelling, context);
+                    } else if constexpr (std::same_as<Operand,
+                                             koopa_ir::IntegerLiteral>) {
+                        return owner.adopt(
+                            std::make_unique<IntegerValue>(valueAlt.value));
+                    } else {
+                        return owner.adopt(std::make_unique<UndefValue>());
+                    }
+                },
+                value);
+        }
+
+        [[nodiscard]] Value* lowerStoreOperand(
+            const koopa_ir::StoreValue& value, Value& owner,
+            const FunctionContext& context)
+        {
+            return std::visit(
+                [&](const auto& valueAlt) -> Value* {
+                    using Operand = std::remove_cvref_t<decltype(valueAlt)>;
+                    if constexpr (std::same_as<Operand, koopa_ir::Symbol>) {
+                        return lookupValue(valueAlt.spelling, context);
+                    } else if constexpr (std::same_as<Operand,
+                                             koopa_ir::IntegerLiteral>) {
+                        return owner.adopt(
+                            std::make_unique<IntegerValue>(valueAlt.value));
+                    } else if constexpr (std::same_as<Operand,
+                                             koopa_ir::UndefValue>) {
+                        return owner.adopt(std::make_unique<UndefValue>());
+                    } else if constexpr (std::same_as<Operand,
+                                             koopa_ir::ZeroInit>) {
+                        return owner.adopt(std::make_unique<ZeroInitValue>());
+                    } else {
+                        return owner.adopt(lowerInitializer(
+                            koopa_ir::Initializer { valueAlt }));
+                    }
+                },
+                value);
+        }
+
+        void fillFunctionDecl(
+            const koopa_ir::FunctionDecl& function, Function& view)
+        {
+            for (size_t index = 0; index < function.paramTypes.size();
+                 ++index) {
+                (void)view.addParam<FuncArgRefValue>(index);
+            }
+        }
+
+        void fillFunctionDef(
+            const koopa_ir::FunctionDef& function, Function& view)
+        {
+            FunctionContext context { .function = &view };
+
+            for (size_t index = 0; index < function.params.size(); ++index) {
+                const auto& param = m_ir[function.params[index]];
+                auto* paramValue = view.addParam<FuncArgRefValue>(index);
+                context.valuesBySymbol.emplace(
+                    param.symbol.spelling, paramValue);
+            }
+
+            for (size_t blockIndex = 0; blockIndex < function.blocks.size();
+                 ++blockIndex) {
+                const auto& block = m_ir[function.blocks[blockIndex]];
+                auto* blockView
+                    = view.addBlock(blockIndex == 0, block.label.spelling);
+                context.blocksByLabel.emplace(block.label.spelling, blockView);
+            }
+
+            for (size_t blockIndex = 0; blockIndex < function.blocks.size();
+                 ++blockIndex) {
+                const auto& block = m_ir[function.blocks[blockIndex]];
+                auto* blockView = view.getBB(blockIndex);
+
+                for (size_t paramIndex = 0; paramIndex < block.params.size();
+                     ++paramIndex) {
+                    const auto& param = m_ir[block.params[paramIndex]];
+                    auto* paramValue
+                        = blockView->addParam<BlockArgRefValue>(paramIndex);
+                    context.valuesBySymbol[param.symbol.spelling] = paramValue;
                 }
-            },
-            symbolDef.rhs);
 
-        context.valuesBySymbol[symbolDef.symbol.spelling] = definedValue;
-    }
+                for (const auto& statement : block.statements) {
+                    std::visit(
+                        [&](auto statementRef) {
+                            using Statement = std::remove_cvref_t<
+                                decltype(m_ir[statementRef])>;
+                            if constexpr (std::same_as<Statement,
+                                              koopa_ir::SymbolDef>) {
+                                lowerSymbolDef(
+                                    m_ir[statementRef], *blockView, context);
+                            } else if constexpr (std::same_as<Statement,
+                                                     koopa_ir::StoreStmt>) {
+                                lowerStoreStmt(
+                                    m_ir[statementRef], *blockView, context);
+                            } else if constexpr (std::same_as<Statement,
+                                                     koopa_ir::CallExpr>) {
+                                (void)lowerCallExpr(m_ir[statementRef],
+                                    *blockView, context, std::nullopt);
+                            }
+                        },
+                        statement);
+                }
 
-    Value* lowerCallExpr(const koopa_ir::CallExpr& callExpr, BasicBlock& block,
-        const FunctionContext& context, const std::optional<std::string>& name)
-    {
-        auto* value = block.addInst<CallValue>(name.value_or(std::string {}));
-        value->setCallee(lookupFunction(callExpr.callee.spelling));
-        for (const auto& arg : callExpr.args) {
-            value->pushArg(lowerValueOperand(arg, *value, context));
+                std::visit(
+                    [&](auto terminatorRef) {
+                        using Terminator = std::remove_cvref_t<
+                            decltype(m_ir[terminatorRef])>;
+                        if constexpr (std::same_as<Terminator,
+                                          koopa_ir::BranchTerminator>) {
+                            lowerBranch(
+                                m_ir[terminatorRef], *blockView, context);
+                        } else if constexpr (std::same_as<Terminator,
+                                                 koopa_ir::JumpTerminator>) {
+                            lowerJump(m_ir[terminatorRef], *blockView, context);
+                        } else {
+                            lowerReturn(
+                                m_ir[terminatorRef], *blockView, context);
+                        }
+                    },
+                    block.terminator);
+            }
         }
-        return value;
-    }
 
-    void lowerStoreStmt(const koopa_ir::StoreStmt& storeStmt, BasicBlock& block,
-        const FunctionContext& context)
-    {
-        auto* value = block.addInst<StoreValue>();
-        value->setVal(lowerStoreOperand(storeStmt.value, *value, context));
-        value->setDestination(lookupValue(storeStmt.destination.spelling, context));
-    }
+        void lowerSymbolDef(const koopa_ir::SymbolDef& symbolDef,
+            BasicBlock& block, FunctionContext& context)
+        {
+            Value* definedValue = std::visit(
+                [&](auto rhsRef) -> Value* {
+                    using Rhs = std::remove_cvref_t<decltype(m_ir[rhsRef])>;
+                    if constexpr (std::same_as<Rhs,
+                                      koopa_ir::MemoryDeclaration>) {
+                        return block.addInst<AllocValue>(
+                            symbolDef.symbol.spelling);
+                    } else if constexpr (std::same_as<Rhs,
+                                             koopa_ir::LoadExpr>) {
+                        const auto& loadExpr = m_ir[rhsRef];
+                        auto* value = block.addInst<LoadValue>(
+                            symbolDef.symbol.spelling);
+                        value->setSource(
+                            lookupValue(loadExpr.source.spelling, context));
+                        return value;
+                    } else if constexpr (std::same_as<Rhs,
+                                             koopa_ir::GetPointerExpr>) {
+                        const auto& getPtrExpr = m_ir[rhsRef];
+                        auto* value = block.addInst<GetPtrValue>(
+                            symbolDef.symbol.spelling);
+                        value->setSource(
+                            lookupValue(getPtrExpr.source.spelling, context));
+                        value->setIndex(lowerValueOperand(
+                            getPtrExpr.index, *value, context));
+                        return value;
+                    } else if constexpr (std::same_as<Rhs,
+                                             koopa_ir::GetElementPointerExpr>) {
+                        const auto& getElemPtrExpr = m_ir[rhsRef];
+                        auto* value = block.addInst<GetElemPtrValue>(
+                            symbolDef.symbol.spelling);
+                        value->setSource(lookupValue(
+                            getElemPtrExpr.source.spelling, context));
+                        value->setIndex(lowerValueOperand(
+                            getElemPtrExpr.index, *value, context));
+                        return value;
+                    } else if constexpr (std::same_as<Rhs,
+                                             koopa_ir::BinaryExpr>) {
+                        const auto& binaryExpr = m_ir[rhsRef];
+                        auto* value = block.addInst<BinaryValue>(
+                            toRawBinaryOp(binaryExpr.op),
+                            symbolDef.symbol.spelling);
+                        value->setLhs(
+                            lowerValueOperand(binaryExpr.lhs, *value, context));
+                        value->setRhs(
+                            lowerValueOperand(binaryExpr.rhs, *value, context));
+                        return value;
+                    } else if constexpr (std::same_as<Rhs,
+                                             koopa_ir::CallExpr>) {
+                        return lowerCallExpr(m_ir[rhsRef], block, context,
+                            symbolDef.symbol.spelling);
+                    } else {
+                        return block.addInst<Value>(
+                            Value::Kind::call, symbolDef.symbol.spelling);
+                    }
+                },
+                symbolDef.rhs);
 
-    void lowerBranch(const koopa_ir::BranchTerminator& branch, BasicBlock& block,
-        const FunctionContext& context)
-    {
-        auto* value = block.addInst<BranchValue>();
-        value->setCondition(lowerValueOperand(branch.condition, *value, context));
-        value->setTrueBB(lookupBlock(branch.trueTarget.spelling, context));
-        for (const auto& arg : branch.trueArgs) {
-            value->pushTrueArg(lowerValueOperand(arg, *value, context));
+            context.valuesBySymbol[symbolDef.symbol.spelling] = definedValue;
         }
-        value->setFalseBB(lookupBlock(branch.falseTarget.spelling, context));
-        for (const auto& arg : branch.falseArgs) {
-            value->pushFalseArg(lowerValueOperand(arg, *value, context));
-        }
-    }
 
-    void lowerJump(const koopa_ir::JumpTerminator& jump, BasicBlock& block,
-        const FunctionContext& context)
-    {
-        auto* value = block.addInst<JumpValue>();
-        value->setTargetBB(lookupBlock(jump.target.spelling, context));
-        for (const auto& arg : jump.args) {
-            value->pushArg(lowerValueOperand(arg, *value, context));
+        Value* lowerCallExpr(const koopa_ir::CallExpr& callExpr,
+            BasicBlock& block, const FunctionContext& context,
+            const std::optional<std::string>& name)
+        {
+            auto* value
+                = block.addInst<CallValue>(name.value_or(std::string {}));
+            value->setCallee(lookupFunction(callExpr.callee.spelling));
+            for (const auto& arg : callExpr.args) {
+                value->pushArg(lowerValueOperand(arg, *value, context));
+            }
+            return value;
         }
-    }
 
-    void lowerReturn(const koopa_ir::ReturnTerminator& ret, BasicBlock& block,
-        const FunctionContext& context)
-    {
-        auto* value = block.addInst<ReturnValue>();
-        if (ret.value.has_value()) {
-            value->setVal(lowerValueOperand(*ret.value, *value, context));
+        void lowerStoreStmt(const koopa_ir::StoreStmt& storeStmt,
+            BasicBlock& block, const FunctionContext& context)
+        {
+            auto* value = block.addInst<StoreValue>();
+            value->setVal(lowerStoreOperand(storeStmt.value, *value, context));
+            value->setDestination(
+                lookupValue(storeStmt.destination.spelling, context));
         }
-    }
-};
+
+        void lowerBranch(const koopa_ir::BranchTerminator& branch,
+            BasicBlock& block, const FunctionContext& context)
+        {
+            auto* value = block.addInst<BranchValue>();
+            value->setCondition(
+                lowerValueOperand(branch.condition, *value, context));
+            value->setTrueBB(lookupBlock(branch.trueTarget.spelling, context));
+            for (const auto& arg : branch.trueArgs) {
+                value->pushTrueArg(lowerValueOperand(arg, *value, context));
+            }
+            value->setFalseBB(
+                lookupBlock(branch.falseTarget.spelling, context));
+            for (const auto& arg : branch.falseArgs) {
+                value->pushFalseArg(lowerValueOperand(arg, *value, context));
+            }
+        }
+
+        void lowerJump(const koopa_ir::JumpTerminator& jump, BasicBlock& block,
+            const FunctionContext& context)
+        {
+            auto* value = block.addInst<JumpValue>();
+            value->setTargetBB(lookupBlock(jump.target.spelling, context));
+            for (const auto& arg : jump.args) {
+                value->pushArg(lowerValueOperand(arg, *value, context));
+            }
+        }
+
+        void lowerReturn(const koopa_ir::ReturnTerminator& ret,
+            BasicBlock& block, const FunctionContext& context)
+        {
+            auto* value = block.addInst<ReturnValue>();
+            if (ret.value.has_value()) {
+                value->setVal(lowerValueOperand(*ret.value, *value, context));
+            }
+        }
+    };
 
 } // namespace detail
 
@@ -1035,20 +1110,25 @@ inline void requireProgramWellFormed(const Program& program)
             function->bbs().begin(), function->bbs().end());
         for (const auto* block : function->bbs()) {
             require(block->getNumInsts() > 0,
-                "basic block should contain at least one terminator instruction");
+                "basic block should contain at least one terminator "
+                "instruction");
             const auto* terminator = block->getInst(block->getNumInsts() - 1);
             require(terminator->canTerminateBlock(),
                 "basic block should end with a terminator");
 
-            if (const auto* branch = dynamic_cast<const BranchValue*>(terminator)) {
-                require(branch->getTrueBB() != nullptr && branch->getFalseBB() != nullptr,
+            if (const auto* branch
+                = dynamic_cast<const BranchValue*>(terminator)) {
+                require(branch->getTrueBB() != nullptr
+                        && branch->getFalseBB() != nullptr,
                     "branch targets should be preserved");
                 require(blockSet.contains(branch->getTrueBB())
                         && blockSet.contains(branch->getFalseBB()),
                     "branch targets should belong to the same function");
-                require(branch->getNumTrueArgs() == branch->getTrueBB()->getNumParams(),
+                require(branch->getNumTrueArgs()
+                        == branch->getTrueBB()->getNumParams(),
                     "branch true-edge args should match target block params");
-                require(branch->getNumFalseArgs() == branch->getFalseBB()->getNumParams(),
+                require(branch->getNumFalseArgs()
+                        == branch->getFalseBB()->getNumParams(),
                     "branch false-edge args should match target block params");
             }
 
@@ -1057,7 +1137,8 @@ inline void requireProgramWellFormed(const Program& program)
                     "jump target should be preserved");
                 require(blockSet.contains(jump->getTargetBB()),
                     "jump target should belong to the same function");
-                require(jump->getNumArgs() == jump->getTargetBB()->getNumParams(),
+                require(
+                    jump->getNumArgs() == jump->getTargetBB()->getNumParams(),
                     "jump args should match target block params");
             }
 
@@ -1106,7 +1187,8 @@ inline const AggregateValue* requireAggregate(
     const auto* aggregateValue = dynamic_cast<const AggregateValue*>(value);
     require(aggregateValue != nullptr, "expected aggregate initializer cast");
     require(aggregateValue->getNumElements() == expectedNumElements,
-        "aggregate initializer should preserve the expected number of elements");
+        "aggregate initializer should preserve the expected number of "
+        "elements");
     return aggregateValue;
 }
 
@@ -1115,8 +1197,7 @@ inline const BasicBlock* requireEntryBlock(const Function& function)
     require(function.getNumBBs() >= 2,
         "expected entry body plus synthesized guard end body");
     const auto* basicBlock = function.getBB(0);
-    require(
-        basicBlock->isEntry(), "first basic body should be the entry body");
+    require(basicBlock->isEntry(), "first basic body should be the entry body");
     require(basicBlock->getName() == "%entry",
         "entry body should use the documented label");
     return basicBlock;
@@ -1141,8 +1222,8 @@ inline const BasicBlock* requireEndBlock(const Function& function)
 
 inline const BasicBlock* requireBlock(const Function& function, size_t index)
 {
-    require(index < function.getNumBBs(),
-        "expected basic body at requested index");
+    require(
+        index < function.getNumBBs(), "expected basic body at requested index");
     return function.getBB(index);
 }
 

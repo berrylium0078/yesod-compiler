@@ -21,7 +21,6 @@ YESOD_DECLARE_DIAGNOSTIC(TypeMismatchDiagnostic)
 YESOD_DECLARE_DIAGNOSTIC(ReturnTypeMismatchDiagnostic)
 YESOD_DECLARE_DIAGNOSTIC(ShiftOperandOutOfRangeDiagnostic)
 
-
 enum class ExpType {
     integer,
     mint,
@@ -29,6 +28,7 @@ enum class ExpType {
     voidType,
     array,
     poly,
+    pv,
 };
 
 enum class SemanticTypeKind {
@@ -38,6 +38,7 @@ enum class SemanticTypeKind {
     voidType,
     array,
     poly,
+    pv,
 };
 
 struct SemanticType {
@@ -46,7 +47,7 @@ struct SemanticType {
     int32_t m_arrayLength = 0;
     std::shared_ptr<SemanticType> m_elementType;
 
-    [[nodiscard]] static SemanticType makeInteger() { return SemanticType { }; }
+    [[nodiscard]] static SemanticType makeInteger() { return SemanticType {}; }
 
     [[nodiscard]] static SemanticType makeMint()
     {
@@ -88,6 +89,16 @@ struct SemanticType {
         };
     }
 
+    [[nodiscard]] static SemanticType makePv()
+    {
+        return SemanticType {
+            .kind = SemanticTypeKind::pv,
+            .m_size = 8,
+            .m_arrayLength = 0,
+            .m_elementType = nullptr,
+        };
+    }
+
     [[nodiscard]] static SemanticType makeArray(
         const SemanticType& elementType, int32_t arrayLength)
     {
@@ -122,10 +133,9 @@ struct SemanticType {
             || kind == SemanticTypeKind::boolean;
     }
 
-    [[nodiscard]] bool isPoly() const
-    {
-        return kind == SemanticTypeKind::poly;
-    }
+    [[nodiscard]] bool isPoly() const { return kind == SemanticTypeKind::poly; }
+
+    [[nodiscard]] bool isPv() const { return kind == SemanticTypeKind::pv; }
 
     [[nodiscard]] bool isNumeric() const
     {
@@ -153,6 +163,8 @@ struct SemanticType {
             return ExpType::array;
         case SemanticTypeKind::poly:
             return ExpType::poly;
+        case SemanticTypeKind::pv:
+            return ExpType::pv;
         }
         throw std::runtime_error("unsupported semantic type kind");
     }
@@ -235,6 +247,7 @@ namespace detail {
 
 class SemanticTypeAnalyzer {
     friend class SemanticAnalyzer;
+
 public:
     explicit SemanticTypeAnalyzer(
         const AST& ast, const SemanticSymbolResolver& symbolResult);
@@ -247,5 +260,5 @@ private:
     std::unique_ptr<detail::SemanticTypeAnalyzerImpl> m_impl;
 };
 
-} // namespace yesod::frontend 
+} // namespace yesod::frontend
 #endif // _YESOD_FRONTEND_SEMANTIC_TYPE_H_

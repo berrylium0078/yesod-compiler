@@ -14,9 +14,9 @@
 
 namespace yesod::frontend {
 
-using yesod::Ref;
-using yesod::Ptr;
 using yesod::Arena;
+using yesod::Ptr;
+using yesod::Ref;
 
 struct SourcePos {
     constexpr SourcePos() = default;
@@ -68,6 +68,12 @@ enum class BinaryOpKeyword {
     bitOr,
     andAnd,
     orOr,
+};
+
+enum class PvBinaryOpKeyword {
+    add,
+    sub,
+    mul,
 };
 
 struct Exp;
@@ -128,7 +134,43 @@ struct Exp {
         Ref<Exp> base;
         Ref<Exp> index;
     };
-    using Kind = std::variant<Binary, Unary, Cast, Call, Slice, Subscript, LVal, Number>;
+    struct Ntt {
+        Ref<Exp> value;
+    };
+    struct Intt {
+        Ref<Exp> value;
+    };
+    struct PvBinary {
+        Ref<Exp> lhs;
+        Ref<Exp> rhs;
+        PvBinaryOpKeyword op;
+    };
+    struct CombineTerm {
+        Ref<Exp> value;
+        Ref<Exp> start;
+        Ptr<Exp> end;
+        Ref<Exp> shift;
+        Ref<Exp> scale;
+    };
+    struct Combine {
+        std::vector<CombineTerm> terms;
+    };
+    struct GetCoeff {
+        Ref<Exp> value;
+        Ref<Exp> index;
+    };
+    struct PolyConstruct {
+        std::vector<Ref<Exp>> elements;
+    };
+    struct IntToMint {
+        Ref<Exp> value;
+    };
+    struct MintToInt {
+        Ref<Exp> value;
+    };
+    using Kind = std::variant<Binary, Unary, Cast, Call, Slice, Subscript, Ntt,
+        Intt, PvBinary, Combine, GetCoeff, PolyConstruct, IntToMint, MintToInt,
+        LVal, Number>;
 
     SourcePos sourcePos;
     Kind kind;
@@ -177,8 +219,8 @@ struct VarDecl {
 using Decl = std::variant<Ref<ConstDecl>, Ref<VarDecl>>;
 
 using Stmt = std::variant<Ref<IfStmt>, Ref<WhileStmt>, Ref<BreakStmt>,
-    Ref<ContinueStmt>, Ref<AssignStmt>, Ref<yesod::frontend::Block>, Ref<ReturnStmt>,
-    Ref<ExpStmt>>;
+    Ref<ContinueStmt>, Ref<AssignStmt>, Ref<yesod::frontend::Block>,
+    Ref<ReturnStmt>, Ref<ExpStmt>>;
 
 struct IfStmt {
     SourcePos sourcePos;
@@ -286,7 +328,20 @@ protected:
     virtual void visitCastExp(const Exp& exp, const Exp::Cast& cast);
     virtual void visitCallExp(const Exp& exp, const Exp::Call& call);
     virtual void visitSliceExp(const Exp& exp, const Exp::Slice& slice);
-    virtual void visitSubscriptExp(const Exp& exp, const Exp::Subscript& subscript);
+    virtual void visitSubscriptExp(
+        const Exp& exp, const Exp::Subscript& subscript);
+    virtual void visitNttExp(const Exp& exp, const Exp::Ntt& ntt);
+    virtual void visitInttExp(const Exp& exp, const Exp::Intt& intt);
+    virtual void visitPvBinaryExp(const Exp& exp, const Exp::PvBinary& binary);
+    virtual void visitCombineExp(const Exp& exp, const Exp::Combine& combine);
+    virtual void visitGetCoeffExp(
+        const Exp& exp, const Exp::GetCoeff& getCoeff);
+    virtual void visitPolyConstructExp(
+        const Exp& exp, const Exp::PolyConstruct& construct);
+    virtual void visitIntToMintExp(
+        const Exp& exp, const Exp::IntToMint& conversion);
+    virtual void visitMintToIntExp(
+        const Exp& exp, const Exp::MintToInt& conversion);
     virtual void visitLValExp(const Exp& exp, const Exp::LVal& lVal);
     virtual void visitNumberExp(const Exp& exp, const Exp::Number& number);
 };

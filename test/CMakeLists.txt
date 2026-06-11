@@ -123,6 +123,10 @@ add_executable(koopa_mint_test koopa/koopa_mint_test.cpp)
 target_link_libraries(koopa_mint_test core)
 add_test(NAME koopa_mint_test COMMAND koopa_mint_test)
 
+add_executable(koopa_poly_test koopa/koopa_poly_test.cpp)
+target_link_libraries(koopa_poly_test core)
+add_test(NAME koopa_poly_test COMMAND koopa_poly_test)
+
 add_executable(compiler_llvm_test compiler_llvm_test.cpp)
 target_link_libraries(compiler_llvm_test core)
 add_test(NAME compiler_llvm_test COMMAND compiler_llvm_test)
