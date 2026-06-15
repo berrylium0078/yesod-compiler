@@ -127,6 +127,15 @@ add_executable(koopa_poly_test koopa/koopa_poly_test.cpp)
 target_link_libraries(koopa_poly_test core)
 add_test(NAME koopa_poly_test COMMAND koopa_poly_test)
 
+add_executable(koopa_extra_test
+  koopa/koopa_extra_test.cpp
+  koopa/koopa_interpreter.cpp
+)
+target_link_libraries(koopa_extra_test core)
+target_compile_definitions(koopa_extra_test
+  PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 add_executable(compiler_llvm_test compiler_llvm_test.cpp)
 target_link_libraries(compiler_llvm_test core)
 add_test(NAME compiler_llvm_test COMMAND compiler_llvm_test)
