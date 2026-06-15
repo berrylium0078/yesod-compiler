@@ -90,6 +90,8 @@ namespace {
     struct Frame {
         const FunctionDef* function = nullptr;
         const BasicBlock* currentBlock = nullptr;
+        std::string functionName;
+        std::string blockName;
         std::unordered_map<std::string, RuntimeValue> values;
         std::unordered_map<std::string, std::shared_ptr<TypeInfo>> types;
     };
@@ -394,6 +396,17 @@ namespace {
                 ExecuteStatus::runtimeError, "unknown symbol type: " + name);
         }
 
+        [[nodiscard]] RuntimeValue coerceValueToType(
+            RuntimeValue value, const std::shared_ptr<TypeInfo>& type) const
+        {
+            if (type && type->kind == TypeInfo::Kind::pointer) {
+                if (auto* address = std::get_if<Address>(&value.value)) {
+                    address->pointeeType = type->element;
+                }
+            }
+            return value;
+        }
+
         void indexProgram()
         {
             for (const auto& item : m_program.items) {
@@ -525,23 +538,34 @@ namespace {
             Frame frame;
             frame.function = &function;
             frame.currentBlock = &m_program[function.blocks.front()];
+            frame.functionName = symbolName(function.name);
+            frame.blockName = symbolName(frame.currentBlock->label);
             for (size_t index = 0; index < function.params.size(); ++index) {
                 const auto& param = m_program[function.params[index]];
                 const std::string name = symbolName(param.symbol);
-                frame.values.emplace(name, args[index]);
-                frame.types.emplace(name, makeTypeInfo(param.type));
+                const auto paramType = makeTypeInfo(param.type);
+                frame.values.emplace(
+                    name, coerceValueToType(args[index], paramType));
+                frame.types.emplace(name, paramType);
             }
 
-            while (true) {
-                checkStopped();
-                executeBlockStatements(frame);
-                TerminatorStep step = executeTerminator(frame);
-                if (step.kind == TerminatorStep::Kind::ret) {
-                    return step.returnValue.value_or(0);
+            try {
+                while (true) {
+                    checkStopped();
+                    executeBlockStatements(frame);
+                    TerminatorStep step = executeTerminator(frame);
+                    if (step.kind == TerminatorStep::Kind::ret) {
+                        return step.returnValue.value_or(0);
+                    }
+                    assert(step.targetBlock != nullptr);
+                    bindBlockArgs(*step.targetBlock, step.args, frame);
+                    frame.currentBlock = step.targetBlock;
+                    frame.blockName = symbolName(frame.currentBlock->label);
                 }
-                assert(step.targetBlock != nullptr);
-                bindBlockArgs(*step.targetBlock, step.args, frame);
-                frame.currentBlock = step.targetBlock;
+            } catch (const ExecuteException& exception) {
+                throw ExecuteException(exception.status(),
+                    std::string(exception.what()) + " while executing "
+                        + frame.functionName + " " + frame.blockName);
             }
         }
 

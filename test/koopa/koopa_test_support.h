@@ -15,8 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "koopa.h"
-
 #include "frontend/ast.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"

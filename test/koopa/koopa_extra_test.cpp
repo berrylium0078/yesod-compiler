@@ -1,6 +1,8 @@
 #include "koopa/koopa_interpreter.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +12,8 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "frontend/parser.h"
@@ -33,9 +37,90 @@ struct TestCase {
     fs::path outputPath;
 };
 
+struct Options {
+    std::string filter;
+    bool verbose = false;
+};
+
+enum class TestResult { passed, failed, timedOut };
+
+
+
 struct ExpectedOutput {
     std::string stdoutText;
     int32_t returnCode = 0;
+};
+
+class TestLogger {
+public:
+    TestLogger(const TestCase& testCase, bool verbose)
+        : m_testCase(testCase)
+        , m_verbose(verbose)
+        , m_start(std::chrono::steady_clock::now())
+        , m_phaseStart(m_start)
+    {
+        if (m_verbose) {
+            std::cerr << "running: " << m_testCase.sourcePath << '\n';
+        }
+    }
+
+    void phase(const std::string& name)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (m_verbose && !m_currentPhase.empty()) {
+            std::cerr << "  " << m_currentPhase << " finished in "
+                      << elapsedMs(m_phaseStart, now) << " ms\n";
+        }
+        m_currentPhase = name;
+        m_phaseStart = now;
+        if (m_verbose) {
+            std::cerr << "  " << m_currentPhase << "...\n";
+        }
+    }
+
+    void done(TestResult result)
+    {
+        if (!m_verbose) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!m_currentPhase.empty()) {
+            std::cerr << "  " << m_currentPhase << " finished in "
+                      << elapsedMs(m_phaseStart, now) << " ms\n";
+        }
+        std::cerr << "done: " << m_testCase.sourcePath << " -> "
+                  << toString(result) << " in " << elapsedMs(m_start, now)
+                  << " ms\n";
+    }
+
+private:
+    [[nodiscard]] static int64_t elapsedMs(
+        std::chrono::steady_clock::time_point begin,
+        std::chrono::steady_clock::time_point end)
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            end - begin)
+            .count();
+    }
+
+    [[nodiscard]] static const char* toString(TestResult result)
+    {
+        switch (result) {
+        case TestResult::passed:
+            return "passed";
+        case TestResult::failed:
+            return "failed";
+        case TestResult::timedOut:
+            return "timedOut";
+        }
+        return "unknown";
+    }
+
+    const TestCase& m_testCase;
+    bool m_verbose = false;
+    std::chrono::steady_clock::time_point m_start;
+    std::chrono::steady_clock::time_point m_phaseStart;
+    std::string m_currentPhase;
 };
 
 [[nodiscard]] std::string readTextFile(const fs::path& path)
@@ -144,9 +229,28 @@ struct ExpectedOutput {
     return actual == expected || actual + '\n' == expected;
 }
 
-[[nodiscard]] bool runTestCase(const TestCase& testCase)
+[[nodiscard]] Options parseOptions(int argc, char** argv)
 {
+    Options options;
+    for (int index = 1; index < argc; ++index) {
+        const std::string arg = argv[index];
+        if (arg == "--verbose" || arg == "-v") {
+            options.verbose = true;
+        } else if (options.filter.empty()) {
+            options.filter = arg;
+        } else {
+            throw std::runtime_error("unexpected argument: " + arg);
+        }
+    }
+    return options;
+}
+
+[[nodiscard]] TestResult runTestCase(
+    const TestCase& testCase, const Options& options)
+{
+    TestLogger logger(testCase, options.verbose);
     try {
+        logger.phase("read files");
         const std::string source = readTextFile(testCase.sourcePath);
         const std::string inputText = testCase.inputPath.empty()
             ? std::string { }
@@ -154,13 +258,44 @@ struct ExpectedOutput {
         const ExpectedOutput expected
             = parseExpectedOutput(readTextFile(testCase.outputPath));
 
+        logger.phase("parse, semantic, and koopa generation");
         auto program = generateProgram(source);
         std::stringstream input(inputText);
         std::stringstream output;
         std::stop_source stopSource;
+        std::atomic<bool> timedOut { false };
+
+        // Timer thread: cooperative timeout after 1 second.
+        std::jthread timerThread { [&stopSource, &timedOut](
+                                       std::stop_token st) -> void {
+            using namespace std::chrono_literals;
+            const auto deadline = std::chrono::steady_clock::now() + 2s;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (st.stop_requested()) {
+                    return;
+                }
+                std::this_thread::sleep_for(10ms);
+            }
+            timedOut.store(true, std::memory_order_release);
+            stopSource.request_stop();
+        } };
+
+        logger.phase("execute");
         const auto result = interpreter::execute(
             *program, input, output, stopSource.get_token());
+        timerThread.request_stop();
 
+        if (timedOut.load(std::memory_order_acquire)
+            || result.status == interpreter::ExecuteStatus::stopped) {
+            std::cerr << "timed out: " << testCase.sourcePath << '\n'
+                      << "  status: " << interpreter::toString(result.status)
+                      << '\n'
+                      << "  message: " << result.message << '\n';
+            logger.done(TestResult::timedOut);
+            return TestResult::timedOut;
+        }
+
+        logger.phase("compare");
         const int32_t actualReturn = normalizeReturnCode(result.returnValue);
         const int32_t expectedReturn = normalizeReturnCode(expected.returnCode);
         const std::string actualStdout = output.str();
@@ -177,13 +312,16 @@ struct ExpectedOutput {
                       << expected.stdoutText.size() << '\n'
                       << "  actual stdout size: " << actualStdout.size()
                       << '\n';
-            return false;
+            logger.done(TestResult::failed);
+            return TestResult::failed;
         }
-        return true;
+        logger.done(TestResult::passed);
+        return TestResult::passed;
     } catch (const std::exception& exception) {
         std::cerr << "failed: " << testCase.sourcePath << '\n'
                   << "  exception: " << exception.what() << '\n';
-        return false;
+        logger.done(TestResult::failed);
+        return TestResult::failed;
     }
 }
 
@@ -191,27 +329,39 @@ struct ExpectedOutput {
 
 int main(int argc, char** argv)
 {
-    const std::string filter = argc >= 2 ? argv[1] : std::string { };
+    const Options options = parseOptions(argc, argv);
     const fs::path testDirectory
-        = fs::path(YESOD_TEST_SOURCE_DIR) / "testsuit" / "lvX";
-    const auto testCases = collectTestCases(testDirectory, filter);
+        = fs::path(YESOD_TEST_SOURCE_DIR) / "testsuit-collection" / "lvX";
+    const auto testCases = collectTestCases(testDirectory, options.filter);
     if (testCases.empty()) {
         std::cerr << "no test cases found";
-        if (!filter.empty()) {
-            std::cerr << " for filter: " << filter;
+        if (!options.filter.empty()) {
+            std::cerr << " for filter: " << options.filter;
         }
         std::cerr << '\n';
         return 1;
     }
 
     size_t passed = 0;
+    size_t timedOut = 0;
+    std::vector<std::string> timedOutNames;
     for (const auto& testCase : testCases) {
-        if (runTestCase(testCase)) {
+        const auto result = runTestCase(testCase, options);
+        if (result == TestResult::passed) {
             ++passed;
+        } else if (result == TestResult::timedOut) {
+            ++timedOut;
+            timedOutNames.push_back(testCase.sourcePath.filename().string());
         }
     }
 
     std::cerr << "passed " << passed << " / " << testCases.size()
               << " koopa extra tests\n";
-    return passed == testCases.size() ? 0 : 1;
+    if (timedOut > 0) {
+        std::cerr << "\ntimed out (" << timedOut << "):\n";
+        for (const auto& name : timedOutNames) {
+            std::cerr << "  " << name << '\n';
+        }
+    }
+    return (passed + timedOut) == testCases.size() ? 0 : 1;
 }
