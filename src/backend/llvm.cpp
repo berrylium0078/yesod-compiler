@@ -29,9 +29,41 @@ namespace {
         return spelling;
     }
 
-    const std::string& llvmValueName(const std::string& spelling)
+    [[nodiscard]] uint64_t stableHash(const std::string& text)
     {
-        return spelling;
+        uint64_t hash = 1469598103934665603ULL;
+        for (const unsigned char ch : text) {
+            hash ^= ch;
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    }
+
+    [[nodiscard]] std::string toBase36(uint64_t value)
+    {
+        static constexpr char DIGITS[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+        if (value == 0) {
+            return "0";
+        }
+        std::string result;
+        while (value > 0) {
+            result.push_back(DIGITS[value % 36]);
+            value /= 36;
+        }
+        std::reverse(result.begin(), result.end());
+        return result;
+    }
+
+    std::string llvmValueName(const std::string& spelling)
+    {
+        if (spelling.size() <= 120
+            || (spelling.front() != '%' && spelling.front() != '@')) {
+            return spelling;
+        }
+        const char sigil = spelling.front();
+        const std::string body = spelling.substr(1);
+        return std::string(1, sigil) + body.substr(0, 32) + "_"
+            + toBase36(stableHash(spelling));
     }
 
     // ─── Type emission ────────────────────────────────────────────────────
@@ -98,31 +130,31 @@ namespace {
 
     void emitInitializer(std::ostream& output,
         const koopa_ir::Initializer& initializer, const koopa_ir::Type& type,
-        const koopa_ir::Program& program)
+        const koopa_ir::Program& program, bool emitLeadingType)
     {
+        if (emitLeadingType) {
+            output << emitType(type, program) << " ";
+        }
         MATCH(initializer)
-        WITH(
-            [&](const koopa_ir::IntegerLiteral& lit) {
-                output << "i32 " << lit.value;
-            },
-            [&](const koopa_ir::UndefValue&) { output << "i32 undef"; },
+        WITH([&](const koopa_ir::IntegerLiteral& lit) { output << lit.value; },
+            [&](const koopa_ir::UndefValue&) { output << "undef"; },
             [&](const koopa_ir::ZeroInit&) { output << "zeroinitializer"; },
             [&](const yesod::Ref<koopa_ir::AggregateInitializer>& aggRef) {
                 const auto& agg = program[aggRef];
-                koopa_ir::Type elementType = koopa_ir::I32Type {};
+                koopa_ir::Type elementType = koopa_ir::I32Type { };
                 if (const auto* arrayRef
                     = std::get_if<yesod::Ref<koopa_ir::ArrayType>>(&type)) {
                     elementType = program[*arrayRef].elementType;
                 }
-                output << "{";
+                output << "[";
                 for (size_t i = 0; i < agg.elements.size(); ++i) {
                     if (i != 0) {
                         output << ", ";
                     }
                     emitInitializer(
-                        output, agg.elements[i], elementType, program);
+                        output, agg.elements[i], elementType, program, true);
                 }
-                output << "}";
+                output << "]";
             });
     }
 
@@ -185,7 +217,18 @@ namespace {
             = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&type)) {
             return emitType(program[*pref].pointeeType, program);
         }
-        return {};
+        return { };
+    }
+
+    std::string loadedPointerPointeeTypeString(
+        const koopa_ir::Type& type, const koopa_ir::Program& program)
+    {
+        if (const auto* pref
+            = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&type)) {
+            const auto& pointerType = program[*pref];
+            return emitType(pointerType.pointeeType, program);
+        }
+        return { };
     }
 
     // ─── Phi-edge collection ──────────────────────────────────────────────
@@ -206,7 +249,8 @@ namespace {
         for (const auto& blockRef : function.blocks) {
             const auto& block = program[blockRef];
             const std::string rawLabel = stripPrefix(block.label.spelling);
-            const std::string label = rawLabel.empty() ? "__empty" : rawLabel;
+            const std::string label
+                = "bb_" + (rawLabel.empty() ? "__empty" : rawLabel);
             blockLabels[block.label.spelling] = label;
             incoming[block.label.spelling].resize(block.params.size());
         }
@@ -222,7 +266,7 @@ namespace {
                     const std::string targetLabel = jump.target.spelling;
                     auto& slots = incoming[targetLabel];
                     for (size_t i = 0; i < jump.args.size() && i < slots.size();
-                         ++i) {
+                        ++i) {
                         slots[i].push_back(
                             IncomingEdge { predLabel, jump.args[i] });
                     }
@@ -233,7 +277,7 @@ namespace {
                         const std::string tlabel = br.trueTarget.spelling;
                         auto& tslots = incoming[tlabel];
                         for (size_t i = 0;
-                             i < br.trueArgs.size() && i < tslots.size(); ++i) {
+                            i < br.trueArgs.size() && i < tslots.size(); ++i) {
                             tslots[i].push_back(
                                 IncomingEdge { predLabel, br.trueArgs[i] });
                         }
@@ -242,14 +286,13 @@ namespace {
                         const std::string flabel = br.falseTarget.spelling;
                         auto& fslots = incoming[flabel];
                         for (size_t i = 0;
-                             i < br.falseArgs.size() && i < fslots.size();
-                             ++i) {
+                            i < br.falseArgs.size() && i < fslots.size(); ++i) {
                             fslots[i].push_back(
                                 IncomingEdge { predLabel, br.falseArgs[i] });
                         }
                     }
                 },
-                [](const yesod::Ref<koopa_ir::ReturnTerminator>&) {});
+                [](const yesod::Ref<koopa_ir::ReturnTerminator>&) { });
         }
     }
 
@@ -270,7 +313,8 @@ namespace {
         const std::string name = stripPrefix(global.name.spelling);
         const std::string llvmType = emitType(global.allocType, program);
         output << "@" << name << " = global " << llvmType << " ";
-        emitInitializer(output, global.initializer, global.allocType, program);
+        emitInitializer(
+            output, global.initializer, global.allocType, program, false);
         output << "\n";
     }
 
@@ -302,6 +346,7 @@ namespace {
 
         // ── Build per-function type maps ───────────────────────────────
         PointeeMap pointees;
+        PointeeMap loadedPointees;
         ValueTypeMap valueTypes;
 
         auto recordPointer
@@ -371,6 +416,12 @@ namespace {
                                     valueTypes[sname] = "ptr";
                                     pointees[sname]
                                         = emitType(mem.allocType, program);
+                                    const std::string loadedPointee
+                                        = loadedPointerPointeeTypeString(
+                                            mem.allocType, program);
+                                    if (!loadedPointee.empty()) {
+                                        loadedPointees[sname] = loadedPointee;
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::LoadExpr>&
                                         loadRef) {
@@ -380,6 +431,16 @@ namespace {
                                     valueTypes[sname] = (it != pointees.end())
                                         ? it->second
                                         : "i32";
+                                    if (valueTypes[sname] == "ptr") {
+                                        const auto loadedPointeeIt
+                                            = loadedPointees.find(
+                                                ld.source.spelling);
+                                        if (loadedPointeeIt
+                                            != loadedPointees.end()) {
+                                            pointees[sname]
+                                                = loadedPointeeIt->second;
+                                        }
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::GetPointerExpr>&
                                         getptrRef) {
@@ -734,15 +795,14 @@ namespace {
                                            << " = call " << callRetTy << " @"
                                            << callee << "(";
                                     for (size_t ai = 0; ai < call.args.size();
-                                         ++ai) {
+                                        ++ai) {
                                         if (ai != 0) {
                                             output << ", ";
                                         }
                                         const std::string argType
                                             = (sigIt != sigs.end()
-                                                  && ai
-                                                      < sigIt->second.paramTypes
-                                                            .size())
+                                                  && ai < sigIt->second
+                                                          .paramTypes.size())
                                             ? sigIt->second.paramTypes[ai]
                                             : "i32";
                                         output << argType << " "

@@ -83,50 +83,6 @@ add_executable(semantic_mint_test semantic/semantic_mint_test.cpp)
 target_link_libraries(semantic_mint_test core)
 add_test(NAME semantic_mint_test COMMAND semantic_mint_test)
 
-add_executable(koopa_basic_test koopa/koopa_basic_test.cpp)
-target_link_libraries(koopa_basic_test core)
-add_test(NAME koopa_basic_test COMMAND koopa_basic_test)
-
-add_executable(koopa_unary_test koopa/koopa_unary_test.cpp)
-target_link_libraries(koopa_unary_test core)
-add_test(NAME koopa_unary_test COMMAND koopa_unary_test)
-
-add_executable(koopa_binary_test koopa/koopa_binary_test.cpp)
-target_link_libraries(koopa_binary_test core)
-add_test(NAME koopa_binary_test COMMAND koopa_binary_test)
-
-add_executable(koopa_if_test koopa/koopa_if_test.cpp)
-target_link_libraries(koopa_if_test core)
-add_test(NAME koopa_if_test COMMAND koopa_if_test)
-
-add_executable(koopa_while_test koopa/koopa_while_test.cpp)
-target_link_libraries(koopa_while_test core)
-add_test(NAME koopa_while_test COMMAND koopa_while_test)
-
-add_executable(koopa_decl_test koopa/koopa_decl_test.cpp)
-target_link_libraries(koopa_decl_test core)
-add_test(NAME koopa_decl_test COMMAND koopa_decl_test)
-
-add_executable(koopa_function_test koopa/koopa_function_test.cpp)
-target_link_libraries(koopa_function_test core)
-add_test(NAME koopa_function_test COMMAND koopa_function_test)
-
-add_executable(koopa_ssa_test koopa/koopa_ssa_test.cpp)
-target_link_libraries(koopa_ssa_test core)
-add_test(NAME koopa_ssa_test COMMAND koopa_ssa_test)
-
-add_executable(koopa_array_test koopa/koopa_array_test.cpp)
-target_link_libraries(koopa_array_test core)
-add_test(NAME koopa_array_test COMMAND koopa_array_test)
-
-add_executable(koopa_mint_test koopa/koopa_mint_test.cpp)
-target_link_libraries(koopa_mint_test core)
-add_test(NAME koopa_mint_test COMMAND koopa_mint_test)
-
-add_executable(koopa_poly_test koopa/koopa_poly_test.cpp)
-target_link_libraries(koopa_poly_test core)
-add_test(NAME koopa_poly_test COMMAND koopa_poly_test)
-
 add_executable(koopa_extra_test
   koopa/koopa_extra_test.cpp
   koopa/koopa_interpreter.cpp
@@ -136,6 +92,15 @@ target_link_libraries(koopa_extra_test core)
 target_compile_definitions(koopa_extra_test
   PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
+
+foreach(KOOPA_LEVEL IN ITEMS lv1 lv3 lv4 lv5 lv6 lv7 lv8 lv9)
+  add_test(
+    NAME koopa_${KOOPA_LEVEL}_test
+    COMMAND koopa_extra_test
+      "${CMAKE_CURRENT_SOURCE_DIR}/testsuit-collection/${KOOPA_LEVEL}"
+      --timeout-ms 5000
+  )
+endforeach()
 
 set(POLY_INTERPRETER_SOURCES
   interpreter_runner.cpp
@@ -164,46 +129,16 @@ target_compile_definitions(poly_extra_test
 
 add_executable(compiler_llvm_test compiler_llvm_test.cpp)
 target_link_libraries(compiler_llvm_test core)
-add_test(NAME compiler_llvm_test COMMAND compiler_llvm_test)
+add_dependencies(compiler_llvm_test compiler)
+target_compile_definitions(compiler_llvm_test
+  PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 
-# ------------------------------------------------------------------
-# Build SysY files in test/llvm/ to LLVM IR and produce RISC-V ELFs
-# ------------------------------------------------------------------
-set(LLVM_SY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
-file(GLOB LLVM_SY_FILES CONFIGURE_DEPENDS "${LLVM_SY_DIR}/*.sy")
-
-if(NOT LLVM_SY_FILES)
-  message(STATUS "No .sy files found under ${LLVM_SY_DIR}; skipping llvm build targets.")
-else()
-  set(LLVM_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/llvm)
-  file(MAKE_DIRECTORY ${LLVM_OUT_DIR})
-
-  if(NOT DEFINED ENV{CDE_LIBRARY_PATH})
-    message(WARNING "CDE_LIBRARY_PATH is not set; RISC-V linking may fail for llvm build targets.")
-  endif()
-
-  set(LLVM_ELF_TARGETS)
-  foreach(SY_FILE IN LISTS LLVM_SY_FILES)
-    get_filename_component(SY_NAME ${SY_FILE} NAME_WE)
-    set(OUT_LL ${LLVM_OUT_DIR}/${SY_NAME}.ll)
-    set(OUT_S ${LLVM_OUT_DIR}/${SY_NAME}.S)
-    set(OUT_O ${LLVM_OUT_DIR}/${SY_NAME}.o)
-    set(OUT_ELF ${LLVM_OUT_DIR}/${SY_NAME}.elf)
-
-    add_custom_command(
-      OUTPUT ${OUT_ELF}
-      COMMAND $<TARGET_FILE:compiler> -llvm ${SY_FILE} -o ${OUT_LL}
-      COMMAND clang ${OUT_LL} -S -o ${OUT_S} -target riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32
-      COMMAND clang ${OUT_S} -c -o ${OUT_O} -target riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32
-      COMMAND ld.lld ${OUT_O} -L$ENV{CDE_LIBRARY_PATH}/riscv32 -lsysy -o ${OUT_ELF}
-      DEPENDS compiler
-      WORKING_DIRECTORY ${LLVM_OUT_DIR}
-      COMMENT "Compiling ${SY_FILE} -> ${OUT_ELF} (via LLVM IR and RISC-V toolchain)"
-    )
-
-    list(APPEND LLVM_ELF_TARGETS ${OUT_ELF})
-  endforeach()
-
-  add_custom_target(llvm_build_all DEPENDS ${LLVM_ELF_TARGETS})
-  add_custom_target(llvm_build_verbose ALL DEPENDS llvm_build_all)
-endif()
+foreach(LLVM_LEVEL IN ITEMS lv1 lv3 lv4 lv5 lv6 lv7 lv8 lv9)
+  add_test(
+    NAME compiler_llvm_${LLVM_LEVEL}_test
+    COMMAND compiler_llvm_test
+      "${CMAKE_CURRENT_SOURCE_DIR}/testsuit-collection/${LLVM_LEVEL}"
+      --timeout-seconds 10
+  )
+endforeach()
