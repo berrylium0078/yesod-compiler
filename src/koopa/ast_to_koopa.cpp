@@ -142,29 +142,6 @@ namespace {
         return scalarExprs;
     }
 
-    bool isDigit(char ch) { return ch >= '0' && ch <= '9'; }
-
-    bool isAllDigits(const std::string& text)
-    {
-        if (text.empty()) {
-            return false;
-        }
-        for (const char ch : text) {
-            if (!isDigit(ch)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    std::string normalizeIdentifierStem(std::string stem)
-    {
-        if (!stem.empty() && isDigit(stem.front()) && !isAllDigits(stem)) {
-            stem.insert(stem.begin(), '_');
-        }
-        return stem;
-    }
-
     std::string makeFunctionName(const std::string& identifier)
     {
         return "@" + identifier;
@@ -177,7 +154,7 @@ namespace {
 
     std::string makeTempName(int32_t& nextTempId)
     {
-        return "%t" + std::to_string(nextTempId++);
+        return "%t_" + std::to_string(nextTempId++);
     }
 
     const SemanticSymbol& requireSymbolForIdentifier(Ref<Identifier> identifier,
@@ -410,7 +387,6 @@ namespace {
             Ref<koopa_ir::BasicBlock>>
             m_basicBlockBySemanticBlock;
         std::unordered_set<Ref<koopa_ir::BasicBlock>> m_terminatedBlocks;
-        std::unordered_set<std::string> m_usedSymbolNames;
         SemanticType m_functionReturnType = SemanticType::makeVoid();
 
         [[nodiscard]] koopa_ir::BasicBlock& currentBlock() const
@@ -423,23 +399,22 @@ namespace {
             return (*m_program)[m_function];
         }
 
-        [[nodiscard]] std::string makeUniqueLocalName(
+        [[nodiscard]] static std::string makeLocalStorageName(
             const frontend::SemanticSymbol& symbol)
         {
-            const std::string baseName
-                = "%" + normalizeIdentifierStem(symbol.name);
-            if (m_usedSymbolNames.insert(baseName).second) {
-                return baseName;
-            }
+            return "%v_" + std::to_string(symbol.m_id);
+        }
 
-            int32_t suffix = 1;
-            while (true) {
-                const std::string candidate
-                    = baseName + "_" + std::to_string(suffix++);
-                if (m_usedSymbolNames.insert(candidate).second) {
-                    return candidate;
-                }
-            }
+        [[nodiscard]] std::string makeBlockName()
+        {
+            return "%bb_" + std::to_string(m_nextBlockId++);
+        }
+
+        [[nodiscard]] static std::string makeBlockParamName(
+            int32_t blockId, size_t paramIndex)
+        {
+            return "%bp_" + std::to_string(blockId) + "_"
+                + std::to_string(paramIndex);
         }
 
         [[nodiscard]] static int64_t aliasKey(
@@ -697,8 +672,7 @@ namespace {
             auto blockRef
                 = m_program->alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
                     .sourcePos = { },
-                    .label = makeIrSymbol(
-                        "%" + stem + "_" + std::to_string(m_nextBlockId++)),
+                    .label = makeIrSymbol(makeBlockName()),
                     .params = { },
                     .statements = { },
                     .terminator = placeholderRef,
@@ -891,7 +865,7 @@ namespace {
                         }
 
                         const std::string allocName
-                            = state.makeUniqueLocalName(symbol);
+                            = state.makeLocalStorageName(symbol);
                         (void)state.emitAlloc(type, allocName);
                         state.m_storageBySymbolId[symbol.m_id] = allocName;
 
@@ -959,7 +933,7 @@ namespace {
                         }
 
                         const std::string allocName
-                            = state.makeUniqueLocalName(symbol);
+                            = state.makeLocalStorageName(symbol);
                         (void)state.emitAlloc(type, allocName);
                         state.m_storageBySymbolId[symbol.m_id] = allocName;
                         if (!resolvedVarDef.initVal) {
@@ -1873,11 +1847,11 @@ namespace {
                 [&](Ref<koopa_ir::ReturnTerminator>) { });
         }
 
+        const auto defaultReturnBlockRef = function.blocks.back();
         std::erase_if(function.blocks, [&](Ref<koopa_ir::BasicBlock> blockRef) {
-            // Always keep the synthesized %end block (default return guard),
-            // even if it's unreachable from entry (e.g., function returns
-            // early).
-            if (program[blockRef].label.spelling == "%end") {
+            // Always keep the synthesized default return guard, even if it is
+            // unreachable from entry (e.g., function returns early).
+            if (blockRef == defaultReturnBlockRef) {
                 return false;
             }
             return !reachableBlocks.contains(blockRef);
@@ -1900,7 +1874,7 @@ namespace {
             params.push_back(program.alloc<koopa_ir::FunctionParameter>(
                 koopa_ir::FunctionParameter {
                     .sourcePos = { },
-                    .symbol = makeIrSymbol("%arg" + std::to_string(i)),
+                    .symbol = makeIrSymbol("%arg_" + std::to_string(i)),
                     .type
                     = lowerSemanticTypeToIr(program, funcInfo.m_paramTypes[i]),
                     .annotations = { },
@@ -2028,6 +2002,7 @@ namespace {
                 "function definition is missing semantic SSA");
         }
 
+        int32_t nextBlockId = 1;
         auto placeholderRef = program.alloc<koopa_ir::ReturnTerminator>(
             koopa_ir::ReturnTerminator {
                 .sourcePos = { },
@@ -2042,7 +2017,7 @@ namespace {
             .m_currentBasicBlock
             = program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
                 .sourcePos = { },
-                .label = makeIrSymbol("%placeholder"),
+                .label = makeIrSymbol("%bb_0"),
                 .params = { },
                 .statements = { },
                 .terminator = placeholderRef,
@@ -2056,13 +2031,12 @@ namespace {
 
         auto& function = program[functionRef];
         function.blocks.clear();
-        const auto& controlFlowArena = semanticInfo.controlFlowArena();
         for (const auto semanticBlockRef : controlFlow->blocks) {
-            const auto& semanticBlock = semanticBlockRef(controlFlowArena);
+            const int32_t blockId = nextBlockId++;
             auto blockRef
                 = program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
                     .sourcePos = { },
-                    .label = makeIrSymbol("%" + semanticBlock.nameHint),
+                    .label = makeIrSymbol("%bb_" + std::to_string(blockId)),
                     .params = { },
                     .statements = { },
                     .terminator = placeholderRef,
@@ -2087,8 +2061,9 @@ namespace {
                 block.params.push_back(program.alloc<koopa_ir::BlockParameter>(
                     koopa_ir::BlockParameter {
                         .sourcePos = { },
-                        .symbol = makeIrSymbol(
-                            block.label.spelling + "_arg" + std::to_string(i)),
+                        .symbol
+                        = makeIrSymbol(IrFunctionGenerator::makeBlockParamName(
+                            blockId, i)),
                         .type = lowerSemanticTypeToIr(
                             program, blockParamSymbol->object().m_type, false),
                         .annotations = { },
@@ -2098,6 +2073,7 @@ namespace {
                 semanticBlockRef, blockRef);
             function.blocks.push_back(blockRef);
         }
+        state.m_nextBlockId = nextBlockId;
 
         const auto entryBlockRef
             = state.m_basicBlockBySemanticBlock.at(controlFlow->entryBlock);
@@ -2113,7 +2089,7 @@ namespace {
                     funcFParam.identifier, program[function.params[i]].symbol);
             }
             const std::string allocName
-                = state.makeUniqueLocalName(paramSymbol);
+                = state.makeLocalStorageName(paramSymbol);
             (void)state.emitAlloc(paramSymbol.object().m_type, allocName);
             auto storeRef
                 = program.alloc<koopa_ir::StoreStmt>(koopa_ir::StoreStmt {

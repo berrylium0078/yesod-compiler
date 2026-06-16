@@ -4,7 +4,6 @@
 #include "utils.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <map>
 #include <ostream>
 #include <sstream>
@@ -29,41 +28,9 @@ namespace {
         return spelling;
     }
 
-    [[nodiscard]] uint64_t stableHash(const std::string& text)
+    const std::string& llvmValueName(const std::string& spelling)
     {
-        uint64_t hash = 1469598103934665603ULL;
-        for (const unsigned char ch : text) {
-            hash ^= ch;
-            hash *= 1099511628211ULL;
-        }
-        return hash;
-    }
-
-    [[nodiscard]] std::string toBase36(uint64_t value)
-    {
-        static constexpr char DIGITS[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-        if (value == 0) {
-            return "0";
-        }
-        std::string result;
-        while (value > 0) {
-            result.push_back(DIGITS[value % 36]);
-            value /= 36;
-        }
-        std::reverse(result.begin(), result.end());
-        return result;
-    }
-
-    std::string llvmValueName(const std::string& spelling)
-    {
-        if (spelling.size() <= 120
-            || (spelling.front() != '%' && spelling.front() != '@')) {
-            return spelling;
-        }
-        const char sigil = spelling.front();
-        const std::string body = spelling.substr(1);
-        return std::string(1, sigil) + body.substr(0, 32) + "_"
-            + toBase36(stableHash(spelling));
+        return spelling;
     }
 
     // ─── Type emission ────────────────────────────────────────────────────
@@ -249,8 +216,7 @@ namespace {
         for (const auto& blockRef : function.blocks) {
             const auto& block = program[blockRef];
             const std::string rawLabel = stripPrefix(block.label.spelling);
-            const std::string label
-                = "bb_" + (rawLabel.empty() ? "__empty" : rawLabel);
+            const std::string label = rawLabel.empty() ? "__empty" : rawLabel;
             blockLabels[block.label.spelling] = label;
             incoming[block.label.spelling].resize(block.params.size());
         }
