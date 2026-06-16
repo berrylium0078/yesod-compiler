@@ -36,6 +36,32 @@ Mint Mint::operator*(const Mint& rhs) const
     return Mint(static_cast<int64_t>(m_value) * rhs.m_value);
 }
 
+namespace {
+
+    [[nodiscard]] int64_t mpow(int64_t a, int64_t e)
+    {
+        int64_t r = 1;
+        while (e > 0) {
+            if (e & 1) {
+                r = (r * a) % Mint::MOD;
+            }
+            a = (a * a) % Mint::MOD;
+            e >>= 1;
+        }
+        return r;
+    }
+
+} // namespace
+
+Mint Mint::operator/(const Mint& rhs) const
+{
+    if (rhs.m_value == 0) {
+        // Division by zero is undefined; return 0 as a safe fallback.
+        return Mint(0);
+    }
+    return Mint(static_cast<int64_t>(m_value) * mpow(rhs.m_value, MOD - 2));
+}
+
 Mint& Mint::operator+=(const Mint& rhs)
 {
     *this = *this + rhs;

@@ -21,6 +21,7 @@ public:
     [[nodiscard]] Mint operator+(const Mint& rhs) const;
     [[nodiscard]] Mint operator-(const Mint& rhs) const;
     [[nodiscard]] Mint operator*(const Mint& rhs) const;
+    [[nodiscard]] Mint operator/(const Mint& rhs) const;
     Mint& operator+=(const Mint& rhs);
     Mint& operator-=(const Mint& rhs);
     Mint& operator*=(const Mint& rhs);

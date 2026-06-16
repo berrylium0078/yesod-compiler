@@ -468,6 +468,8 @@ namespace {
                 return left - right;
             case frontend::BinaryOpKeyword::star:
                 return left * right;
+            case frontend::BinaryOpKeyword::slash:
+                return left / right;
             case frontend::BinaryOpKeyword::equal:
                 return left == right;
             case frontend::BinaryOpKeyword::notEqual:
