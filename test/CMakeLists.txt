@@ -130,9 +130,35 @@ add_test(NAME koopa_poly_test COMMAND koopa_poly_test)
 add_executable(koopa_extra_test
   koopa/koopa_extra_test.cpp
   koopa/koopa_interpreter.cpp
+  interpreter_runner.cpp
 )
 target_link_libraries(koopa_extra_test core)
 target_compile_definitions(koopa_extra_test
+  PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+set(POLY_INTERPRETER_SOURCES
+  interpreter_runner.cpp
+  poly/poly_runtime.cpp
+  poly/poly_interpreter.cpp
+  poly/poly_test_driver.cpp
+)
+
+add_executable(poly_base_extra_test
+  poly/poly_base_extra_test.cpp
+  ${POLY_INTERPRETER_SOURCES}
+)
+target_link_libraries(poly_base_extra_test core)
+target_compile_definitions(poly_base_extra_test
+  PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+add_executable(poly_extra_test
+  poly/poly_extra_test.cpp
+  ${POLY_INTERPRETER_SOURCES}
+)
+target_link_libraries(poly_extra_test core)
+target_compile_definitions(poly_extra_test
   PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
