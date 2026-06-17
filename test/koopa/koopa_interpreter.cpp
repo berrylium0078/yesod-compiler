@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "poly/poly_runtime.h"
 #include "utils.h"
 
 namespace yesod::test_support::koopa::interpreter {
@@ -45,6 +46,8 @@ namespace {
     using koopa_ir::SymbolDef;
     using koopa_ir::Type;
     using koopa_ir::Value;
+    using yesod::test_support::poly::Mint;
+    using yesod::test_support::poly::Poly;
 
     class ExecuteException : public std::runtime_error {
     public:
@@ -63,6 +66,9 @@ namespace {
     struct TypeInfo {
         enum class Kind {
             i32,
+            mint,
+            poly,
+            pv,
             array,
             pointer,
             unsupported,
@@ -80,7 +86,7 @@ namespace {
     };
 
     struct RuntimeValue {
-        std::variant<int32_t, Address> value = int32_t { 0 };
+        std::variant<int32_t, Address, Mint, Poly> value = int32_t { 0 };
     };
 
     struct MemoryObject {
@@ -105,7 +111,7 @@ namespace {
         Kind kind = Kind::ret;
         const BasicBlock* targetBlock = nullptr;
         std::vector<RuntimeValue> args;
-        std::optional<int32_t> returnValue;
+        std::optional<RuntimeValue> returnValue;
     };
 
     [[nodiscard]] std::string symbolName(const Symbol& symbol)
@@ -131,6 +137,27 @@ namespace {
             ExecuteStatus::runtimeError, "expected address runtime value");
     }
 
+    [[nodiscard]] Mint requireMint(const RuntimeValue& value)
+    {
+        if (const auto* mintValue = std::get_if<Mint>(&value.value)) {
+            return *mintValue;
+        }
+        if (const auto* intValue = std::get_if<int32_t>(&value.value)) {
+            return Mint(*intValue);
+        }
+        throw ExecuteException(
+            ExecuteStatus::runtimeError, "expected mint runtime value");
+    }
+
+    [[nodiscard]] Poly requirePoly(const RuntimeValue& value)
+    {
+        if (const auto* polyValue = std::get_if<Poly>(&value.value)) {
+            return *polyValue;
+        }
+        throw ExecuteException(
+            ExecuteStatus::runtimeError, "expected poly runtime value");
+    }
+
     [[nodiscard]] RuntimeValue makeInt(int32_t value)
     {
         return RuntimeValue { .value = value };
@@ -139,6 +166,16 @@ namespace {
     [[nodiscard]] RuntimeValue makeAddress(Address address)
     {
         return RuntimeValue { .value = std::move(address) };
+    }
+
+    [[nodiscard]] RuntimeValue makeMint(Mint value)
+    {
+        return RuntimeValue { .value = value };
+    }
+
+    [[nodiscard]] RuntimeValue makePoly(Poly value)
+    {
+        return RuntimeValue { .value = std::move(value) };
     }
 
     class Interpreter {
@@ -164,7 +201,8 @@ namespace {
             }
 
             ExecuteResult result;
-            result.returnValue = callUserFunction(*mainFunction, { });
+            result.returnValue
+                = requireInt(callUserFunction(*mainFunction, { }));
             return result;
         }
 
@@ -179,15 +217,15 @@ namespace {
                 },
                 [&](const koopa_ir::MintType&) -> std::shared_ptr<TypeInfo> {
                     return std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::unsupported });
+                        TypeInfo { .kind = TypeInfo::Kind::mint });
                 },
                 [&](const koopa_ir::PolyType&) -> std::shared_ptr<TypeInfo> {
                     return std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::unsupported });
+                        TypeInfo { .kind = TypeInfo::Kind::poly });
                 },
                 [&](const koopa_ir::PvType&) -> std::shared_ptr<TypeInfo> {
                     return std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::unsupported });
+                        TypeInfo { .kind = TypeInfo::Kind::pv });
                 },
                 [&](Ref<ArrayType> arrayRef) -> std::shared_ptr<TypeInfo> {
                     const auto& arrayType = m_program[arrayRef];
@@ -219,6 +257,9 @@ namespace {
             }
             switch (type->kind) {
             case TypeInfo::Kind::i32:
+            case TypeInfo::Kind::mint:
+            case TypeInfo::Kind::poly:
+            case TypeInfo::Kind::pv:
                 return 1;
             case TypeInfo::Kind::array:
                 return type->length * typeSize(type->element);
@@ -229,6 +270,29 @@ namespace {
                     ExecuteStatus::unsupported, "unsupported Koopa IR type");
             }
             throw ExecuteException(ExecuteStatus::runtimeError, "unknown type");
+        }
+
+        [[nodiscard]] RuntimeValue defaultCellValue(
+            const std::shared_ptr<TypeInfo>& type) const
+        {
+            if (!type) {
+                return makeInt(0);
+            }
+            switch (type->kind) {
+            case TypeInfo::Kind::i32:
+                return makeInt(0);
+            case TypeInfo::Kind::mint:
+                return makeMint(Mint(0));
+            case TypeInfo::Kind::poly:
+            case TypeInfo::Kind::pv:
+                return makePoly(Poly());
+            case TypeInfo::Kind::array:
+                return defaultCellValue(type->element);
+            case TypeInfo::Kind::pointer:
+            case TypeInfo::Kind::unsupported:
+                return makeInt(0);
+            }
+            return makeInt(0);
         }
 
         [[nodiscard]] std::shared_ptr<TypeInfo> pointerTo(
@@ -432,8 +496,8 @@ namespace {
                 const int32_t size = typeSize(allocType);
                 const size_t objectId = m_memory.size();
                 m_memory.push_back(MemoryObject {
-                    .cells
-                    = std::vector<RuntimeValue>(static_cast<size_t>(size)),
+                    .cells = std::vector<RuntimeValue>(
+                        static_cast<size_t>(size), defaultCellValue(allocType)),
                 });
                 initializeCells(global->initializer, allocType,
                     Address {
@@ -522,7 +586,7 @@ namespace {
                 = evalStoreValue(value, frame);
         }
 
-        [[nodiscard]] int32_t callUserFunction(
+        [[nodiscard]] RuntimeValue callUserFunction(
             const FunctionDef& function, const std::vector<RuntimeValue>& args)
         {
             checkStopped();
@@ -555,7 +619,7 @@ namespace {
                     executeBlockStatements(frame);
                     TerminatorStep step = executeTerminator(frame);
                     if (step.kind == TerminatorStep::Kind::ret) {
-                        return step.returnValue.value_or(0);
+                        return step.returnValue.value_or(makeInt(0));
                     }
                     assert(step.targetBlock != nullptr);
                     bindBlockArgs(*step.targetBlock, step.args, frame);
@@ -600,7 +664,8 @@ namespace {
                     const size_t objectId = m_memory.size();
                     m_memory.push_back(MemoryObject {
                         .cells
-                        = std::vector<RuntimeValue>(static_cast<size_t>(size)),
+                        = std::vector<RuntimeValue>(static_cast<size_t>(size),
+                            defaultCellValue(allocType)),
                     });
                     frame.values[name] = makeAddress(Address {
                         .objectId = objectId,
@@ -642,39 +707,136 @@ namespace {
                 },
                 [&](Ref<BinaryExpr> binaryRef) -> void {
                     frame.values[name]
-                        = makeInt(executeBinary(m_program[binaryRef], frame));
+                        = executeBinary(m_program[binaryRef], frame);
                     frame.types[name] = std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::i32 });
+                        typeInfoForRuntimeValue(frame.values[name]));
                 },
                 [&](Ref<CallExpr> callRef) -> void {
-                    frame.values[name] = makeInt(
-                        executeCall(m_program[callRef], frame).value_or(0));
+                    const auto result = executeCall(m_program[callRef], frame);
+                    frame.values[name] = result.value_or(makeInt(0));
                     frame.types[name] = std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::i32 });
+                        typeInfoForRuntimeValue(frame.values[name]));
                 },
-                [&](Ref<koopa_ir::UnaryPolyExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "poly expression unsupported");
+                [&](Ref<koopa_ir::UnaryPolyExpr> unaryRef) -> void {
+                    const auto& expr = m_program[unaryRef];
+                    frame.values[name] = evalValue(expr.value, frame);
+                    frame.types[name] = std::make_shared<TypeInfo>(TypeInfo {
+                        .kind = expr.op == koopa_ir::UnaryPolyOp::ntt
+                            ? TypeInfo::Kind::pv
+                            : TypeInfo::Kind::poly,
+                    });
                 },
-                [&](Ref<koopa_ir::PvBinaryExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "poly expression unsupported");
+                [&](Ref<koopa_ir::PvBinaryExpr> pvBinaryRef) -> void {
+                    const auto& expr = m_program[pvBinaryRef];
+                    const RuntimeValue lhs = evalValue(expr.lhs, frame);
+                    const RuntimeValue rhs = evalValue(expr.rhs, frame);
+                    frame.values[name] = executePvBinary(expr.op, lhs, rhs);
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::pv });
                 },
-                [&](Ref<koopa_ir::CombineExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "poly expression unsupported");
+                [&](Ref<koopa_ir::CombineExpr> combineRef) -> void {
+                    frame.values[name] = makePoly(
+                        executeCombine(m_program[combineRef], frame));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::poly });
                 },
-                [&](Ref<koopa_ir::GetCoeffExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "poly expression unsupported");
+                [&](Ref<koopa_ir::GetCoeffExpr> getCoeffRef) -> void {
+                    const auto& expr = m_program[getCoeffRef];
+                    frame.values[name] = makeMint(
+                        requirePoly(evalValue(expr.value, frame))
+                            .coeff(requireInt(evalValue(expr.index, frame))));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::mint });
                 },
-                [&](Ref<koopa_ir::PolyConstructExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "poly expression unsupported");
+                [&](Ref<koopa_ir::PolyConstructExpr> constructRef) -> void {
+                    const auto& expr = m_program[constructRef];
+                    std::vector<Mint> coefficients;
+                    coefficients.reserve(expr.elements.size());
+                    for (const auto& element : expr.elements) {
+                        coefficients.push_back(
+                            requireMint(evalValue(element, frame)));
+                    }
+                    frame.values[name]
+                        = makePoly(Poly(std::move(coefficients)));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::poly });
                 },
-                [&](Ref<koopa_ir::ConversionExpr>) -> void {
-                    throw ExecuteException(ExecuteStatus::unsupported,
-                        "conversion expression unsupported");
+                [&](Ref<koopa_ir::ConversionExpr> conversionRef) -> void {
+                    const auto& expr = m_program[conversionRef];
+                    const RuntimeValue value = evalValue(expr.value, frame);
+                    if (expr.op == koopa_ir::ConversionOp::int2mint) {
+                        frame.values[name] = makeMint(Mint(requireInt(value)));
+                        frame.types[name] = std::make_shared<TypeInfo>(
+                            TypeInfo { .kind = TypeInfo::Kind::mint });
+                    } else {
+                        frame.values[name]
+                            = makeInt(requireMint(value).value());
+                        frame.types[name] = std::make_shared<TypeInfo>(
+                            TypeInfo { .kind = TypeInfo::Kind::i32 });
+                    }
+                });
+        }
+
+        [[nodiscard]] RuntimeValue executePvBinary(koopa_ir::PvBinaryOp op,
+            const RuntimeValue& lhs, const RuntimeValue& rhs) const
+        {
+            switch (op) {
+            case koopa_ir::PvBinaryOp::add:
+                return makePoly(requirePoly(lhs) + requirePoly(rhs));
+            case koopa_ir::PvBinaryOp::sub:
+                return makePoly(requirePoly(lhs) - requirePoly(rhs));
+            case koopa_ir::PvBinaryOp::mul:
+                if (std::holds_alternative<Poly>(lhs.value)
+                    && std::holds_alternative<Poly>(rhs.value)) {
+                    return makePoly(requirePoly(lhs) * requirePoly(rhs));
+                }
+                if (std::holds_alternative<Poly>(lhs.value)) {
+                    return makePoly(requirePoly(lhs) * requireMint(rhs));
+                }
+                return makePoly(requireMint(lhs) * requirePoly(rhs));
+            }
+            throw ExecuteException(
+                ExecuteStatus::runtimeError, "unknown pv operation");
+        }
+
+        [[nodiscard]] Poly executeCombine(
+            const koopa_ir::CombineExpr& expr, Frame& frame)
+        {
+            Poly result;
+            for (const auto& term : expr.terms) {
+                const int32_t start = requireInt(evalValue(term.start, frame));
+                const int32_t end = term.end.has_value()
+                    ? requireInt(evalValue(*term.end, frame))
+                    : std::numeric_limits<int32_t>::max();
+                const int32_t shift = requireInt(evalValue(term.shift, frame));
+                const Mint scale = requireMint(evalValue(term.scale, frame));
+                Poly value = requirePoly(evalValue(term.value, frame))
+                                 .slice(start, end)
+                                 .shiftRight(shift)
+                    * scale;
+                result = result + value;
+            }
+            return result;
+        }
+
+        [[nodiscard]] TypeInfo typeInfoForRuntimeValue(
+            const RuntimeValue& value) const
+        {
+            return MATCH(value.value) WITH(
+                [](int32_t) -> TypeInfo {
+                    return TypeInfo { .kind = TypeInfo::Kind::i32 };
+                },
+                [](const Address& address) -> TypeInfo {
+                    return TypeInfo {
+                        .kind = TypeInfo::Kind::pointer,
+                        .element = address.pointeeType,
+                    };
+                },
+                [](const Mint&) -> TypeInfo {
+                    return TypeInfo { .kind = TypeInfo::Kind::mint };
+                },
+                [](const Poly&) -> TypeInfo {
+                    return TypeInfo { .kind = TypeInfo::Kind::poly };
                 });
         }
 
@@ -686,61 +848,100 @@ namespace {
                 storeStmt.value, frame, address.pointeeType, address);
         }
 
-        [[nodiscard]] int32_t executeBinary(
+        [[nodiscard]] RuntimeValue executeBinary(
             const BinaryExpr& binaryExpr, Frame& frame)
         {
-            const int32_t lhs = requireInt(evalValue(binaryExpr.lhs, frame));
-            const int32_t rhs = requireInt(evalValue(binaryExpr.rhs, frame));
+            const RuntimeValue lhsValue = evalValue(binaryExpr.lhs, frame);
+            const RuntimeValue rhsValue = evalValue(binaryExpr.rhs, frame);
+            if (std::holds_alternative<Mint>(lhsValue.value)
+                || std::holds_alternative<Mint>(rhsValue.value)) {
+                const Mint lhs = requireMint(lhsValue);
+                const Mint rhs = requireMint(rhsValue);
+                switch (binaryExpr.op) {
+                case koopa_ir::BinaryOp::add:
+                    return makeMint(lhs + rhs);
+                case koopa_ir::BinaryOp::sub:
+                    return makeMint(lhs - rhs);
+                case koopa_ir::BinaryOp::mul:
+                    return makeMint(lhs * rhs);
+                case koopa_ir::BinaryOp::div:
+                    return makeMint(lhs / rhs);
+                case koopa_ir::BinaryOp::eq:
+                    return makeInt(lhs == rhs);
+                case koopa_ir::BinaryOp::ne:
+                    return makeInt(lhs != rhs);
+                case koopa_ir::BinaryOp::gt:
+                    return makeInt(lhs.value() > rhs.value());
+                case koopa_ir::BinaryOp::lt:
+                    return makeInt(lhs.value() < rhs.value());
+                case koopa_ir::BinaryOp::ge:
+                    return makeInt(lhs.value() >= rhs.value());
+                case koopa_ir::BinaryOp::le:
+                    return makeInt(lhs.value() <= rhs.value());
+                case koopa_ir::BinaryOp::mod:
+                case koopa_ir::BinaryOp::bitAnd:
+                case koopa_ir::BinaryOp::bitOr:
+                case koopa_ir::BinaryOp::bitXor:
+                case koopa_ir::BinaryOp::shl:
+                case koopa_ir::BinaryOp::shr:
+                case koopa_ir::BinaryOp::sar:
+                    throw ExecuteException(ExecuteStatus::runtimeError,
+                        "integer-only binary operation received mint");
+                }
+            }
+
+            const int32_t lhs = requireInt(lhsValue);
+            const int32_t rhs = requireInt(rhsValue);
             switch (binaryExpr.op) {
             case koopa_ir::BinaryOp::ne:
-                return lhs != rhs;
+                return makeInt(lhs != rhs);
             case koopa_ir::BinaryOp::eq:
-                return lhs == rhs;
+                return makeInt(lhs == rhs);
             case koopa_ir::BinaryOp::gt:
-                return lhs > rhs;
+                return makeInt(lhs > rhs);
             case koopa_ir::BinaryOp::lt:
-                return lhs < rhs;
+                return makeInt(lhs < rhs);
             case koopa_ir::BinaryOp::ge:
-                return lhs >= rhs;
+                return makeInt(lhs >= rhs);
             case koopa_ir::BinaryOp::le:
-                return lhs <= rhs;
+                return makeInt(lhs <= rhs);
             case koopa_ir::BinaryOp::add:
-                return lhs + rhs;
+                return makeInt(lhs + rhs);
             case koopa_ir::BinaryOp::sub:
-                return lhs - rhs;
+                return makeInt(lhs - rhs);
             case koopa_ir::BinaryOp::mul:
-                return lhs * rhs;
+                return makeInt(lhs * rhs);
             case koopa_ir::BinaryOp::div:
                 if (rhs == 0) {
                     throw ExecuteException(
                         ExecuteStatus::divisionByZero, "division by zero");
                 }
-                return lhs / rhs;
+                return makeInt(lhs / rhs);
             case koopa_ir::BinaryOp::mod:
                 if (rhs == 0) {
                     throw ExecuteException(
                         ExecuteStatus::divisionByZero, "modulo by zero");
                 }
-                return lhs % rhs;
+                return makeInt(lhs % rhs);
             case koopa_ir::BinaryOp::bitAnd:
-                return lhs & rhs;
+                return makeInt(lhs & rhs);
             case koopa_ir::BinaryOp::bitOr:
-                return lhs | rhs;
+                return makeInt(lhs | rhs);
             case koopa_ir::BinaryOp::bitXor:
-                return lhs ^ rhs;
+                return makeInt(lhs ^ rhs);
             case koopa_ir::BinaryOp::shl:
-                return lhs << rhs;
+                return makeInt(lhs << rhs);
             case koopa_ir::BinaryOp::shr:
-                return static_cast<int32_t>(
-                    static_cast<uint32_t>(lhs) >> static_cast<uint32_t>(rhs));
+                return makeInt(static_cast<int32_t>(
+                    static_cast<uint32_t>(lhs) >> static_cast<uint32_t>(rhs)));
             case koopa_ir::BinaryOp::sar:
-                return lhs >> rhs;
+                return makeInt(lhs >> rhs);
             }
             throw ExecuteException(
                 ExecuteStatus::runtimeError, "unknown binary operation");
         }
 
-        [[nodiscard]] std::optional<int32_t> executeCall(
+        [[nodiscard]] std::optional<RuntimeValue> executeCall(
             const CallExpr& callExpr, Frame& frame)
         {
             const std::string callee = symbolName(callExpr.callee);
@@ -762,21 +963,21 @@ namespace {
             return callUserFunction(*function, args);
         }
 
-        [[nodiscard]] std::optional<std::optional<int32_t>> executeBuiltin(
+        [[nodiscard]] std::optional<std::optional<RuntimeValue>> executeBuiltin(
             const std::string& callee, const std::vector<RuntimeValue>& args)
         {
             if (callee == "@getint") {
                 int32_t value = 0;
                 m_input >> value;
-                return std::optional<int32_t> { value };
+                return std::optional<RuntimeValue> { makeInt(value) };
             }
             if (callee == "@getch") {
                 const int value = m_input.get();
                 if (value == std::char_traits<char>::eof()) {
-                    return std::optional<int32_t> { -1 };
+                    return std::optional<RuntimeValue> { makeInt(-1) };
                 }
-                return std::optional<int32_t> { static_cast<int32_t>(
-                    static_cast<unsigned char>(value)) };
+                return std::optional<RuntimeValue> { makeInt(
+                    static_cast<int32_t>(static_cast<unsigned char>(value))) };
             }
             if (callee == "@getarray") {
                 requireArgCount(callee, args, 1);
@@ -793,17 +994,17 @@ namespace {
                     memory(element).cells[static_cast<size_t>(element.offset)]
                         = makeInt(value);
                 }
-                return std::optional<int32_t> { count };
+                return std::optional<RuntimeValue> { makeInt(count) };
             }
             if (callee == "@putint") {
                 requireArgCount(callee, args, 1);
                 m_output << requireInt(args[0]);
-                return std::optional<int32_t> { };
+                return std::optional<RuntimeValue> { };
             }
             if (callee == "@putch") {
                 requireArgCount(callee, args, 1);
                 m_output << static_cast<char>(requireInt(args[0]));
-                return std::optional<int32_t> { };
+                return std::optional<RuntimeValue> { };
             }
             if (callee == "@putarray") {
                 requireArgCount(callee, args, 2);
@@ -821,10 +1022,53 @@ namespace {
                                    .cells[static_cast<size_t>(element.offset)]);
                 }
                 m_output << '\n';
-                return std::optional<int32_t> { };
+                return std::optional<RuntimeValue> { };
+            }
+            if (callee == "@putpoly") {
+                requireArgCount(callee, args, 1);
+                m_output << requirePoly(args[0]);
+                return std::optional<RuntimeValue> { };
+            }
+            if (callee == "@__yesod_poly_len") {
+                requireArgCount(callee, args, 1);
+                return std::optional<RuntimeValue> { makeInt(
+                    requirePoly(args[0]).length()) };
+            }
+            if (callee == "@__yesod_max") {
+                requireArgCount(callee, args, 2);
+                return std::optional<RuntimeValue> { makeInt(
+                    std::max(requireInt(args[0]), requireInt(args[1]))) };
+            }
+            if (callee == "@__yesod_min") {
+                requireArgCount(callee, args, 2);
+                return std::optional<RuntimeValue> { makeInt(
+                    std::min(requireInt(args[0]), requireInt(args[1]))) };
+            }
+            if (callee == "@__yesod_poly_mul_len") {
+                requireArgCount(callee, args, 2);
+                const int32_t lhs = requireInt(args[0]);
+                const int32_t rhs = requireInt(args[1]);
+                return std::optional<RuntimeValue> { makeInt(
+                    lhs != 0 && rhs != 0 ? lhs + rhs - 1 : 0) };
+            }
+            if (callee == "@__yesod_poly_shift_len") {
+                requireArgCount(callee, args, 2);
+                return std::optional<RuntimeValue> { makeInt(
+                    std::max(0, requireInt(args[0]) - requireInt(args[1]))) };
+            }
+            if (callee == "@__yesod_poly_slice_len") {
+                requireArgCount(callee, args, 3);
+                const int32_t length = requireInt(args[0]);
+                const int32_t start = requireInt(args[1]);
+                const int32_t end = requireInt(args[2]);
+                if (end <= 0 || start >= end || start >= length) {
+                    return std::optional<RuntimeValue> { makeInt(0) };
+                }
+                return std::optional<RuntimeValue> { makeInt(
+                    std::min(end, length)) };
             }
             if (callee == "@starttime" || callee == "@stoptime") {
-                return std::optional<int32_t> { };
+                return std::optional<RuntimeValue> { };
             }
             return std::nullopt;
         }
@@ -871,8 +1115,8 @@ namespace {
                     return TerminatorStep {
                         .kind = TerminatorStep::Kind::ret,
                         .returnValue = terminator.value.has_value()
-                            ? std::optional<int32_t> { requireInt(
-                                  evalValue(*terminator.value, frame)) }
+                            ? std::optional<RuntimeValue> { evalValue(
+                                  *terminator.value, frame) }
                             : std::nullopt,
                     };
                 });

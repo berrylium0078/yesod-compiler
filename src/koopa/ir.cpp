@@ -43,7 +43,7 @@ namespace {
                 std::ostringstream output;
                 output << '(';
                 for (size_t index = 0; index < functionType.paramTypes.size();
-                     ++index) {
+                    ++index) {
                     if (index != 0) {
                         output << ", ";
                     }
@@ -98,7 +98,7 @@ namespace {
                 std::ostringstream output;
                 output << '{';
                 for (size_t index = 0; index < aggregate.elements.size();
-                     ++index) {
+                    ++index) {
                     if (index != 0) {
                         output << ", ";
                     }
@@ -174,7 +174,7 @@ namespace {
                                 output << "call "
                                        << serializeSymbol(expr.callee) << "(";
                                 for (size_t index = 0; index < expr.args.size();
-                                     ++index) {
+                                    ++index) {
                                     if (index != 0) {
                                         output << ", ";
                                     }
@@ -200,7 +200,7 @@ namespace {
                                     output << ' ';
                                 }
                                 for (size_t index = 0;
-                                     index < expr.terms.size(); ++index) {
+                                    index < expr.terms.size(); ++index) {
                                     if (index != 0) {
                                         output << ", ";
                                     }
@@ -218,7 +218,7 @@ namespace {
                                 const auto& expr = program[rhsRef];
                                 output << "poly_construct [";
                                 for (size_t index = 0;
-                                     index < expr.elements.size(); ++index) {
+                                    index < expr.elements.size(); ++index) {
                                     if (index != 0) {
                                         output << ", ";
                                     }
@@ -246,7 +246,7 @@ namespace {
                     output << "  call " << serializeSymbol(callExpr.callee)
                            << "(";
                     for (size_t index = 0; index < callExpr.args.size();
-                         ++index) {
+                        ++index) {
                         if (index != 0) {
                             output << ", ";
                         }
@@ -272,7 +272,7 @@ namespace {
                     if (!branch.trueArgs.empty()) {
                         output << '(';
                         for (size_t index = 0; index < branch.trueArgs.size();
-                             ++index) {
+                            ++index) {
                             if (index != 0) {
                                 output << ", ";
                             }
@@ -284,7 +284,7 @@ namespace {
                     if (!branch.falseArgs.empty()) {
                         output << '(';
                         for (size_t index = 0; index < branch.falseArgs.size();
-                             ++index) {
+                            ++index) {
                             if (index != 0) {
                                 output << ", ";
                             }
@@ -300,7 +300,7 @@ namespace {
                     if (!jump.args.empty()) {
                         output << '(';
                         for (size_t index = 0; index < jump.args.size();
-                             ++index) {
+                            ++index) {
                             if (index != 0) {
                                 output << ", ";
                             }
@@ -362,7 +362,7 @@ namespace {
                     const auto& function = program[itemRef];
                     output << "decl " << serializeSymbol(function.name) << '(';
                     for (size_t index = 0; index < function.paramTypes.size();
-                         ++index) {
+                        ++index) {
                         if (index != 0) {
                             output << ", ";
                         }
@@ -379,7 +379,7 @@ namespace {
                     const auto& function = program[itemRef];
                     output << "fun " << serializeSymbol(function.name) << '(';
                     for (size_t index = 0; index < function.params.size();
-                         ++index) {
+                        ++index) {
                         if (index != 0) {
                             output << ", ";
                         }
@@ -394,7 +394,7 @@ namespace {
                     }
                     output << " {\n";
                     for (size_t blockIndex = 0;
-                         blockIndex < function.blocks.size(); ++blockIndex) {
+                        blockIndex < function.blocks.size(); ++blockIndex) {
                         serializeBlock(output,
                             program[function.blocks[blockIndex]], program);
                         if (blockIndex + 1 != function.blocks.size()) {
@@ -411,7 +411,7 @@ namespace {
 
 void Program::clear()
 {
-    sourcePos = SourcePos {};
+    sourcePos = SourcePos { };
     annotations.clear();
     items.clear();
     m_nodes.clear();
@@ -598,8 +598,8 @@ namespace {
         if (!valueMatchesType(value, expected, valueTypes)) {
             std::string fullMessage;
             if (offset >= 0) {
-                fullMessage = "at offset " + std::to_string(offset)
-                    + ": " + message;
+                fullMessage
+                    = "at offset " + std::to_string(offset) + ": " + message;
             } else {
                 fullMessage = message;
             }
@@ -615,14 +615,6 @@ namespace {
             [](const UndefValue& undef) { return undef.sourcePos.m_offset; });
     }
 
-    [[nodiscard]] int32_t sourceOffset(const std::optional<Value>& value)
-    {
-        if (value.has_value()) {
-            return sourceOffset(*value);
-        }
-        return -1;
-    }
-
 } // namespace
 
 void validate(const Program& program)
@@ -630,6 +622,9 @@ void validate(const Program& program)
     std::unordered_map<std::string, ValidationType> valueTypes;
     std::unordered_map<std::string, Type> pointeeTypes;
     std::unordered_set<std::string> combineSymbols;
+    std::unordered_set<std::string> pvAddSymbols;
+    std::unordered_set<std::string> pvMulSymbols;
+    std::unordered_set<std::string> inttSymbols;
 
     for (const auto& item : program.items) {
         std::visit(
@@ -661,6 +656,27 @@ void validate(const Program& program)
                                         symbolDef.rhs)) {
                                     combineSymbols.insert(
                                         symbolDef.symbol.spelling);
+                                }
+                                if (const auto* unaryRef
+                                    = std::get_if<Ref<UnaryPolyExpr>>(
+                                        &symbolDef.rhs)) {
+                                    if (program[*unaryRef].op
+                                        == UnaryPolyOp::intt) {
+                                        inttSymbols.insert(
+                                            symbolDef.symbol.spelling);
+                                    }
+                                }
+                                if (const auto* pvRef
+                                    = std::get_if<Ref<PvBinaryExpr>>(
+                                        &symbolDef.rhs)) {
+                                    const auto& expr = program[*pvRef];
+                                    if (expr.op == PvBinaryOp::mul) {
+                                        pvMulSymbols.insert(
+                                            symbolDef.symbol.spelling);
+                                    } else {
+                                        pvAddSymbols.insert(
+                                            symbolDef.symbol.spelling);
+                                    }
                                 }
                             }
                         }
@@ -736,7 +752,37 @@ void validate(const Program& program)
                 }
             },
             [&](Ref<CallExpr> ref) -> ValidationType {
-                (void)ref;
+                const auto& expr = program[ref];
+                if (expr.callee.spelling == "@__yesod_poly_len") {
+                    if (expr.args.size() != 1) {
+                        throw std::runtime_error(
+                            "poly_len expects one argument");
+                    }
+                    if (const auto* symbol = std::get_if<Symbol>(&expr.args[0]);
+                        symbol != nullptr
+                        && (combineSymbols.contains(symbol->spelling)
+                            || inttSymbols.contains(symbol->spelling))) {
+                        throw std::runtime_error(
+                            "poly_len cannot consume a fused poly result");
+                    }
+                    requireValueType(expr.args[0], ValidationType::poly,
+                        valueTypes, "poly_len expects a poly operand",
+                        sourceOffset(expr.args[0]));
+                    return ValidationType::integer;
+                }
+                if (expr.callee.spelling == "@__yesod_max"
+                    || expr.callee.spelling == "@__yesod_min"
+                    || expr.callee.spelling == "@__yesod_poly_mul_len"
+                    || expr.callee.spelling == "@__yesod_poly_shift_len"
+                    || expr.callee.spelling == "@__yesod_poly_slice_len") {
+                    for (const auto& arg : expr.args) {
+                        requireValueType(arg, ValidationType::integer,
+                            valueTypes,
+                            "poly length helper expects integer operands",
+                            sourceOffset(arg));
+                    }
+                    return ValidationType::integer;
+                }
                 return ValidationType::unknown;
             },
             [&](Ref<UnaryPolyExpr> ref) -> ValidationType {
@@ -759,7 +805,21 @@ void validate(const Program& program)
                 const auto rhsType
                     = validationTypeOfValue(expr.rhs, valueTypes);
                 auto offset = expr.sourcePos.m_offset;
+                auto requireNotNested
+                    = [&](const Value& value,
+                          const std::unordered_set<std::string>& symbols,
+                          const char* message) {
+                          if (const auto* symbol = std::get_if<Symbol>(&value);
+                              symbol != nullptr
+                              && symbols.contains(symbol->spelling)) {
+                              throw std::runtime_error(message);
+                          }
+                      };
                 if (expr.op == PvBinaryOp::add || expr.op == PvBinaryOp::sub) {
+                    requireNotNested(expr.lhs, pvAddSymbols,
+                        "pv_add/sub input cannot be another pv_add/sub");
+                    requireNotNested(expr.rhs, pvAddSymbols,
+                        "pv_add/sub input cannot be another pv_add/sub");
                     if (lhsType != ValidationType::pv
                         || rhsType != ValidationType::pv) {
                         auto msg = std::string("at offset ")
@@ -767,22 +827,28 @@ void validate(const Program& program)
                             + ": pv_add/sub expect pv operands";
                         throw std::runtime_error(msg);
                     }
-                } else if (!((lhsType == ValidationType::pv
-                                 && rhsType == ValidationType::pv)
-                               || (lhsType == ValidationType::pv
-                                   && rhsType == ValidationType::mint)
-                               || (lhsType == ValidationType::mint
-                                   && rhsType == ValidationType::pv)
-                               || (lhsType == ValidationType::pv
-                                   && std::holds_alternative<IntegerLiteral>(
-                                       expr.rhs))
-                               || (rhsType == ValidationType::pv
-                                   && std::holds_alternative<IntegerLiteral>(
-                                       expr.lhs)))) {
-                    auto msg = std::string("at offset ")
-                        + std::to_string(offset)
-                        + ": pv_mul expects pv/pv or pv/mint operands";
-                    throw std::runtime_error(msg);
+                } else {
+                    requireNotNested(expr.lhs, pvMulSymbols,
+                        "pv_mul input cannot be another pv_mul");
+                    requireNotNested(expr.rhs, pvMulSymbols,
+                        "pv_mul input cannot be another pv_mul");
+                    if (!((lhsType == ValidationType::pv
+                              && rhsType == ValidationType::pv)
+                            || (lhsType == ValidationType::pv
+                                && rhsType == ValidationType::mint)
+                            || (lhsType == ValidationType::mint
+                                && rhsType == ValidationType::pv)
+                            || (lhsType == ValidationType::pv
+                                && std::holds_alternative<IntegerLiteral>(
+                                    expr.rhs))
+                            || (rhsType == ValidationType::pv
+                                && std::holds_alternative<IntegerLiteral>(
+                                    expr.lhs)))) {
+                        auto msg = std::string("at offset ")
+                            + std::to_string(offset)
+                            + ": pv_mul expects pv/pv or pv/mint operands";
+                        throw std::runtime_error(msg);
+                    }
                 }
                 return ValidationType::pv;
             },
@@ -875,7 +941,7 @@ void validate(const Program& program)
                                                 Ref<MemoryDeclaration>>(
                                                 &symbolDef.rhs)) {
                                             pointeeTypes[symbolDef.symbol
-                                                             .spelling]
+                                                    .spelling]
                                                 = program[*memRef].allocType;
                                         } else if (const auto* getPtrRef
                                             = std::get_if<Ref<GetPointerExpr>>(
@@ -883,9 +949,9 @@ void validate(const Program& program)
                                             const auto& expr
                                                 = program[*getPtrRef];
                                             pointeeTypes[symbolDef.symbol
-                                                             .spelling]
+                                                    .spelling]
                                                 = pointeeTypes[expr.source
-                                                                   .spelling];
+                                                        .spelling];
                                         } else if (const auto* gepRef
                                             = std::get_if<
                                                 Ref<GetElementPointerExpr>>(
@@ -899,17 +965,18 @@ void validate(const Program& program)
                                                     Ref<ArrayType>>(
                                                     srcIt->second)) {
                                                 pointeeTypes[symbolDef.symbol
-                                                                 .spelling]
-                                                    = program[*std::get_if<
-                                                        Ref<ArrayType>>(
-                                                        &srcIt->second)]
-                                                          .elementType;
+                                                        .spelling]
+                                                    = program
+                                                          [*std::get_if<
+                                                               Ref<ArrayType>>(
+                                                               &srcIt->second)]
+                                                              .elementType;
                                             } else {
                                                 pointeeTypes[symbolDef.symbol
-                                                                 .spelling]
-                                                    = srcIt == pointeeTypes.end()
-                                                          ? Type { I32Type {} }
-                                                          : srcIt->second;
+                                                        .spelling] = srcIt
+                                                        == pointeeTypes.end()
+                                                    ? Type { I32Type { } }
+                                                    : srcIt->second;
                                             }
                                         }
                                     }

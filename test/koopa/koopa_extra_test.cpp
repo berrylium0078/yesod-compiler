@@ -26,8 +26,8 @@ namespace runner = yesod::test_support::interpreter_runner;
 [[nodiscard]] std::unique_ptr<yesod::koopa::ir::Program> generateProgram(
     const std::string& source)
 {
-    frontend::Parser parser(
-        frontend::prependBuiltinFunctionDeclarations(source));
+    frontend::Parser parser(frontend::prependBuiltinFunctionDeclarations(
+        std::string("void putpoly(poly p);\n") + source));
     auto parseOutput = parser.parse();
     if (!parseOutput.success()) {
         throw std::runtime_error("parse failed");
