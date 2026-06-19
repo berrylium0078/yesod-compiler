@@ -109,10 +109,6 @@ struct PolyType {
     SourcePos sourcePos;
 };
 
-struct PvType {
-    SourcePos sourcePos;
-};
-
 struct ArrayType;
 struct PointerType;
 struct FunctionType;
@@ -123,8 +119,10 @@ struct GetPointerExpr;
 struct GetElementPointerExpr;
 struct BinaryExpr;
 struct CallExpr;
-struct UnaryPolyExpr;
-struct PvBinaryExpr;
+struct CopyExpr;
+struct PolyLenExpr;
+struct PointwiseExpr;
+struct PointwiseNode;
 struct CombineExpr;
 struct GetCoeffExpr;
 struct PolyConstructExpr;
@@ -142,7 +140,7 @@ struct FunctionDef;
 struct GlobalMemoryDef;
 struct Program;
 
-using Type = std::variant<I32Type, MintType, PolyType, PvType, Ref<ArrayType>,
+using Type = std::variant<I32Type, MintType, PolyType, Ref<ArrayType>,
     Ref<PointerType>, Ref<FunctionType>>;
 using Value = std::variant<Symbol, IntegerLiteral, UndefValue>;
 using Initializer = std::variant<IntegerLiteral, UndefValue, ZeroInit,
@@ -150,20 +148,25 @@ using Initializer = std::variant<IntegerLiteral, UndefValue, ZeroInit,
 using StoreValue = std::variant<Symbol, IntegerLiteral, UndefValue, ZeroInit,
     Ref<AggregateInitializer>>;
 
-enum class UnaryPolyOp {
-    ntt,
-    intt,
-};
-
 enum class PvBinaryOp {
     add,
     sub,
     mul,
+    times,
 };
 
 enum class ConversionOp {
     int2mint,
     mint2int,
+};
+
+enum class PolyLenOp {
+    len,
+    max,
+    min,
+    mulLen,
+    shiftLen,
+    sliceLen,
 };
 
 enum class BinaryOp {
@@ -249,18 +252,39 @@ struct CallExpr {
     AnnotationList annotations;
 };
 
-struct UnaryPolyExpr {
+struct CopyExpr {
     SourcePos sourcePos;
-    UnaryPolyOp op = UnaryPolyOp::ntt;
     Value value;
     AnnotationList annotations;
 };
 
-struct PvBinaryExpr {
+struct PolyLenExpr {
+    SourcePos sourcePos;
+    PolyLenOp op = PolyLenOp::len;
+    std::vector<Value> args;
+    AnnotationList annotations;
+};
+
+struct PointwiseLeaf {
+    Value value;
+};
+
+struct PointwiseBinary {
     SourcePos sourcePos;
     PvBinaryOp op = PvBinaryOp::add;
-    Value lhs;
-    Value rhs;
+    Ref<PointwiseNode> lhs;
+    Ref<PointwiseNode> rhs;
+};
+
+struct PointwiseNode {
+    using Kind = std::variant<PointwiseLeaf, PointwiseBinary>;
+    SourcePos sourcePos;
+    Kind kind;
+};
+
+struct PointwiseExpr {
+    SourcePos sourcePos;
+    Ref<PointwiseNode> root;
     AnnotationList annotations;
 };
 
@@ -298,10 +322,11 @@ struct ConversionExpr {
     AnnotationList annotations;
 };
 
-using SymbolRhs = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>,
-    Ref<GetPointerExpr>, Ref<GetElementPointerExpr>, Ref<BinaryExpr>,
-    Ref<CallExpr>, Ref<UnaryPolyExpr>, Ref<PvBinaryExpr>, Ref<CombineExpr>,
-    Ref<GetCoeffExpr>, Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
+using SymbolRhs
+    = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>, Ref<GetPointerExpr>,
+        Ref<GetElementPointerExpr>, Ref<BinaryExpr>, Ref<CallExpr>,
+        Ref<CopyExpr>, Ref<PolyLenExpr>, Ref<PointwiseExpr>, Ref<CombineExpr>,
+        Ref<GetCoeffExpr>, Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
 
 struct SymbolDef {
     SourcePos sourcePos;
@@ -397,13 +422,14 @@ using TopLevelItem
     = std::variant<Ref<GlobalMemoryDef>, Ref<FunctionDecl>, Ref<FunctionDef>>;
 
 struct Program {
-    using NodeArena = Arena<ArrayType, PointerType, FunctionType,
-        AggregateInitializer, MemoryDeclaration, LoadExpr, GetPointerExpr,
-        GetElementPointerExpr, BinaryExpr, CallExpr, UnaryPolyExpr,
-        PvBinaryExpr, CombineExpr, GetCoeffExpr, PolyConstructExpr,
-        ConversionExpr, SymbolDef, StoreStmt, BranchTerminator, JumpTerminator,
-        ReturnTerminator, BlockParameter, BasicBlock, FunctionParameter,
-        FunctionDecl, FunctionDef, GlobalMemoryDef>;
+    using NodeArena
+        = Arena<ArrayType, PointerType, FunctionType, AggregateInitializer,
+            MemoryDeclaration, LoadExpr, GetPointerExpr, GetElementPointerExpr,
+            BinaryExpr, CallExpr, CopyExpr, PolyLenExpr, PointwiseNode,
+            PointwiseExpr, CombineExpr, GetCoeffExpr, PolyConstructExpr,
+            ConversionExpr, SymbolDef, StoreStmt, BranchTerminator,
+            JumpTerminator, ReturnTerminator, BlockParameter, BasicBlock,
+            FunctionParameter, FunctionDecl, FunctionDef, GlobalMemoryDef>;
 
     SourcePos sourcePos;
     AnnotationList annotations;
@@ -431,9 +457,9 @@ private:
 };
 
 std::string_view toString(BinaryOp op);
-std::string_view toString(UnaryPolyOp op);
 std::string_view toString(PvBinaryOp op);
 std::string_view toString(ConversionOp op);
+std::string_view toString(PolyLenOp op);
 bool hasReturnType(const FunctionType& type);
 bool hasReturnValue(const ReturnTerminator& terminator);
 bool usesSsaExtension(const BranchTerminator& terminator);

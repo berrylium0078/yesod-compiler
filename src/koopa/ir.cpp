@@ -1,6 +1,7 @@
 #include "koopa/ir.h"
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -15,6 +16,8 @@ namespace {
     std::string serializeInitializer(
         const Initializer& initializer, const Program& program);
     std::string serializeCombineTerm(const CombineTerm& term);
+    std::string serializePointwiseNode(
+        Ref<PointwiseNode> nodeRef, const Program& program);
 
     std::string serializeSymbol(const Symbol& symbol)
     {
@@ -27,7 +30,6 @@ namespace {
             [&](const I32Type&) { return std::string("i32"); },
             [&](const MintType&) { return std::string("mint"); },
             [&](const PolyType&) { return std::string("poly"); },
-            [&](const PvType&) { return std::string("pv"); },
             [&](Ref<ArrayType> arrayRef) {
                 const auto& arrayType = program[arrayRef];
                 return std::string("[")
@@ -82,6 +84,23 @@ namespace {
         output << ", " << serializeValue(term.shift) << ", "
                << serializeValue(term.scale) << ')';
         return output.str();
+    }
+
+    std::string serializePointwiseNode(
+        Ref<PointwiseNode> nodeRef, const Program& program)
+    {
+        const auto& node = program[nodeRef];
+        return MATCH(node.kind) WITH(
+            [&](const PointwiseLeaf& leaf) {
+                return serializeValue(leaf.value);
+            },
+            [&](const PointwiseBinary& binary) {
+                std::ostringstream output;
+                output << toString(binary.op) << '('
+                       << serializePointwiseNode(binary.lhs, program) << ", "
+                       << serializePointwiseNode(binary.rhs, program) << ')';
+                return output.str();
+            });
     }
 
     std::string serializeInitializer(
@@ -181,17 +200,29 @@ namespace {
                                     output << serializeValue(expr.args[index]);
                                 }
                                 output << ')';
-                            } else if constexpr (std::same_as<Rhs,
-                                                     UnaryPolyExpr>) {
+                            } else if constexpr (std::same_as<Rhs, CopyExpr>) {
                                 const auto& expr = program[rhsRef];
-                                output << toString(expr.op) << ' '
-                                       << serializeValue(expr.value);
+                                output << serializeValue(expr.value);
                             } else if constexpr (std::same_as<Rhs,
-                                                     PvBinaryExpr>) {
+                                                     PolyLenExpr>) {
                                 const auto& expr = program[rhsRef];
-                                output << toString(expr.op) << ' '
-                                       << serializeValue(expr.lhs) << ", "
-                                       << serializeValue(expr.rhs);
+                                output << toString(expr.op);
+                                if (!expr.args.empty()) {
+                                    output << ' ';
+                                }
+                                for (size_t index = 0; index < expr.args.size();
+                                    ++index) {
+                                    if (index != 0) {
+                                        output << ", ";
+                                    }
+                                    output << serializeValue(expr.args[index]);
+                                }
+                            } else if constexpr (std::same_as<Rhs,
+                                                     PointwiseExpr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "pointwise "
+                                       << serializePointwiseNode(
+                                              expr.root, program);
                             } else if constexpr (std::same_as<Rhs,
                                                      CombineExpr>) {
                                 const auto& expr = program[rhsRef];
@@ -459,28 +490,19 @@ std::string_view toString(BinaryOp op)
     throw std::runtime_error("unknown BinaryOp");
 }
 
-std::string_view toString(UnaryPolyOp op)
-{
-    switch (op) {
-    case UnaryPolyOp::ntt:
-        return "ntt";
-    case UnaryPolyOp::intt:
-        return "intt";
-    }
-    throw std::runtime_error("unknown unary poly operation");
-}
-
 std::string_view toString(PvBinaryOp op)
 {
     switch (op) {
     case PvBinaryOp::add:
-        return "pv_add";
+        return "add";
     case PvBinaryOp::sub:
-        return "pv_sub";
+        return "sub";
     case PvBinaryOp::mul:
-        return "pv_mul";
+        return "mul";
+    case PvBinaryOp::times:
+        return "times";
     }
-    throw std::runtime_error("unknown pv binary operation");
+    throw std::runtime_error("unknown pointwise binary operation");
 }
 
 std::string_view toString(ConversionOp op)
@@ -492,6 +514,25 @@ std::string_view toString(ConversionOp op)
         return "mint2int";
     }
     throw std::runtime_error("unknown conversion operation");
+}
+
+std::string_view toString(PolyLenOp op)
+{
+    switch (op) {
+    case PolyLenOp::len:
+        return "poly_len";
+    case PolyLenOp::max:
+        return "poly_len_max";
+    case PolyLenOp::min:
+        return "poly_len_min";
+    case PolyLenOp::mulLen:
+        return "poly_mul_len";
+    case PolyLenOp::shiftLen:
+        return "poly_shift_len";
+    case PolyLenOp::sliceLen:
+        return "poly_slice_len";
+    }
+    throw std::runtime_error("unknown poly length operation");
 }
 
 bool hasReturnType(const FunctionType& type)
@@ -536,7 +577,6 @@ namespace {
         integer,
         mint,
         poly,
-        pv,
         pointer,
         other,
         unknown,
@@ -554,7 +594,6 @@ namespace {
             [](const PolyType&) -> ValidationType {
                 return ValidationType::poly;
             },
-            [](const PvType&) -> ValidationType { return ValidationType::pv; },
             [](Ref<PointerType>) -> ValidationType {
                 return ValidationType::pointer;
             },
@@ -622,9 +661,7 @@ void validate(const Program& program)
     std::unordered_map<std::string, ValidationType> valueTypes;
     std::unordered_map<std::string, Type> pointeeTypes;
     std::unordered_set<std::string> combineSymbols;
-    std::unordered_set<std::string> pvAddSymbols;
-    std::unordered_set<std::string> pvMulSymbols;
-    std::unordered_set<std::string> inttSymbols;
+    std::unordered_set<std::string> pointwiseSymbols;
 
     for (const auto& item : program.items) {
         std::visit(
@@ -657,26 +694,10 @@ void validate(const Program& program)
                                     combineSymbols.insert(
                                         symbolDef.symbol.spelling);
                                 }
-                                if (const auto* unaryRef
-                                    = std::get_if<Ref<UnaryPolyExpr>>(
-                                        &symbolDef.rhs)) {
-                                    if (program[*unaryRef].op
-                                        == UnaryPolyOp::intt) {
-                                        inttSymbols.insert(
-                                            symbolDef.symbol.spelling);
-                                    }
-                                }
-                                if (const auto* pvRef
-                                    = std::get_if<Ref<PvBinaryExpr>>(
-                                        &symbolDef.rhs)) {
-                                    const auto& expr = program[*pvRef];
-                                    if (expr.op == PvBinaryOp::mul) {
-                                        pvMulSymbols.insert(
-                                            symbolDef.symbol.spelling);
-                                    } else {
-                                        pvAddSymbols.insert(
-                                            symbolDef.symbol.spelling);
-                                    }
+                                if (std::holds_alternative<Ref<PointwiseExpr>>(
+                                        symbolDef.rhs)) {
+                                    pointwiseSymbols.insert(
+                                        symbolDef.symbol.spelling);
                                 }
                             }
                         }
@@ -685,6 +706,19 @@ void validate(const Program& program)
             },
             item);
     }
+
+    std::erase_if(valueTypes, [](const auto& item) {
+        return !item.first.empty() && item.first.front() == '%';
+    });
+    auto eraseLocalSymbol = [](const std::string& name) {
+        return !name.empty() && name.front() == '%';
+    };
+    std::erase_if(combineSymbols, eraseLocalSymbol);
+    std::erase_if(pointwiseSymbols, eraseLocalSymbol);
+    const auto globalValueTypes = valueTypes;
+    const auto globalPointeeTypes = pointeeTypes;
+    const auto globalCombineSymbols = combineSymbols;
+    const auto globalPointwiseSymbols = pointwiseSymbols;
 
     auto resultTypeForRhs = [&](const SymbolRhs& rhs) -> ValidationType {
         return MATCH(rhs) WITH(
@@ -727,13 +761,13 @@ void validate(const Program& program)
                         expr.sourcePos.m_offset);
                 }
                 if (lhsType == ValidationType::poly
-                    || lhsType == ValidationType::pv
-                    || rhsType == ValidationType::poly
-                    || rhsType == ValidationType::pv) {
+                    || rhsType == ValidationType::poly) {
                     auto msg = std::string("at offset ")
                         + std::to_string(expr.sourcePos.m_offset)
-                        + ": poly/pv values must use "
-                          "dedicated pseudo-instructions";
+                        + ": poly values must use dedicated "
+                          "pseudo-instructions: "
+                        + serializeValue(expr.lhs) + ", "
+                        + serializeValue(expr.rhs);
                     throw std::runtime_error(msg);
                 }
                 switch (expr.op) {
@@ -752,109 +786,134 @@ void validate(const Program& program)
                 }
             },
             [&](Ref<CallExpr> ref) -> ValidationType {
+                (void)ref;
+                return ValidationType::unknown;
+            },
+            [&](Ref<CopyExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
-                if (expr.callee.spelling == "@__yesod_poly_len") {
-                    if (expr.args.size() != 1) {
-                        throw std::runtime_error(
-                            "poly_len expects one argument");
+                return validationTypeOfValue(expr.value, valueTypes);
+            },
+            [&](Ref<PolyLenExpr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                auto requireArgCount = [&](size_t expected) {
+                    if (expr.args.size() != expected) {
+                        throw std::runtime_error(std::string(toString(expr.op))
+                            + " argument count mismatch");
                     }
+                };
+                switch (expr.op) {
+                case PolyLenOp::len:
+                    requireArgCount(1);
                     if (const auto* symbol = std::get_if<Symbol>(&expr.args[0]);
                         symbol != nullptr
                         && (combineSymbols.contains(symbol->spelling)
-                            || inttSymbols.contains(symbol->spelling))) {
+                            || pointwiseSymbols.contains(symbol->spelling))) {
                         throw std::runtime_error(
-                            "poly_len cannot consume a fused poly result");
+                            "poly_len cannot consume a fused poly result: "
+                            + symbol->spelling);
                     }
                     requireValueType(expr.args[0], ValidationType::poly,
                         valueTypes, "poly_len expects a poly operand",
                         sourceOffset(expr.args[0]));
-                    return ValidationType::integer;
+                    break;
+                case PolyLenOp::max:
+                case PolyLenOp::min:
+                case PolyLenOp::mulLen:
+                case PolyLenOp::shiftLen:
+                    requireArgCount(2);
+                    break;
+                case PolyLenOp::sliceLen:
+                    requireArgCount(3);
+                    break;
                 }
-                if (expr.callee.spelling == "@__yesod_max"
-                    || expr.callee.spelling == "@__yesod_min"
-                    || expr.callee.spelling == "@__yesod_poly_mul_len"
-                    || expr.callee.spelling == "@__yesod_poly_shift_len"
-                    || expr.callee.spelling == "@__yesod_poly_slice_len") {
+                if (expr.op != PolyLenOp::len) {
                     for (const auto& arg : expr.args) {
                         requireValueType(arg, ValidationType::integer,
                             valueTypes,
-                            "poly length helper expects integer operands",
+                            "poly length pseudo-instruction expects integer "
+                            "operands",
                             sourceOffset(arg));
                     }
-                    return ValidationType::integer;
                 }
-                return ValidationType::unknown;
+                return ValidationType::integer;
             },
-            [&](Ref<UnaryPolyExpr> ref) -> ValidationType {
+            [&](Ref<PointwiseExpr> ref) -> ValidationType {
+                std::function<ValidationType(Ref<PointwiseNode>)>
+                    validatePointwiseNode
+                    = [&](Ref<PointwiseNode> nodeRef) -> ValidationType {
+                    const auto& node = program[nodeRef];
+                    return MATCH(node.kind) WITH(
+                        [&](const PointwiseLeaf& leaf) -> ValidationType {
+                            if (const auto* symbol
+                                = std::get_if<Symbol>(&leaf.value);
+                                symbol != nullptr
+                                && pointwiseSymbols.contains(
+                                    symbol->spelling)) {
+                                throw std::runtime_error(
+                                    "pointwise operand cannot be another "
+                                    "pointwise result");
+                            }
+                            const auto valueType
+                                = validationTypeOfValue(leaf.value, valueTypes);
+                            if (valueType != ValidationType::poly
+                                && valueType != ValidationType::mint
+                                && valueType != ValidationType::unknown
+                                && !std::holds_alternative<IntegerLiteral>(
+                                    leaf.value)) {
+                                throw std::runtime_error(
+                                    "pointwise leaf must be poly or mint");
+                            }
+                            return std::holds_alternative<IntegerLiteral>(
+                                       leaf.value)
+                                ? ValidationType::mint
+                                : valueType;
+                        },
+                        [&](const PointwiseBinary& binary) -> ValidationType {
+                            const auto lhsType
+                                = validatePointwiseNode(binary.lhs);
+                            const auto rhsType
+                                = validatePointwiseNode(binary.rhs);
+                            switch (binary.op) {
+                            case PvBinaryOp::add:
+                            case PvBinaryOp::sub:
+                            case PvBinaryOp::mul:
+                                if (lhsType != ValidationType::poly
+                                    || rhsType != ValidationType::poly) {
+                                    throw std::runtime_error(
+                                        "pointwise add/sub/mul expect poly "
+                                        "operands");
+                                }
+                                return ValidationType::poly;
+                            case PvBinaryOp::times:
+                                if (lhsType != ValidationType::poly
+                                    || rhsType != ValidationType::mint) {
+                                    throw std::runtime_error(
+                                        "pointwise times expects poly and mint "
+                                        "operands");
+                                }
+                                return ValidationType::poly;
+                            }
+                            throw std::runtime_error(
+                                "unknown pointwise operation");
+                        });
+                };
+
                 const auto& expr = program[ref];
-                auto offset = [&](const Value& v) { return sourceOffset(v); };
-                if (expr.op == UnaryPolyOp::ntt) {
-                    requireValueType(expr.value, ValidationType::poly,
-                        valueTypes, "ntt expects a poly operand",
-                        offset(expr.value));
-                    return ValidationType::pv;
+                const auto resultType = validatePointwiseNode(expr.root);
+                if (resultType != ValidationType::poly) {
+                    throw std::runtime_error(
+                        "pointwise expression root must produce poly");
                 }
-                requireValueType(expr.value, ValidationType::pv, valueTypes,
-                    "intt expects a pv operand", offset(expr.value));
                 return ValidationType::poly;
-            },
-            [&](Ref<PvBinaryExpr> ref) -> ValidationType {
-                const auto& expr = program[ref];
-                const auto lhsType
-                    = validationTypeOfValue(expr.lhs, valueTypes);
-                const auto rhsType
-                    = validationTypeOfValue(expr.rhs, valueTypes);
-                auto offset = expr.sourcePos.m_offset;
-                auto requireNotNested
-                    = [&](const Value& value,
-                          const std::unordered_set<std::string>& symbols,
-                          const char* message) {
-                          if (const auto* symbol = std::get_if<Symbol>(&value);
-                              symbol != nullptr
-                              && symbols.contains(symbol->spelling)) {
-                              throw std::runtime_error(message);
-                          }
-                      };
-                if (expr.op == PvBinaryOp::add || expr.op == PvBinaryOp::sub) {
-                    requireNotNested(expr.lhs, pvAddSymbols,
-                        "pv_add/sub input cannot be another pv_add/sub");
-                    requireNotNested(expr.rhs, pvAddSymbols,
-                        "pv_add/sub input cannot be another pv_add/sub");
-                    if (lhsType != ValidationType::pv
-                        || rhsType != ValidationType::pv) {
-                        auto msg = std::string("at offset ")
-                            + std::to_string(offset)
-                            + ": pv_add/sub expect pv operands";
-                        throw std::runtime_error(msg);
-                    }
-                } else {
-                    requireNotNested(expr.lhs, pvMulSymbols,
-                        "pv_mul input cannot be another pv_mul");
-                    requireNotNested(expr.rhs, pvMulSymbols,
-                        "pv_mul input cannot be another pv_mul");
-                    if (!((lhsType == ValidationType::pv
-                              && rhsType == ValidationType::pv)
-                            || (lhsType == ValidationType::pv
-                                && rhsType == ValidationType::mint)
-                            || (lhsType == ValidationType::mint
-                                && rhsType == ValidationType::pv)
-                            || (lhsType == ValidationType::pv
-                                && std::holds_alternative<IntegerLiteral>(
-                                    expr.rhs))
-                            || (rhsType == ValidationType::pv
-                                && std::holds_alternative<IntegerLiteral>(
-                                    expr.lhs)))) {
-                        auto msg = std::string("at offset ")
-                            + std::to_string(offset)
-                            + ": pv_mul expects pv/pv or pv/mint operands";
-                        throw std::runtime_error(msg);
-                    }
-                }
-                return ValidationType::pv;
             },
             [&](Ref<CombineExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
                 auto offset = [&](const Value& v) { return sourceOffset(v); };
+                auto isZero = [](const Value& value) -> bool {
+                    const auto* literal = std::get_if<IntegerLiteral>(&value);
+                    return literal != nullptr && literal->value == 0;
+                };
+                bool allTermsAreTrivialPointwise = expr.terms.size() >= 2;
                 for (const auto& term : expr.terms) {
                     if (const auto* symbol = std::get_if<Symbol>(&term.value);
                         symbol != nullptr
@@ -862,6 +921,12 @@ void validate(const Program& program)
                         throw std::runtime_error(
                             "combine term source cannot be another combine");
                     }
+                    const auto* termSymbol = std::get_if<Symbol>(&term.value);
+                    allTermsAreTrivialPointwise = allTermsAreTrivialPointwise
+                        && termSymbol != nullptr
+                        && pointwiseSymbols.contains(termSymbol->spelling)
+                        && isZero(term.start) && !term.end.has_value()
+                        && isZero(term.shift);
                     requireValueType(term.value, ValidationType::poly,
                         valueTypes, "combine term source must be poly",
                         offset(term.value));
@@ -876,9 +941,17 @@ void validate(const Program& program)
                     requireValueType(term.shift, ValidationType::integer,
                         valueTypes, "combine term shift must be int",
                         offset(term.shift));
-                    requireValueType(term.scale, ValidationType::mint,
-                        valueTypes, "combine term scale must be mint",
-                        offset(term.scale));
+                    if (!valueMatchesType(
+                            term.scale, ValidationType::mint, valueTypes)) {
+                        throw std::runtime_error(
+                            "combine term scale must be mint: "
+                            + serializeValue(term.scale));
+                    }
+                }
+                if (allTermsAreTrivialPointwise) {
+                    throw std::runtime_error(
+                        "combine cannot be a trivial linear combination of "
+                        "pointwise results");
                 }
                 return ValidationType::poly;
             },
@@ -922,8 +995,41 @@ void validate(const Program& program)
                 using Item = std::remove_cvref_t<decltype(program[itemRef])>;
                 if constexpr (std::same_as<Item, FunctionDef>) {
                     const auto& function = program[itemRef];
+                    valueTypes = globalValueTypes;
+                    pointeeTypes = globalPointeeTypes;
+                    combineSymbols = globalCombineSymbols;
+                    pointwiseSymbols = globalPointwiseSymbols;
+                    for (const auto paramRef : function.params) {
+                        const auto& param = program[paramRef];
+                        valueTypes[param.symbol.spelling]
+                            = validationTypeOf(param.type);
+                    }
+                    for (const auto scanBlockRef : function.blocks) {
+                        const auto& scanBlock = program[scanBlockRef];
+                        for (const auto& statement : scanBlock.statements) {
+                            if (const auto* symbolDefRef
+                                = std::get_if<Ref<SymbolDef>>(&statement)) {
+                                const auto& symbolDef = program[*symbolDefRef];
+                                if (std::holds_alternative<Ref<CombineExpr>>(
+                                        symbolDef.rhs)) {
+                                    combineSymbols.insert(
+                                        symbolDef.symbol.spelling);
+                                }
+                                if (std::holds_alternative<Ref<PointwiseExpr>>(
+                                        symbolDef.rhs)) {
+                                    pointwiseSymbols.insert(
+                                        symbolDef.symbol.spelling);
+                                }
+                            }
+                        }
+                    }
                     for (const auto blockRef : function.blocks) {
                         const auto& block = program[blockRef];
+                        for (const auto paramRef : block.params) {
+                            const auto& param = program[paramRef];
+                            valueTypes[param.symbol.spelling]
+                                = validationTypeOf(param.type);
+                        }
                         for (const auto& statement : block.statements) {
                             std::visit(
                                 [&](auto statementRef) {

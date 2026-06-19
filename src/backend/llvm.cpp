@@ -45,10 +45,6 @@ namespace {
                 throw std::runtime_error(
                     "LLVM backend does not support poly yet");
             },
-            [](const koopa_ir::PvType&) -> std::string {
-                throw std::runtime_error(
-                    "LLVM backend does not support pv yet");
-            },
             [&](const yesod::Ref<koopa_ir::ArrayType> arrayRef) -> std::string {
                 const auto& arr = program[arrayRef];
                 return "[" + std::to_string(arr.length) + " x "
@@ -463,6 +459,25 @@ namespace {
                                         valueTypes[sname] = "i32";
                                     }
                                 },
+                                [&](const yesod::Ref<koopa_ir::CopyExpr>&
+                                        copyRef) {
+                                    const auto& copy = program[copyRef];
+                                    if (const auto* sym
+                                        = std::get_if<koopa_ir::Symbol>(
+                                            &copy.value)) {
+                                        const auto typeIt
+                                            = valueTypes.find(sym->spelling);
+                                        valueTypes[sname]
+                                            = typeIt == valueTypes.end()
+                                            ? "i32"
+                                            : typeIt->second;
+                                    } else {
+                                        valueTypes[sname] = "i32";
+                                    }
+                                },
+                                [&](const yesod::Ref<koopa_ir::PolyLenExpr>&) {
+                                    valueTypes[sname] = "i32";
+                                },
                                 [&](const yesod::Ref<
                                     koopa_ir::ConversionExpr>&) {
                                     valueTypes[sname] = "i32";
@@ -784,6 +799,15 @@ namespace {
                                         << "  " << llvmValueName(sname)
                                         << " = add i32 "
                                         << emitValueOperand(conv.value, program)
+                                        << ", 0\n";
+                                },
+                                [&](const yesod::Ref<koopa_ir::CopyExpr>&
+                                        copyRef) {
+                                    const auto& copy = program[copyRef];
+                                    output
+                                        << "  " << llvmValueName(sname)
+                                        << " = add i32 "
+                                        << emitValueOperand(copy.value, program)
                                         << ", 0\n";
                                 },
                                 [&](const auto&) {

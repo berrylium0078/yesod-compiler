@@ -68,7 +68,6 @@ namespace {
             i32,
             mint,
             poly,
-            pv,
             array,
             pointer,
             unsupported,
@@ -223,10 +222,6 @@ namespace {
                     return std::make_shared<TypeInfo>(
                         TypeInfo { .kind = TypeInfo::Kind::poly });
                 },
-                [&](const koopa_ir::PvType&) -> std::shared_ptr<TypeInfo> {
-                    return std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::pv });
-                },
                 [&](Ref<ArrayType> arrayRef) -> std::shared_ptr<TypeInfo> {
                     const auto& arrayType = m_program[arrayRef];
                     return std::make_shared<TypeInfo>(TypeInfo {
@@ -259,7 +254,6 @@ namespace {
             case TypeInfo::Kind::i32:
             case TypeInfo::Kind::mint:
             case TypeInfo::Kind::poly:
-            case TypeInfo::Kind::pv:
                 return 1;
             case TypeInfo::Kind::array:
                 return type->length * typeSize(type->element);
@@ -284,7 +278,6 @@ namespace {
             case TypeInfo::Kind::mint:
                 return makeMint(Mint(0));
             case TypeInfo::Kind::poly:
-            case TypeInfo::Kind::pv:
                 return makePoly(Poly());
             case TypeInfo::Kind::array:
                 return defaultCellValue(type->element);
@@ -717,22 +710,23 @@ namespace {
                     frame.types[name] = std::make_shared<TypeInfo>(
                         typeInfoForRuntimeValue(frame.values[name]));
                 },
-                [&](Ref<koopa_ir::UnaryPolyExpr> unaryRef) -> void {
-                    const auto& expr = m_program[unaryRef];
+                [&](Ref<koopa_ir::CopyExpr> copyRef) -> void {
+                    const auto& expr = m_program[copyRef];
                     frame.values[name] = evalValue(expr.value, frame);
-                    frame.types[name] = std::make_shared<TypeInfo>(TypeInfo {
-                        .kind = expr.op == koopa_ir::UnaryPolyOp::ntt
-                            ? TypeInfo::Kind::pv
-                            : TypeInfo::Kind::poly,
-                    });
-                },
-                [&](Ref<koopa_ir::PvBinaryExpr> pvBinaryRef) -> void {
-                    const auto& expr = m_program[pvBinaryRef];
-                    const RuntimeValue lhs = evalValue(expr.lhs, frame);
-                    const RuntimeValue rhs = evalValue(expr.rhs, frame);
-                    frame.values[name] = executePvBinary(expr.op, lhs, rhs);
                     frame.types[name] = std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::pv });
+                        typeInfoForRuntimeValue(frame.values[name]));
+                },
+                [&](Ref<koopa_ir::PolyLenExpr> lenRef) -> void {
+                    frame.values[name]
+                        = makeInt(executePolyLen(m_program[lenRef], frame));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::i32 });
+                },
+                [&](Ref<koopa_ir::PointwiseExpr> pointwiseRef) -> void {
+                    frame.values[name] = makePoly(
+                        executePointwise(m_program[pointwiseRef], frame));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::poly });
                 },
                 [&](Ref<koopa_ir::CombineExpr> combineRef) -> void {
                     frame.values[name] = makePoly(
@@ -777,26 +771,72 @@ namespace {
                 });
         }
 
-        [[nodiscard]] RuntimeValue executePvBinary(koopa_ir::PvBinaryOp op,
-            const RuntimeValue& lhs, const RuntimeValue& rhs) const
+        [[nodiscard]] RuntimeValue executePointwiseNode(
+            Ref<koopa_ir::PointwiseNode> nodeRef, Frame& frame)
         {
-            switch (op) {
-            case koopa_ir::PvBinaryOp::add:
-                return makePoly(requirePoly(lhs) + requirePoly(rhs));
-            case koopa_ir::PvBinaryOp::sub:
-                return makePoly(requirePoly(lhs) - requirePoly(rhs));
-            case koopa_ir::PvBinaryOp::mul:
-                if (std::holds_alternative<Poly>(lhs.value)
-                    && std::holds_alternative<Poly>(rhs.value)) {
-                    return makePoly(requirePoly(lhs) * requirePoly(rhs));
+            const auto& node = m_program[nodeRef];
+            return MATCH(node.kind) WITH(
+                [&](const koopa_ir::PointwiseLeaf& leaf) -> RuntimeValue {
+                    return evalValue(leaf.value, frame);
+                },
+                [&](const koopa_ir::PointwiseBinary& binary) -> RuntimeValue {
+                    const RuntimeValue lhs
+                        = executePointwiseNode(binary.lhs, frame);
+                    const RuntimeValue rhs
+                        = executePointwiseNode(binary.rhs, frame);
+                    switch (binary.op) {
+                    case koopa_ir::PvBinaryOp::add:
+                        return makePoly(requirePoly(lhs) + requirePoly(rhs));
+                    case koopa_ir::PvBinaryOp::sub:
+                        return makePoly(requirePoly(lhs) - requirePoly(rhs));
+                    case koopa_ir::PvBinaryOp::mul:
+                        return makePoly(requirePoly(lhs) * requirePoly(rhs));
+                    case koopa_ir::PvBinaryOp::times:
+                        return makePoly(requirePoly(lhs) * requireMint(rhs));
+                    }
+                    throw ExecuteException(ExecuteStatus::runtimeError,
+                        "unknown pointwise operation");
+                });
+        }
+
+        [[nodiscard]] Poly executePointwise(
+            const koopa_ir::PointwiseExpr& expr, Frame& frame)
+        {
+            return requirePoly(executePointwiseNode(expr.root, frame));
+        }
+
+        [[nodiscard]] int32_t executePolyLen(
+            const koopa_ir::PolyLenExpr& expr, Frame& frame)
+        {
+            auto intArg = [&](size_t index) -> int32_t {
+                return requireInt(evalValue(expr.args.at(index), frame));
+            };
+            switch (expr.op) {
+            case koopa_ir::PolyLenOp::len:
+                return requirePoly(evalValue(expr.args.at(0), frame)).length();
+            case koopa_ir::PolyLenOp::max:
+                return std::max(intArg(0), intArg(1));
+            case koopa_ir::PolyLenOp::min:
+                return std::min(intArg(0), intArg(1));
+            case koopa_ir::PolyLenOp::mulLen: {
+                const int32_t lhs = intArg(0);
+                const int32_t rhs = intArg(1);
+                return lhs != 0 && rhs != 0 ? lhs + rhs - 1 : 0;
+            }
+            case koopa_ir::PolyLenOp::shiftLen:
+                return std::max(0, intArg(0) - intArg(1));
+            case koopa_ir::PolyLenOp::sliceLen: {
+                const int32_t length = intArg(0);
+                const int32_t start = intArg(1);
+                const int32_t end = intArg(2);
+                if (end <= 0 || start >= end || start >= length) {
+                    return 0;
                 }
-                if (std::holds_alternative<Poly>(lhs.value)) {
-                    return makePoly(requirePoly(lhs) * requireMint(rhs));
-                }
-                return makePoly(requireMint(lhs) * requirePoly(rhs));
+                return std::min(end, length);
+            }
             }
             throw ExecuteException(
-                ExecuteStatus::runtimeError, "unknown pv operation");
+                ExecuteStatus::runtimeError, "unknown poly length operation");
         }
 
         [[nodiscard]] Poly executeCombine(
@@ -1028,44 +1068,6 @@ namespace {
                 requireArgCount(callee, args, 1);
                 m_output << requirePoly(args[0]);
                 return std::optional<RuntimeValue> { };
-            }
-            if (callee == "@__yesod_poly_len") {
-                requireArgCount(callee, args, 1);
-                return std::optional<RuntimeValue> { makeInt(
-                    requirePoly(args[0]).length()) };
-            }
-            if (callee == "@__yesod_max") {
-                requireArgCount(callee, args, 2);
-                return std::optional<RuntimeValue> { makeInt(
-                    std::max(requireInt(args[0]), requireInt(args[1]))) };
-            }
-            if (callee == "@__yesod_min") {
-                requireArgCount(callee, args, 2);
-                return std::optional<RuntimeValue> { makeInt(
-                    std::min(requireInt(args[0]), requireInt(args[1]))) };
-            }
-            if (callee == "@__yesod_poly_mul_len") {
-                requireArgCount(callee, args, 2);
-                const int32_t lhs = requireInt(args[0]);
-                const int32_t rhs = requireInt(args[1]);
-                return std::optional<RuntimeValue> { makeInt(
-                    lhs != 0 && rhs != 0 ? lhs + rhs - 1 : 0) };
-            }
-            if (callee == "@__yesod_poly_shift_len") {
-                requireArgCount(callee, args, 2);
-                return std::optional<RuntimeValue> { makeInt(
-                    std::max(0, requireInt(args[0]) - requireInt(args[1]))) };
-            }
-            if (callee == "@__yesod_poly_slice_len") {
-                requireArgCount(callee, args, 3);
-                const int32_t length = requireInt(args[0]);
-                const int32_t start = requireInt(args[1]);
-                const int32_t end = requireInt(args[2]);
-                if (end <= 0 || start >= end || start >= length) {
-                    return std::optional<RuntimeValue> { makeInt(0) };
-                }
-                return std::optional<RuntimeValue> { makeInt(
-                    std::min(end, length)) };
             }
             if (callee == "@starttime" || callee == "@stoptime") {
                 return std::optional<RuntimeValue> { };

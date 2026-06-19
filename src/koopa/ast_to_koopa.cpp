@@ -194,7 +194,8 @@ namespace {
         case SemanticTypeKind::poly:
             return koopa_ir::PolyType { };
         case SemanticTypeKind::pv:
-            return koopa_ir::PvType { };
+            throw std::runtime_error(
+                "point-value type should not be materialized in Koopa IR");
         case SemanticTypeKind::voidType:
             throw std::runtime_error(
                 "void type should only appear as an omitted IR return type");
@@ -424,7 +425,18 @@ namespace {
                 ^ static_cast<uint32_t>(alias.m_version);
         }
 
-        void bindAlias(
+        [[nodiscard]] koopa_ir::Value materializeFreshValue(
+            koopa_ir::Value value, const SemanticType& type)
+        {
+            if (type.kind == SemanticTypeKind::integer
+                || type.kind == SemanticTypeKind::boolean
+                || type.kind == SemanticTypeKind::mint || type.isPoly()) {
+                return emitCopy(std::move(value));
+            }
+            return value;
+        }
+
+        [[nodiscard]] koopa_ir::Value bindAlias(
             Ref<frontend::Identifier> identifier, koopa_ir::Value value)
         {
             const auto alias = m_semanticInfo->findAlias(identifier);
@@ -432,7 +444,16 @@ namespace {
                 throw std::runtime_error(
                     "identifier is missing semantic SSA alias");
             }
-            m_valueByAliasKey[aliasKey(*alias)] = std::move(value);
+            const auto& symbol = requireSymbolForIdentifier(identifier,
+                *m_semanticInfo, "identifier is missing symbol binding");
+            if (!symbol.isObject()) {
+                throw std::runtime_error(
+                    "SSA alias should refer to an object symbol");
+            }
+            auto freshValue = materializeFreshValue(
+                std::move(value), symbol.object().m_type);
+            m_valueByAliasKey[aliasKey(*alias)] = freshValue;
+            return freshValue;
         }
 
         [[nodiscard]] koopa_ir::Value requireAliasValue(
@@ -560,34 +581,65 @@ namespace {
             return emitNamedRhs(callRef, makeTempName(m_nextTempId));
         }
 
-        [[nodiscard]] koopa_ir::Value emitRuntimeCall(
-            const std::string& callee, std::vector<koopa_ir::Value> args)
+        [[nodiscard]] koopa_ir::Value emitCopy(koopa_ir::Value value)
         {
-            return emitCall(callee, std::move(args), true);
-        }
-
-        [[nodiscard]] koopa_ir::Value emitUnaryPoly(
-            koopa_ir::UnaryPolyOp op, koopa_ir::Value value)
-        {
-            auto rhsRef = m_program->alloc<koopa_ir::UnaryPolyExpr>(
-                koopa_ir::UnaryPolyExpr {
+            auto rhsRef
+                = m_program->alloc<koopa_ir::CopyExpr>(koopa_ir::CopyExpr {
                     .sourcePos = { },
-                    .op = op,
                     .value = std::move(value),
                     .annotations = { },
                 });
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
         }
 
-        [[nodiscard]] koopa_ir::Value emitPvBinary(
-            koopa_ir::PvBinaryOp op, koopa_ir::Value lhs, koopa_ir::Value rhs)
+        [[nodiscard]] koopa_ir::Value emitPolyLen(
+            koopa_ir::PolyLenOp op, std::vector<koopa_ir::Value> args)
         {
-            auto rhsRef = m_program->alloc<koopa_ir::PvBinaryExpr>(
-                koopa_ir::PvBinaryExpr {
+            auto rhsRef = m_program->alloc<koopa_ir::PolyLenExpr>(
+                koopa_ir::PolyLenExpr {
                     .sourcePos = { },
                     .op = op,
-                    .lhs = std::move(lhs),
-                    .rhs = std::move(rhs),
+                    .args = std::move(args),
+                    .annotations = { },
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] Ref<koopa_ir::PointwiseNode> makePointwiseLeaf(
+            koopa_ir::Value value)
+        {
+            return m_program->alloc<koopa_ir::PointwiseNode>(
+                koopa_ir::PointwiseNode {
+                    .sourcePos = { },
+                    .kind = koopa_ir::PointwiseLeaf {
+                        .value = std::move(value),
+                    },
+                });
+        }
+
+        [[nodiscard]] Ref<koopa_ir::PointwiseNode> makePointwiseBinary(
+            koopa_ir::PvBinaryOp op, Ref<koopa_ir::PointwiseNode> lhs,
+            Ref<koopa_ir::PointwiseNode> rhs)
+        {
+            return m_program->alloc<koopa_ir::PointwiseNode>(
+                koopa_ir::PointwiseNode {
+                    .sourcePos = { },
+                    .kind = koopa_ir::PointwiseBinary {
+                        .sourcePos = { },
+                        .op = op,
+                        .lhs = lhs,
+                        .rhs = rhs,
+                    },
+                });
+        }
+
+        [[nodiscard]] koopa_ir::Value emitPointwise(
+            Ref<koopa_ir::PointwiseNode> root)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
+                koopa_ir::PointwiseExpr {
+                    .sourcePos = { },
+                    .root = root,
                     .annotations = { },
                 });
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
@@ -660,6 +712,14 @@ namespace {
         [[nodiscard]] koopa_ir::Value emitMintMul(
             koopa_ir::Value lhs, koopa_ir::Value rhs)
         {
+            if (std::holds_alternative<koopa_ir::IntegerLiteral>(lhs)) {
+                lhs = emitConversion(
+                    koopa_ir::ConversionOp::int2mint, std::move(lhs));
+            }
+            if (std::holds_alternative<koopa_ir::IntegerLiteral>(rhs)) {
+                rhs = emitConversion(
+                    koopa_ir::ConversionOp::int2mint, std::move(rhs));
+            }
             return emitBinary(
                 koopa_ir::BinaryOp::mul, std::move(lhs), std::move(rhs));
         }
@@ -866,7 +926,8 @@ namespace {
                             MATCH(constInitVal.kind)
                             WITH(
                                 [&](Ref<Exp> initAlt) {
-                                    state.bindAlias(parsedConstDef.identifier,
+                                    (void)state.bindAlias(
+                                        parsedConstDef.identifier,
                                         state.generateExp(initAlt));
                                 },
                                 [&](const auto&) {
@@ -929,7 +990,7 @@ namespace {
                                 MATCH(initVal.kind)
                                 WITH(
                                     [&](Ref<Exp> initAlt) {
-                                        state.bindAlias(
+                                        (void)state.bindAlias(
                                             resolvedVarDef.identifier,
                                             state.generateExp(initAlt));
                                     },
@@ -939,7 +1000,7 @@ namespace {
                                             "a scalar expression");
                                     });
                             } else {
-                                state.bindAlias(resolvedVarDef.identifier,
+                                (void)state.bindAlias(resolvedVarDef.identifier,
                                     koopa_ir::UndefValue { });
                             }
                             continue;
@@ -955,7 +1016,7 @@ namespace {
                                 if (state.m_semanticInfo
                                         ->findAlias(resolvedVarDef.identifier)
                                         .has_value()) {
-                                    state.bindAlias(
+                                    initValue = state.bindAlias(
                                         resolvedVarDef.identifier, initValue);
                                 }
                                 auto storeRef = state.m_program->alloc<
@@ -990,7 +1051,7 @@ namespace {
                                     && state.m_semanticInfo
                                         ->findAlias(resolvedVarDef.identifier)
                                         .has_value()) {
-                                    state.bindAlias(
+                                    initValue = state.bindAlias(
                                         resolvedVarDef.identifier, initValue);
                                 }
                                 auto storeRef = state.m_program->alloc<
@@ -1020,7 +1081,7 @@ namespace {
                             expAlt.identifier, *m_semanticInfo,
                             "assignment target is missing a symbol binding");
                         auto value = generateExp(parsedAssignStmt.exp);
-                        bindAlias(expAlt.identifier, value);
+                        value = bindAlias(expAlt.identifier, value);
                         if (!lvalSymbol.object().m_type.isPoly()) {
                             return;
                         }
@@ -1085,23 +1146,90 @@ namespace {
             return emitPolyConstruct(std::move(elements));
         }
 
+        [[nodiscard]] bool canBuildPointwise(Ref<Exp> exp) const
+        {
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> bool {
+                    if ((expAlt.op == BinaryOpKeyword::plus
+                            || expAlt.op == BinaryOpKeyword::minus)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        return canBuildPointwise(expAlt.lhs)
+                            || canBuildPointwise(expAlt.rhs);
+                    }
+                    if (expAlt.op != BinaryOpKeyword::star) {
+                        return false;
+                    }
+                    const bool lhsIsPoly
+                        = expHasType(expAlt.lhs, SemanticTypeKind::poly);
+                    const bool rhsIsPoly
+                        = expHasType(expAlt.rhs, SemanticTypeKind::poly);
+                    return lhsIsPoly || rhsIsPoly;
+                },
+                [&](const auto&) -> bool { return false; });
+        }
+
+        [[nodiscard]] Ref<koopa_ir::PointwiseNode> generatePointwiseNode(
+            Ref<Exp> exp)
+        {
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> Ref<koopa_ir::PointwiseNode> {
+                    if ((expAlt.op == BinaryOpKeyword::plus
+                            || expAlt.op == BinaryOpKeyword::minus)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        const auto op = expAlt.op == BinaryOpKeyword::plus
+                            ? koopa_ir::PvBinaryOp::add
+                            : koopa_ir::PvBinaryOp::sub;
+                        return makePointwiseBinary(op,
+                            generatePointwiseNode(expAlt.lhs),
+                            generatePointwiseNode(expAlt.rhs));
+                    }
+                    if (expAlt.op == BinaryOpKeyword::star) {
+                        const bool lhsIsPoly
+                            = expHasType(expAlt.lhs, SemanticTypeKind::poly);
+                        const bool rhsIsPoly
+                            = expHasType(expAlt.rhs, SemanticTypeKind::poly);
+                        if (lhsIsPoly && rhsIsPoly) {
+                            return makePointwiseBinary(
+                                koopa_ir::PvBinaryOp::mul,
+                                generatePointwiseNode(expAlt.lhs),
+                                generatePointwiseNode(expAlt.rhs));
+                        }
+                        if (lhsIsPoly) {
+                            return makePointwiseBinary(
+                                koopa_ir::PvBinaryOp::times,
+                                generatePointwiseNode(expAlt.lhs),
+                                makePointwiseLeaf(mintValueForExp(expAlt.rhs)));
+                        }
+                        if (rhsIsPoly) {
+                            return makePointwiseBinary(
+                                koopa_ir::PvBinaryOp::times,
+                                generatePointwiseNode(expAlt.rhs),
+                                makePointwiseLeaf(mintValueForExp(expAlt.lhs)));
+                        }
+                    }
+                    return makePointwiseLeaf(generatePolyBaseValue(exp));
+                },
+                [&](const auto&) -> Ref<koopa_ir::PointwiseNode> {
+                    return makePointwiseLeaf(generatePolyBaseValue(exp));
+                });
+        }
+
         [[nodiscard]] koopa_ir::Value generatePolyConvolution(
             const Exp::Binary& binaryExp)
         {
-            auto lhsPv = emitUnaryPoly(
-                koopa_ir::UnaryPolyOp::ntt, generateExp(binaryExp.lhs));
-            auto rhsPv = emitUnaryPoly(
-                koopa_ir::UnaryPolyOp::ntt, generateExp(binaryExp.rhs));
-            auto product = emitPvBinary(
-                koopa_ir::PvBinaryOp::mul, std::move(lhsPv), std::move(rhsPv));
-            return emitUnaryPoly(
-                koopa_ir::UnaryPolyOp::intt, std::move(product));
+            return emitPointwise(makePointwiseBinary(koopa_ir::PvBinaryOp::mul,
+                generatePointwiseNode(binaryExp.lhs),
+                generatePointwiseNode(binaryExp.rhs)));
         }
 
         [[nodiscard]] koopa_ir::Value generateBasePolyLength(Ref<Exp> exp)
         {
-            return emitRuntimeCall(
-                "@__yesod_poly_len", { generatePolyBaseValue(exp) });
+            return emitPolyLen(
+                koopa_ir::PolyLenOp::len, { generatePolyBaseValue(exp) });
         }
 
         [[nodiscard]] koopa_ir::Value generatePolyLength(Ref<Exp> exp)
@@ -1113,16 +1241,26 @@ namespace {
                             || expAlt.op == BinaryOpKeyword::minus)
                         && expHasType(expAlt.lhs, SemanticTypeKind::poly)
                         && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return emitRuntimeCall("@__yesod_max",
+                        return emitPolyLen(koopa_ir::PolyLenOp::max,
                             { generatePolyLength(expAlt.lhs),
                                 generatePolyLength(expAlt.rhs) });
                     }
                     if (expAlt.op == BinaryOpKeyword::star
                         && expHasType(expAlt.lhs, SemanticTypeKind::poly)
                         && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return emitRuntimeCall("@__yesod_poly_mul_len",
+                        return emitPolyLen(koopa_ir::PolyLenOp::mulLen,
                             { generatePolyLength(expAlt.lhs),
                                 generatePolyLength(expAlt.rhs) });
+                    }
+                    if (expAlt.op == BinaryOpKeyword::star
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && !expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        return generatePolyLength(expAlt.lhs);
+                    }
+                    if (expAlt.op == BinaryOpKeyword::star
+                        && !expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        return generatePolyLength(expAlt.rhs);
                     }
                     if ((expAlt.op == BinaryOpKeyword::sar
                             || expAlt.op == BinaryOpKeyword::shl)
@@ -1134,14 +1272,14 @@ namespace {
                                     .sourcePos = { }, .value = 0 },
                                 std::move(shift));
                         }
-                        return emitRuntimeCall("@__yesod_poly_shift_len",
+                        return emitPolyLen(koopa_ir::PolyLenOp::shiftLen,
                             { generatePolyLength(expAlt.lhs),
                                 std::move(shift) });
                     }
                     return generateBasePolyLength(exp);
                 },
                 [&](Exp::Slice expAlt) -> koopa_ir::Value {
-                    return emitRuntimeCall("@__yesod_poly_slice_len",
+                    return emitPolyLen(koopa_ir::PolyLenOp::sliceLen,
                         { generatePolyLength(expAlt.base),
                             generateExp(expAlt.start),
                             generateExp(expAlt.end) });
@@ -1253,10 +1391,10 @@ namespace {
             for (auto& term : terms) {
                 auto shiftedStart = emitIntAdd(start, term.shift);
                 auto shiftedEnd = emitIntAdd(end, term.shift);
-                term.start = emitRuntimeCall("@__yesod_max",
+                term.start = emitPolyLen(koopa_ir::PolyLenOp::max,
                     { std::move(term.start), std::move(shiftedStart) });
                 if (term.end.has_value()) {
-                    term.end = emitRuntimeCall("@__yesod_min",
+                    term.end = emitPolyLen(koopa_ir::PolyLenOp::min,
                         { std::move(*term.end), std::move(shiftedEnd) });
                 } else {
                     term.end = std::move(shiftedEnd);
@@ -1331,6 +1469,9 @@ namespace {
         [[nodiscard]] koopa_ir::Value generatePolyExpression(Ref<Exp> exp)
         {
             const auto& parsedExp = exp(m_ast);
+            if (canBuildPointwise(exp)) {
+                return emitPointwise(generatePointwiseNode(exp));
+            }
             if (const auto* binary = std::get_if<Exp::Binary>(&parsedExp.kind);
                 binary != nullptr && binary->op == BinaryOpKeyword::star
                 && expHasType(binary->lhs, SemanticTypeKind::poly)
@@ -1427,28 +1568,20 @@ namespace {
                         generateExp(expAlt.base), generateExp(expAlt.index));
                 },
                 [&](Exp::Ntt expAlt) -> koopa_ir::Value {
-                    return emitUnaryPoly(
-                        koopa_ir::UnaryPolyOp::ntt, generateExp(expAlt.value));
+                    (void)expAlt;
+                    throw std::runtime_error(
+                        "ntt should not materialize in Koopa IR");
                 },
                 [&](Exp::Intt expAlt) -> koopa_ir::Value {
-                    return emitUnaryPoly(
-                        koopa_ir::UnaryPolyOp::intt, generateExp(expAlt.value));
+                    (void)expAlt;
+                    throw std::runtime_error(
+                        "intt should not materialize in Koopa IR");
                 },
                 [&](Exp::PvBinary expAlt) -> koopa_ir::Value {
-                    koopa_ir::PvBinaryOp op = koopa_ir::PvBinaryOp::add;
-                    switch (expAlt.op) {
-                    case PvBinaryOpKeyword::add:
-                        op = koopa_ir::PvBinaryOp::add;
-                        break;
-                    case PvBinaryOpKeyword::sub:
-                        op = koopa_ir::PvBinaryOp::sub;
-                        break;
-                    case PvBinaryOpKeyword::mul:
-                        op = koopa_ir::PvBinaryOp::mul;
-                        break;
-                    }
-                    return emitPvBinary(
-                        op, generateExp(expAlt.lhs), generateExp(expAlt.rhs));
+                    (void)expAlt;
+                    throw std::runtime_error(
+                        "pv binary expression should not materialize in Koopa "
+                        "IR");
                 },
                 [&](Exp::Combine expAlt) -> koopa_ir::Value {
                     std::vector<koopa_ir::CombineTerm> terms;
@@ -2215,7 +2348,7 @@ namespace {
             if (semanticInfo.findAlias(funcFParam.identifier).has_value()
                 && (paramSymbol.object().m_type.isScalar()
                     || paramSymbol.object().m_type.isPoly())) {
-                state.bindAlias(
+                (void)state.bindAlias(
                     funcFParam.identifier, program[function.params[i]].symbol);
             }
             const std::string allocName
