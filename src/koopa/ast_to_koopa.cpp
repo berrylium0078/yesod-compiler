@@ -380,9 +380,12 @@ namespace {
         Ref<koopa_ir::BasicBlock> m_currentBasicBlock;
         int32_t m_nextTempId = 1;
         int32_t m_nextBlockId = 1;
+        int32_t m_nextExpressionId = 1;
+        int32_t m_currentExpressionId = 0;
         std::unordered_map<int32_t, std::string> m_storageBySymbolId;
         const frontend::SemanticFunctionSSA* m_ssa = nullptr;
         std::unordered_map<int64_t, koopa_ir::Value> m_valueByAliasKey;
+        std::unordered_map<int32_t, koopa_ir::Value> m_valueBySymbolId;
         std::unordered_map<int32_t, std::string> m_functionBySymbolId;
         std::unordered_map<Ref<frontend::SemanticBasicBlock>,
             Ref<koopa_ir::BasicBlock>>
@@ -453,6 +456,7 @@ namespace {
             auto freshValue = materializeFreshValue(
                 std::move(value), symbol.object().m_type);
             m_valueByAliasKey[aliasKey(*alias)] = freshValue;
+            m_valueBySymbolId[symbol.m_id] = freshValue;
             return freshValue;
         }
 
@@ -465,6 +469,18 @@ namespace {
             }
             const auto valueIt = m_valueByAliasKey.find(aliasKey(*alias));
             if (valueIt == m_valueByAliasKey.end()) {
+                return requireCurrentSymbolValue(identifier, message);
+            }
+            return valueIt->second;
+        }
+
+        [[nodiscard]] koopa_ir::Value requireCurrentSymbolValue(
+            Ref<frontend::Identifier> identifier, const char* message) const
+        {
+            const auto& symbol = requireSymbolForIdentifier(
+                identifier, *m_semanticInfo, message);
+            const auto valueIt = m_valueBySymbolId.find(symbol.m_id);
+            if (valueIt == m_valueBySymbolId.end()) {
                 throw std::runtime_error(message);
             }
             return valueIt->second;
@@ -492,7 +508,7 @@ namespace {
         {
             auto defRef
                 = m_program->alloc<koopa_ir::SymbolDef>(koopa_ir::SymbolDef {
-                    .sourcePos = { },
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .symbol = makeIrSymbol(name),
                     .rhs = std::move(rhs),
                     .annotations = { },
@@ -610,7 +626,7 @@ namespace {
         {
             return m_program->alloc<koopa_ir::PointwiseNode>(
                 koopa_ir::PointwiseNode {
-                    .sourcePos = { },
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .kind = koopa_ir::PointwiseLeaf {
                         .value = std::move(value),
                     },
@@ -623,9 +639,10 @@ namespace {
         {
             return m_program->alloc<koopa_ir::PointwiseNode>(
                 koopa_ir::PointwiseNode {
-                    .sourcePos = { },
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .kind = koopa_ir::PointwiseBinary {
-                        .sourcePos = { },
+                        .sourcePos
+                        = koopa_ir::SourcePos { m_currentExpressionId },
                         .op = op,
                         .lhs = lhs,
                         .rhs = rhs,
@@ -638,7 +655,7 @@ namespace {
         {
             auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
                 koopa_ir::PointwiseExpr {
-                    .sourcePos = { },
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .root = root,
                     .annotations = { },
                 });
@@ -650,7 +667,7 @@ namespace {
         {
             auto rhsRef = m_program->alloc<koopa_ir::CombineExpr>(
                 koopa_ir::CombineExpr {
-                    .sourcePos = { },
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .terms = std::move(terms),
                     .annotations = { },
                 });
@@ -814,9 +831,9 @@ namespace {
             }
             for (size_t i = 0; i < ssaBlockIt->second.m_params.size(); ++i) {
                 const auto& blockParam = (*m_program)[block.params[i]];
-                m_valueByAliasKey[aliasKey(
-                    ssaBlockIt->second.m_params[i].m_alias)]
-                    = blockParam.symbol;
+                const auto& param = ssaBlockIt->second.m_params[i];
+                m_valueByAliasKey[aliasKey(param.m_alias)] = blockParam.symbol;
+                m_valueBySymbolId[param.m_symbolId] = blockParam.symbol;
             }
             for (const auto& item : semanticBlock.items) {
                 generateSemanticBlockItem(item);
@@ -827,6 +844,8 @@ namespace {
             }
             generateSemanticTerminator(
                 semanticBlockRef, *semanticBlock.terminator);
+            koopa_ir::simplifyLocalValues(
+                *m_program, currentBlock(), 0, { }, false);
         }
 
         void generateSemanticBlockItem(
@@ -920,7 +939,7 @@ namespace {
                         if (state.m_semanticInfo
                                 ->findAlias(parsedConstDef.identifier)
                                 .has_value()
-                            && type.isScalar()) {
+                            && (type.isScalar() || type.isPoly())) {
                             const auto& constInitVal
                                 = parsedConstDef.constInitVal(state.m_ast);
                             MATCH(constInitVal.kind)
@@ -932,8 +951,8 @@ namespace {
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
-                                        "scalar const initializer should be a "
-                                        "scalar expression");
+                                        "SSA-tracked const initializer should "
+                                        "be an expression");
                                 });
                             continue;
                         }
@@ -983,7 +1002,7 @@ namespace {
                         if (state.m_semanticInfo
                                 ->findAlias(resolvedVarDef.identifier)
                                 .has_value()
-                            && type.isScalar()) {
+                            && (type.isScalar() || type.isPoly())) {
                             if (resolvedVarDef.initVal) {
                                 const auto& initVal
                                     = resolvedVarDef.initVal(state.m_ast);
@@ -996,9 +1015,12 @@ namespace {
                                     },
                                     [&](const auto&) {
                                         throw std::runtime_error(
-                                            "scalar var initializer should be "
-                                            "a scalar expression");
+                                            "SSA-tracked var initializer "
+                                            "should be an expression");
                                     });
+                            } else if (type.isPoly()) {
+                                (void)state.bindAlias(resolvedVarDef.identifier,
+                                    state.emitPolyConstruct({ }));
                             } else {
                                 (void)state.bindAlias(resolvedVarDef.identifier,
                                     koopa_ir::UndefValue { });
@@ -1077,23 +1099,8 @@ namespace {
                 [&](Exp::LVal expAlt) {
                     if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
                         && expAlt.indices.empty()) {
-                        const auto& lvalSymbol = requireSymbolForIdentifier(
-                            expAlt.identifier, *m_semanticInfo,
-                            "assignment target is missing a symbol binding");
                         auto value = generateExp(parsedAssignStmt.exp);
-                        value = bindAlias(expAlt.identifier, value);
-                        if (!lvalSymbol.object().m_type.isPoly()) {
-                            return;
-                        }
-                        const auto address = generateLValueAddress(expAlt);
-                        auto storeRef = m_program->alloc<koopa_ir::StoreStmt>(
-                            koopa_ir::StoreStmt {
-                                .sourcePos = { },
-                                .value = toStoreValue(value),
-                                .destination = address.symbol,
-                                .annotations = { },
-                            });
-                        pushStatement(storeRef);
+                        (void)bindAlias(expAlt.identifier, value);
                         return;
                     }
                     const auto address = generateLValueAddress(expAlt);
@@ -1338,6 +1345,15 @@ namespace {
                     return emitCall(functionIt->second, std::move(args), true);
                 },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
+                    if (expAlt.indices.empty()) {
+                        if (m_semanticInfo->findAlias(expAlt.identifier)
+                                .has_value()) {
+                            return requireAliasValue(expAlt.identifier,
+                                "poly lvalue is missing an SSA alias value");
+                        }
+                        return requireCurrentSymbolValue(expAlt.identifier,
+                            "poly lvalue is missing a current SSA value");
+                    }
                     auto address = generateLValueAddress(expAlt);
                     return emitLoad(address.symbol);
                 },
@@ -1467,6 +1483,24 @@ namespace {
         }
 
         [[nodiscard]] koopa_ir::Value generatePolyExpression(Ref<Exp> exp)
+        {
+            const bool ownsExpressionScope = m_currentExpressionId == 0;
+            const int32_t previousExpressionId = m_currentExpressionId;
+            const size_t firstStatementIndex = currentBlock().statements.size();
+            if (ownsExpressionScope) {
+                m_currentExpressionId = m_nextExpressionId++;
+            }
+
+            auto result = generatePolyExpressionBody(exp);
+            if (ownsExpressionScope) {
+                koopa_ir::simplifyLocalValues(*m_program, currentBlock(),
+                    firstStatementIndex, { result });
+                m_currentExpressionId = previousExpressionId;
+            }
+            return result;
+        }
+
+        [[nodiscard]] koopa_ir::Value generatePolyExpressionBody(Ref<Exp> exp)
         {
             const auto& parsedExp = exp(m_ast);
             if (canBuildPointwise(exp)) {
@@ -1642,8 +1676,27 @@ namespace {
                                 .identifier = expAlt.identifier,
                                 .indices = std::move(baseIndices),
                             };
-                            auto baseAddress = generateLValueAddress(baseLVal);
-                            return emitGetCoeff(emitLoad(baseAddress.symbol),
+                            koopa_ir::Value baseValue;
+                            if (baseLVal.indices.empty()) {
+                                if (m_semanticInfo
+                                        ->findAlias(baseLVal.identifier)
+                                        .has_value()) {
+                                    baseValue = requireAliasValue(
+                                        baseLVal.identifier,
+                                        "poly lvalue is missing an SSA alias "
+                                        "value");
+                                } else {
+                                    baseValue = requireCurrentSymbolValue(
+                                        baseLVal.identifier,
+                                        "poly lvalue is missing a current SSA "
+                                        "value");
+                                }
+                            } else {
+                                auto baseAddress
+                                    = generateLValueAddress(baseLVal);
+                                baseValue = emitLoad(baseAddress.symbol);
+                            }
+                            return emitGetCoeff(std::move(baseValue),
                                 generateExp(expAlt.indices.back()));
                         }
                     }
@@ -1793,68 +1846,47 @@ namespace {
 
         [[nodiscard]] koopa_ir::Value generateBooleanAsInt(Ref<Exp> exp)
         {
-            const std::string resultName = makeTempName(m_nextTempId);
-            (void)emitAlloc(SemanticType::makeInteger(), resultName);
-            auto zeroStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
-                koopa_ir::StoreStmt {
-                    .sourcePos = {},
-                    .value = koopa_ir::IntegerLiteral {
-                        .sourcePos = {},
-                        .value = 0,
-                    },
-                    .destination = makeIrSymbol(resultName),
-                    .annotations = {},
-                });
-            pushStatement(zeroStoreRef);
-
             auto trueBlock = createBasicBlock("bool_true");
             auto falseBlock = createBasicBlock("bool_false");
             auto contBlock = createBasicBlock("bool_end");
+            const auto resultSymbol = makeIrSymbol(makeTempName(m_nextTempId));
+            (*m_program)[contBlock].params.push_back(
+                m_program->alloc<koopa_ir::BlockParameter>(
+                    koopa_ir::BlockParameter {
+                        .sourcePos = { },
+                        .symbol = resultSymbol,
+                        .type = koopa_ir::I32Type { },
+                        .annotations = { },
+                    }));
 
             generateBooleanBranch(exp, trueBlock, falseBlock);
 
             m_currentBasicBlock = trueBlock;
-            auto trueStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
-                koopa_ir::StoreStmt {
-                    .sourcePos = {},
-                    .value = koopa_ir::IntegerLiteral {
-                        .sourcePos = {},
-                        .value = 1,
-                    },
-                    .destination = makeIrSymbol(resultName),
-                    .annotations = {},
-                });
-            pushStatement(trueStoreRef);
             setTerminator(m_program->alloc<koopa_ir::JumpTerminator>(
                 koopa_ir::JumpTerminator {
                     .sourcePos = { },
                     .target = (*m_program)[contBlock].label,
-                    .args = { },
+                    .args = { koopa_ir::IntegerLiteral {
+                        .sourcePos = { },
+                        .value = 1,
+                    } },
                     .annotations = { },
                 }));
 
             m_currentBasicBlock = falseBlock;
-            auto falseStoreRef = m_program->alloc<koopa_ir::StoreStmt>(
-                koopa_ir::StoreStmt {
-                    .sourcePos = {},
-                    .value = koopa_ir::IntegerLiteral {
-                        .sourcePos = {},
-                        .value = 0,
-                    },
-                    .destination = makeIrSymbol(resultName),
-                    .annotations = {},
-                });
-            pushStatement(falseStoreRef);
             setTerminator(m_program->alloc<koopa_ir::JumpTerminator>(
                 koopa_ir::JumpTerminator {
                     .sourcePos = { },
                     .target = (*m_program)[contBlock].label,
-                    .args = { },
+                    .args = { koopa_ir::IntegerLiteral {
+                        .sourcePos = { },
+                        .value = 0,
+                    } },
                     .annotations = { },
                 }));
 
             m_currentBasicBlock = contBlock;
-            return emitLoad(makeIrSymbol(resultName));
+            return resultSymbol;
         }
 
         void generateBooleanBranch(Ref<Exp> exp,
@@ -2350,6 +2382,7 @@ namespace {
                     || paramSymbol.object().m_type.isPoly())) {
                 (void)state.bindAlias(
                     funcFParam.identifier, program[function.params[i]].symbol);
+                continue;
             }
             const std::string allocName
                 = state.makeLocalStorageName(paramSymbol);
@@ -2372,6 +2405,7 @@ namespace {
         }
 
         pruneUnreachableBlocks(program, functionRef, entryBlockRef);
+        koopa_ir::eliminateDeadValues(program, program[functionRef]);
     }
 
     std::unique_ptr<koopa_ir::Program> generateIrProgram(const AST& ast,

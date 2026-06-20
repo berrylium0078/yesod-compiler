@@ -465,6 +465,10 @@ bool hasReturnValue(const ReturnTerminator& terminator);
 bool usesSsaExtension(const BranchTerminator& terminator);
 bool usesSsaExtension(const JumpTerminator& terminator);
 bool usesSsaExtension(const BasicBlock& block, const Program& program);
+void simplifyLocalValues(Program& program, BasicBlock& block,
+    size_t firstStatementIndex, const std::vector<Value>& liveValues,
+    bool eliminateDeadValues = true);
+void eliminateDeadValues(Program& program, FunctionDef& function);
 void validate(const Program& program);
 std::string serializeToKoopa(const Program& program);
 

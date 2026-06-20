@@ -10,6 +10,8 @@
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
 #include "koopa/koopa_interpreter.h"
+#include "koopa/koopa_simplify_assert.h"
+#include "poly/poly_prelude.h"
 
 namespace {
 
@@ -27,7 +29,7 @@ namespace runner = yesod::test_support::interpreter_runner;
     const std::string& source)
 {
     frontend::Parser parser(frontend::prependBuiltinFunctionDeclarations(
-        std::string("void putpoly(poly p);\n") + source));
+        yesod::test_support::poly::prependPolyTestPreludeIfMissing(source)));
     auto parseOutput = parser.parse();
     if (!parseOutput.success()) {
         throw std::runtime_error("parse failed");
@@ -69,6 +71,8 @@ namespace runner = yesod::test_support::interpreter_runner;
 
 int main(int argc, char** argv)
 {
+    yesod::test_support::koopa::assertPolySimplificationPassApplied();
+
     const runner::RunnerConfig config {
         .defaultTestDirectory
         = fs::path(YESOD_TEST_SOURCE_DIR) / "testsuit-collection" / "lvX",

@@ -1,3 +1,16 @@
+void putpoly(poly f)
+{
+    putint(!f);
+    putch(58);
+    int i = 0;
+    while (i < !f) {
+        putch(32);
+        putint(int(f[i]));
+        i = i + 1;
+    }
+    putch(10);
+}
+
 poly set_coeff(poly g, int pos, mint val) {
     return g + (poly(val - g[pos]) << pos);
 }

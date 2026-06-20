@@ -5,21 +5,16 @@
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "poly/poly_interpreter.h"
+#include "poly/poly_prelude.h"
 
 namespace yesod::test_support::poly {
-
-namespace {
-
-    constexpr const char* POLY_BUILTIN_DECLARATIONS = "void putpoly(poly p);\n";
-
-} // namespace
 
 yesod::test_support::interpreter_runner::ExecuteResult executeSource(
     const std::string& source, std::istream& is, std::ostream& os,
     std::stop_token stopToken)
 {
     frontend::Parser parser(frontend::prependBuiltinFunctionDeclarations(
-        std::string(POLY_BUILTIN_DECLARATIONS) + source));
+        prependPolyTestPreludeIfMissing(source)));
     auto parseOutput = parser.parse();
     if (!parseOutput.success()) {
         throw std::runtime_error("parse failed");

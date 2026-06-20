@@ -65,7 +65,7 @@ namespace {
                 },
                 [&](const Exp::Unary& unaryExp) { walkExp(unaryExp.lhs); },
                 [&](const Exp::Cast& castExp) { walkExp(castExp.value); },
-                [&](const Exp::Number&) {},
+                [&](const Exp::Number&) { },
                 [&](const Exp::Call& funcCall) {
                     for (auto arg : funcCall.params) {
                         walkExp(arg);
@@ -115,9 +115,6 @@ namespace {
                 [&](const Exp::LVal& lVal) {
                     for (auto index : lVal.indices) {
                         walkExp(index);
-                    }
-                    if (!lVal.indices.empty()) {
-                        return;
                     }
                     const auto symbolId
                         = m_symbolResult.findSymbolId(lVal.identifier);
@@ -227,7 +224,7 @@ namespace {
                                     }
                                 });
                         },
-                        [&](const auto&) {});
+                        [&](const auto&) { });
                 }
             }
         }
@@ -253,7 +250,7 @@ namespace {
                     [&](const SemanticJumpTerminator& jump) {
                         info.m_successors.push_back(jump.target);
                     },
-                    [&](const SemanticReturnTerminator&) {});
+                    [&](const SemanticReturnTerminator&) { });
             }
             for (auto block : m_blocks) {
                 for (auto succ :
@@ -501,7 +498,7 @@ namespace {
                         [&](const SemanticBranchTerminator& branch) {
                             walker.walkExp(branch.condition);
                         },
-                        [&](const SemanticJumpTerminator&) {},
+                        [&](const SemanticJumpTerminator&) { },
                         [&](const SemanticReturnTerminator& ret) {
                             if (!ret.value.has_value()) {
                                 return;
@@ -574,7 +571,7 @@ namespace {
                     const auto block = worklist.front();
                     worklist.pop();
                     for (auto frontier : m_result.m_blockInfoByBlock.at(block)
-                                             .m_dominanceFrontier) {
+                             .m_dominanceFrontier) {
                         auto& frontierInfo
                             = m_result.m_blockInfoByBlock.at(frontier);
                         if (!frontierInfo.m_liveIn.contains(symbolId)) {
@@ -740,7 +737,7 @@ namespace {
                             [&](const SemanticBranchTerminator& branch) {
                                 bindScalarReads(branch.condition, aliases);
                             },
-                            [&](const SemanticJumpTerminator&) {},
+                            [&](const SemanticJumpTerminator&) { },
                             [&](const SemanticReturnTerminator& ret) {
                                 if (!ret.value.has_value()) {
                                     return;

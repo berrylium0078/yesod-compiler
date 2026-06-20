@@ -5,11 +5,16 @@
 #include <string>
 #include <vector>
 
+#include "frontend/parser.h"
+#include "frontend/semantic.h"
+#include "koopa/ast_to_koopa.h"
 #include "koopa/ir.h"
+#include "koopa/koopa_simplify_assert.h"
 
 namespace {
 
 namespace koopa_ir = yesod::koopa::ir;
+namespace frontend = yesod::frontend;
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -118,10 +123,11 @@ struct ValidationProgramBuilder {
             leaf(symbol("%p2")));
     }
 
-    void addSymbolDef(const std::string& name, koopa_ir::SymbolRhs rhs)
+    void addSymbolDef(
+        const std::string& name, koopa_ir::SymbolRhs rhs, int32_t sourceId = 1)
     {
         auto defRef = program.alloc<koopa_ir::SymbolDef>(koopa_ir::SymbolDef {
-            .sourcePos = { },
+            .sourcePos = koopa_ir::SourcePos { sourceId },
             .symbol = symbol(name),
             .rhs = std::move(rhs),
             .annotations = { },
@@ -129,25 +135,27 @@ struct ValidationProgramBuilder {
         program[blockRef.ref()].statements.push_back(defRef);
     }
 
-    void addPointwise(
-        const std::string& name, yesod::Ref<koopa_ir::PointwiseNode> root)
+    void addPointwise(const std::string& name,
+        yesod::Ref<koopa_ir::PointwiseNode> root, int32_t sourceId = 1)
     {
         addSymbolDef(name,
             program.alloc<koopa_ir::PointwiseExpr>(koopa_ir::PointwiseExpr {
-                .sourcePos = { },
+                .sourcePos = koopa_ir::SourcePos { sourceId },
                 .root = root,
                 .annotations = { },
-            }));
+            }),
+            sourceId);
     }
 
     void addCombine(const std::string& name, koopa_ir::Value value,
         koopa_ir::Value start = integer(0),
         std::optional<koopa_ir::Value> end = std::nullopt,
-        koopa_ir::Value shift = integer(0), koopa_ir::Value scale = integer(1))
+        koopa_ir::Value shift = integer(0), koopa_ir::Value scale = integer(1),
+        int32_t sourceId = 1)
     {
         addSymbolDef(name,
             program.alloc<koopa_ir::CombineExpr>(koopa_ir::CombineExpr {
-                .sourcePos = { },
+                .sourcePos = koopa_ir::SourcePos { sourceId },
                 .terms = { koopa_ir::CombineTerm {
                     .value = std::move(value),
                     .start = std::move(start),
@@ -156,18 +164,20 @@ struct ValidationProgramBuilder {
                     .scale = std::move(scale),
                 } },
                 .annotations = { },
-            }));
+            }),
+            sourceId);
     }
 
-    void addCombineTerms(
-        const std::string& name, std::vector<koopa_ir::CombineTerm> terms)
+    void addCombineTerms(const std::string& name,
+        std::vector<koopa_ir::CombineTerm> terms, int32_t sourceId = 1)
     {
         addSymbolDef(name,
             program.alloc<koopa_ir::CombineExpr>(koopa_ir::CombineExpr {
-                .sourcePos = { },
+                .sourcePos = koopa_ir::SourcePos { sourceId },
                 .terms = std::move(terms),
                 .annotations = { },
-            }));
+            }),
+            sourceId);
     }
 
     void addPolyLen(const std::string& name, koopa_ir::Value value)
@@ -227,7 +237,8 @@ void requireInvalid(
 void testRejectsPointwiseOperandThatIsPointwiseResult()
 {
     requireInvalid("nested pointwise operand",
-        "pointwise operand cannot be another pointwise result",
+        "pointwise operand cannot be another pointwise result from the same "
+        "expression",
         [](ValidationProgramBuilder& builder) -> void {
             builder.addPointwise("%pw1", builder.polyMulRoot());
             builder.addPointwise("%bad",
@@ -239,11 +250,27 @@ void testRejectsPointwiseOperandThatIsPointwiseResult()
 void testRejectsNestedCombine()
 {
     requireInvalid("nested combine",
-        "combine term source cannot be another combine",
+        "combine term source cannot be another combine from the same "
+        "expression",
         [](ValidationProgramBuilder& builder) -> void {
             builder.addCombine("%combine1", symbol("%p1"));
             builder.addCombine("%bad", symbol("%combine1"));
         });
+}
+
+void testAcceptsCrossStatementNestedFusionValues()
+{
+    ValidationProgramBuilder builder;
+    builder.addPointwise("%pw1", builder.polyMulRoot(), 1);
+    builder.addPointwise("%pw2",
+        builder.binary(koopa_ir::PvBinaryOp::mul, builder.leaf(symbol("%pw1")),
+            builder.leaf(symbol("%p1"))),
+        2);
+    builder.addCombine("%combine1", symbol("%p1"), integer(0), std::nullopt,
+        integer(0), integer(1), 3);
+    builder.addCombine("%combine2", symbol("%combine1"), integer(0),
+        std::nullopt, integer(0), integer(1), 4);
+    koopa_ir::validate(builder.program);
 }
 
 void testRejectsPolyLenOfCombine()
@@ -362,12 +389,52 @@ void testRejectsTrivialCombineOfPointwiseResults()
         });
 }
 
+void testPolyLocalsLowerToSsaValues()
+{
+    constexpr const char* source = R"(
+poly add_one(poly p)
+{
+    poly q = p;
+    q = q + poly(1);
+    return q;
+}
+
+int main()
+{
+    return 0;
+}
+)";
+    frontend::Parser parser(
+        frontend::prependBuiltinFunctionDeclarations(std::string(source)));
+    auto parseOutput = parser.parse();
+    require(parseOutput.success(), "poly local SSA test should parse");
+
+    frontend::SemanticAnalyzer semanticAnalyzer;
+    auto semanticOutput = semanticAnalyzer.analyze(
+        std::move(parseOutput.m_ast), parseOutput.m_root.ref());
+    require(semanticOutput.success(), "poly local SSA test should be semantic");
+
+    yesod::koopa::Generator generator;
+    auto program = generator.generateIr(
+        semanticOutput.m_ast, semanticOutput.m_root, semanticOutput.m_info);
+    koopa_ir::validate(*program);
+    const auto text = koopa_ir::serializeToKoopa(*program);
+    require(text.find("alloc poly") == std::string::npos,
+        "poly locals and params should not lower to alloc poly");
+    require(text.find("load %v_") == std::string::npos,
+        "poly locals and params should not lower to local loads");
+    require(text.find("store %arg_0") == std::string::npos,
+        "poly params should not be stored into local slots");
+}
+
 } // namespace
 
 int main()
 {
+    yesod::test_support::koopa::assertPolySimplificationPassApplied();
     testRejectsPointwiseOperandThatIsPointwiseResult();
     testRejectsNestedCombine();
+    testAcceptsCrossStatementNestedFusionValues();
     testRejectsPolyLenOfCombine();
     testRejectsPolyLenOfPointwise();
     testRejectsPlainPolyBinary();
@@ -378,5 +445,6 @@ int main()
     testRejectsPointwiseTimesTypeMismatch();
     testRejectsTrivialCombineOfPointwiseResults();
     testAcceptsCopyPseudoInstruction();
+    testPolyLocalsLowerToSsaValues();
     return 0;
 }

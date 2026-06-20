@@ -1,3 +1,16 @@
+void putpoly(poly f)
+{
+    putint(!f);
+    putch(58);
+    int i = 0;
+    while (i < !f) {
+        putch(32);
+        putint(int(f[i]));
+        i = i + 1;
+    }
+    putch(10);
+}
+
 poly make_poly(int a, int b)
 {
     return poly(a) + (poly(b) << 1);

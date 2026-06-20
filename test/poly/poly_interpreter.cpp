@@ -200,9 +200,6 @@ namespace {
                 }
                 m_os << '\n';
                 m_builtinResult = int32_t { 0 };
-            } else if (name == "putpoly") {
-                m_os << asPoly(params.at(0));
-                m_builtinResult = int32_t { 0 };
             } else if (name == "starttime" || name == "stoptime") {
                 m_builtinResult = int32_t { 0 };
             }

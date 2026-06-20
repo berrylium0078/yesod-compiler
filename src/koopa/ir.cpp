@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -573,6 +574,204 @@ bool usesSsaExtension(const BasicBlock& block, const Program& program)
 
 namespace {
 
+    [[nodiscard]] std::optional<std::string> symbolSpelling(const Value& value)
+    {
+        if (const auto* symbol = std::get_if<Symbol>(&value)) {
+            return symbol->spelling;
+        }
+        return std::nullopt;
+    }
+
+    template <typename Visit> void visitValue(Value& value, Visit&& visit)
+    {
+        visit(value);
+    }
+
+    template <typename Visit> void visitValue(const Value& value, Visit&& visit)
+    {
+        visit(value);
+    }
+
+    template <typename Visit>
+    void visitStoreValue(
+        const StoreValue& value, const Program& program, Visit&& visit)
+    {
+        MATCH(value)
+        WITH([&](const Symbol& symbol) { visit(Value { symbol }); },
+            [&](const IntegerLiteral&) { }, [&](const UndefValue&) { },
+            [&](const ZeroInit&) { },
+            [&](Ref<AggregateInitializer> aggregateRef) {
+                const auto& aggregate = program[aggregateRef];
+                for (const auto& element : aggregate.elements) {
+                    MATCH(element)
+                    WITH([&](const IntegerLiteral&) { },
+                        [&](const UndefValue&) { }, [&](const ZeroInit&) { },
+                        [&](Ref<AggregateInitializer> nestedRef) {
+                            visitStoreValue(
+                                StoreValue { nestedRef }, program, visit);
+                        });
+                }
+            });
+    }
+
+    template <typename Visit>
+    void visitPointwiseNodeValues(
+        Program& program, Ref<PointwiseNode> nodeRef, Visit&& visit)
+    {
+        auto& node = program[nodeRef];
+        MATCH(node.kind)
+        WITH([&](PointwiseLeaf& leaf) { visitValue(leaf.value, visit); },
+            [&](PointwiseBinary& binary) {
+                visitPointwiseNodeValues(program, binary.lhs, visit);
+                visitPointwiseNodeValues(program, binary.rhs, visit);
+            });
+    }
+
+    template <typename Visit>
+    void visitPointwiseNodeValues(
+        const Program& program, Ref<PointwiseNode> nodeRef, Visit&& visit)
+    {
+        const auto& node = program[nodeRef];
+        MATCH(node.kind)
+        WITH([&](const PointwiseLeaf& leaf) { visitValue(leaf.value, visit); },
+            [&](const PointwiseBinary& binary) {
+                visitPointwiseNodeValues(program, binary.lhs, visit);
+                visitPointwiseNodeValues(program, binary.rhs, visit);
+            });
+    }
+
+    template <typename Visit>
+    void visitRhsValues(Program& program, SymbolRhs& rhs, Visit&& visit)
+    {
+        MATCH(rhs)
+        WITH([&](Ref<MemoryDeclaration>) { }, [&](Ref<LoadExpr>) { },
+            [&](Ref<GetPointerExpr> ref) {
+                visitValue(program[ref].index, visit);
+            },
+            [&](Ref<GetElementPointerExpr> ref) {
+                visitValue(program[ref].index, visit);
+            },
+            [&](Ref<BinaryExpr> ref) {
+                auto& expr = program[ref];
+                visitValue(expr.lhs, visit);
+                visitValue(expr.rhs, visit);
+            },
+            [&](Ref<CallExpr> ref) {
+                for (auto& arg : program[ref].args) {
+                    visitValue(arg, visit);
+                }
+            },
+            [&](Ref<CopyExpr> ref) { visitValue(program[ref].value, visit); },
+            [&](Ref<PolyLenExpr> ref) {
+                for (auto& arg : program[ref].args) {
+                    visitValue(arg, visit);
+                }
+            },
+            [&](Ref<PointwiseExpr> ref) {
+                visitPointwiseNodeValues(program, program[ref].root, visit);
+            },
+            [&](Ref<CombineExpr> ref) {
+                for (auto& term : program[ref].terms) {
+                    visitValue(term.value, visit);
+                    visitValue(term.start, visit);
+                    if (term.end.has_value()) {
+                        visitValue(*term.end, visit);
+                    }
+                    visitValue(term.shift, visit);
+                    visitValue(term.scale, visit);
+                }
+            },
+            [&](Ref<GetCoeffExpr> ref) {
+                auto& expr = program[ref];
+                visitValue(expr.value, visit);
+                visitValue(expr.index, visit);
+            },
+            [&](Ref<PolyConstructExpr> ref) {
+                for (auto& element : program[ref].elements) {
+                    visitValue(element, visit);
+                }
+            },
+            [&](Ref<ConversionExpr> ref) {
+                visitValue(program[ref].value, visit);
+            });
+    }
+
+    template <typename Visit>
+    void visitRhsValues(
+        const Program& program, const SymbolRhs& rhs, Visit&& visit)
+    {
+        MATCH(rhs)
+        WITH([&](Ref<MemoryDeclaration>) { }, [&](Ref<LoadExpr>) { },
+            [&](Ref<GetPointerExpr> ref) { visit(program[ref].index); },
+            [&](Ref<GetElementPointerExpr> ref) { visit(program[ref].index); },
+            [&](Ref<BinaryExpr> ref) {
+                const auto& expr = program[ref];
+                visit(expr.lhs);
+                visit(expr.rhs);
+            },
+            [&](Ref<CallExpr> ref) {
+                for (const auto& arg : program[ref].args) {
+                    visit(arg);
+                }
+            },
+            [&](Ref<CopyExpr> ref) { visit(program[ref].value); },
+            [&](Ref<PolyLenExpr> ref) {
+                for (const auto& arg : program[ref].args) {
+                    visit(arg);
+                }
+            },
+            [&](Ref<PointwiseExpr> ref) {
+                visitPointwiseNodeValues(program, program[ref].root, visit);
+            },
+            [&](Ref<CombineExpr> ref) {
+                for (const auto& term : program[ref].terms) {
+                    visit(term.value);
+                    visit(term.start);
+                    if (term.end.has_value()) {
+                        visit(*term.end);
+                    }
+                    visit(term.shift);
+                    visit(term.scale);
+                }
+            },
+            [&](Ref<GetCoeffExpr> ref) {
+                const auto& expr = program[ref];
+                visit(expr.value);
+                visit(expr.index);
+            },
+            [&](Ref<PolyConstructExpr> ref) {
+                for (const auto& element : program[ref].elements) {
+                    visit(element);
+                }
+            },
+            [&](Ref<ConversionExpr> ref) { visit(program[ref].value); });
+    }
+
+    [[nodiscard]] bool isIdentityTerm(const CombineTerm& term)
+    {
+        const auto* start = std::get_if<IntegerLiteral>(&term.start);
+        const auto* shift = std::get_if<IntegerLiteral>(&term.shift);
+        const auto* scale = std::get_if<IntegerLiteral>(&term.scale);
+        return start != nullptr && start->value == 0 && !term.end.has_value()
+            && shift != nullptr && shift->value == 0 && scale != nullptr
+            && scale->value == 1;
+    }
+
+    [[nodiscard]] bool rhsIsRemovable(const SymbolRhs& rhs)
+    {
+        return MATCH(rhs)
+            WITH([](Ref<MemoryDeclaration>) -> bool { return false; },
+                [](Ref<LoadExpr>) -> bool { return false; },
+                [](Ref<GetPointerExpr>) -> bool { return false; },
+                [](Ref<GetElementPointerExpr>) -> bool { return false; },
+                [](Ref<CallExpr>) -> bool { return false; },
+                [](const auto&) -> bool {
+                    // Arithmetic and poly pseudo-instructions are pure SSA
+                    // values.
+                    return true;
+                });
+    }
+
     enum class ValidationType {
         integer,
         mint,
@@ -656,12 +855,392 @@ namespace {
 
 } // namespace
 
+void simplifyLocalValues(Program& program, BasicBlock& block,
+    size_t firstStatementIndex, const std::vector<Value>& liveValues,
+    bool eliminateDeadValues)
+{
+    struct DefInfo {
+        Ref<SymbolDef> def;
+        size_t index = 0;
+    };
+
+    auto countUses = [&]() {
+        std::unordered_map<std::string, size_t> counts;
+        auto countValue = [&](const Value& value) {
+            if (const auto spelling = symbolSpelling(value);
+                spelling.has_value()) {
+                ++counts[*spelling];
+            }
+        };
+        for (const auto& value : liveValues) {
+            countValue(value);
+        }
+        for (const auto& statement : block.statements) {
+            MATCH(statement)
+            WITH(
+                [&](Ref<SymbolDef> defRef) {
+                    visitRhsValues(program, program[defRef].rhs, countValue);
+                },
+                [&](Ref<StoreStmt> storeRef) {
+                    visitStoreValue(
+                        program[storeRef].value, program, countValue);
+                    countValue(program[storeRef].destination);
+                },
+                [&](Ref<CallExpr> callRef) {
+                    for (const auto& arg : program[callRef].args) {
+                        countValue(arg);
+                    }
+                });
+        }
+        MATCH(block.terminator)
+        WITH(
+            [&](Ref<BranchTerminator> terminatorRef) {
+                const auto& terminator = program[terminatorRef];
+                countValue(terminator.condition);
+                for (const auto& arg : terminator.trueArgs) {
+                    countValue(arg);
+                }
+                for (const auto& arg : terminator.falseArgs) {
+                    countValue(arg);
+                }
+            },
+            [&](Ref<JumpTerminator> terminatorRef) {
+                for (const auto& arg : program[terminatorRef].args) {
+                    countValue(arg);
+                }
+            },
+            [&](Ref<ReturnTerminator> terminatorRef) {
+                const auto& terminator = program[terminatorRef];
+                if (terminator.value.has_value()) {
+                    countValue(*terminator.value);
+                }
+            });
+        return counts;
+    };
+
+    auto collectDefs = [&]() {
+        std::unordered_map<std::string, DefInfo> defs;
+        for (size_t index = 0; index < block.statements.size(); ++index) {
+            const auto& statement = block.statements[index];
+            if (const auto* defRef = std::get_if<Ref<SymbolDef>>(&statement)) {
+                defs.insert_or_assign(program[*defRef].symbol.spelling,
+                    DefInfo {
+                        .def = *defRef,
+                        .index = index,
+                    });
+            }
+        }
+        return defs;
+    };
+
+    auto localDepsAvailable
+        = [&](const SymbolRhs& rhs, size_t useIndex,
+              const std::unordered_map<std::string, DefInfo>& defs) {
+              bool available = true;
+              visitRhsValues(program, rhs, [&](const Value& value) {
+                  const auto spelling = symbolSpelling(value);
+                  if (!spelling.has_value()) {
+                      return;
+                  }
+                  const auto defIt = defs.find(*spelling);
+                  if (defIt != defs.end() && defIt->second.index >= useIndex) {
+                      available = false;
+                  }
+              });
+              return available;
+          };
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        auto defs = collectDefs();
+        auto useCounts = countUses();
+
+        for (size_t defIndex = firstStatementIndex;
+            defIndex < block.statements.size(); ++defIndex) {
+            const auto* defRef
+                = std::get_if<Ref<SymbolDef>>(&block.statements[defIndex]);
+            if (defRef == nullptr) {
+                continue;
+            }
+            auto& def = program[*defRef];
+            const auto countIt = useCounts.find(def.symbol.spelling);
+            if (countIt == useCounts.end() || countIt->second != 1) {
+                continue;
+            }
+
+            const auto* copyRef = std::get_if<Ref<CopyExpr>>(&def.rhs);
+            const auto* combineRef = std::get_if<Ref<CombineExpr>>(&def.rhs);
+            if (copyRef == nullptr && combineRef == nullptr) {
+                continue;
+            }
+
+            const auto replacement
+                = copyRef == nullptr ? Value { } : program[*copyRef].value;
+            bool replaced = false;
+            for (size_t useIndex = firstStatementIndex;
+                useIndex < block.statements.size() && !replaced; ++useIndex) {
+                auto* useDefRef
+                    = std::get_if<Ref<SymbolDef>>(&block.statements[useIndex]);
+                if (useDefRef == nullptr || useIndex == defIndex) {
+                    continue;
+                }
+                auto& useDef = program[*useDefRef];
+                if (copyRef != nullptr) {
+                    if (!localDepsAvailable(def.rhs, useIndex, defs)) {
+                        continue;
+                    }
+                    visitRhsValues(program, useDef.rhs, [&](Value& value) {
+                        if (replaced) {
+                            return;
+                        }
+                        const auto spelling = symbolSpelling(value);
+                        if (spelling.has_value()
+                            && *spelling == def.symbol.spelling) {
+                            value = replacement;
+                            replaced = true;
+                        }
+                    });
+                    continue;
+                }
+
+                auto* useCombineRef
+                    = std::get_if<Ref<CombineExpr>>(&useDef.rhs);
+                if (useCombineRef == nullptr) {
+                    continue;
+                }
+                const auto& sourceExpr = program[*combineRef];
+                if (sourceExpr.terms.size() != 1) {
+                    continue;
+                }
+                if (!localDepsAvailable(def.rhs, useIndex, defs)) {
+                    continue;
+                }
+                auto& useExpr = program[*useCombineRef];
+                for (auto& term : useExpr.terms) {
+                    const auto spelling = symbolSpelling(term.value);
+                    if (spelling.has_value() && *spelling == def.symbol.spelling
+                        && isIdentityTerm(term)) {
+                        term = sourceExpr.terms.front();
+                        replaced = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!replaced && copyRef != nullptr
+                && localDepsAvailable(def.rhs, block.statements.size(), defs)) {
+                auto replaceTerminatorValue = [&](Value& value) {
+                    if (replaced) {
+                        return;
+                    }
+                    const auto spelling = symbolSpelling(value);
+                    if (spelling.has_value()
+                        && *spelling == def.symbol.spelling) {
+                        value = replacement;
+                        replaced = true;
+                    }
+                };
+                MATCH(block.terminator)
+                WITH(
+                    [&](Ref<BranchTerminator> terminatorRef) {
+                        auto& terminator = program[terminatorRef];
+                        replaceTerminatorValue(terminator.condition);
+                        for (auto& arg : terminator.trueArgs) {
+                            replaceTerminatorValue(arg);
+                        }
+                        for (auto& arg : terminator.falseArgs) {
+                            replaceTerminatorValue(arg);
+                        }
+                    },
+                    [&](Ref<JumpTerminator> terminatorRef) {
+                        for (auto& arg : program[terminatorRef].args) {
+                            replaceTerminatorValue(arg);
+                        }
+                    },
+                    [&](Ref<ReturnTerminator> terminatorRef) {
+                        auto& terminator = program[terminatorRef];
+                        if (terminator.value.has_value()) {
+                            replaceTerminatorValue(*terminator.value);
+                        }
+                    });
+            }
+
+            changed = changed || replaced;
+            if (replaced) {
+                break;
+            }
+        }
+    }
+
+    if (!eliminateDeadValues) {
+        return;
+    }
+
+    changed = true;
+    while (changed) {
+        changed = false;
+        const auto useCounts = countUses();
+        std::erase_if(block.statements, [&](const Statement& statement) {
+            const auto* defRef = std::get_if<Ref<SymbolDef>>(&statement);
+            if (defRef == nullptr) {
+                return false;
+            }
+            const auto index
+                = static_cast<size_t>(&statement - block.statements.data());
+            if (index < firstStatementIndex) {
+                return false;
+            }
+            const auto& def = program[*defRef];
+            if (!rhsIsRemovable(def.rhs)) {
+                return false;
+            }
+            if (useCounts.contains(def.symbol.spelling)) {
+                return false;
+            }
+            changed = true;
+            return true;
+        });
+    }
+}
+
+void eliminateDeadValues(Program& program, FunctionDef& function)
+{
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        std::unordered_map<std::string, size_t> useCounts;
+        auto countValue = [&](const Value& value) {
+            if (const auto spelling = symbolSpelling(value);
+                spelling.has_value()) {
+                ++useCounts[*spelling];
+            }
+        };
+        for (const auto paramRef : function.params) {
+            countValue(program[paramRef].symbol);
+        }
+        for (const auto blockRef : function.blocks) {
+            const auto& block = program[blockRef];
+            for (const auto& statement : block.statements) {
+                MATCH(statement)
+                WITH(
+                    [&](Ref<SymbolDef> defRef) {
+                        visitRhsValues(
+                            program, program[defRef].rhs, countValue);
+                    },
+                    [&](Ref<StoreStmt> storeRef) {
+                        visitStoreValue(
+                            program[storeRef].value, program, countValue);
+                        countValue(program[storeRef].destination);
+                    },
+                    [&](Ref<CallExpr> callRef) {
+                        for (const auto& arg : program[callRef].args) {
+                            countValue(arg);
+                        }
+                    });
+            }
+            MATCH(block.terminator)
+            WITH(
+                [&](Ref<BranchTerminator> terminatorRef) {
+                    const auto& terminator = program[terminatorRef];
+                    countValue(terminator.condition);
+                    for (const auto& arg : terminator.trueArgs) {
+                        countValue(arg);
+                    }
+                    for (const auto& arg : terminator.falseArgs) {
+                        countValue(arg);
+                    }
+                },
+                [&](Ref<JumpTerminator> terminatorRef) {
+                    for (const auto& arg : program[terminatorRef].args) {
+                        countValue(arg);
+                    }
+                },
+                [&](Ref<ReturnTerminator> terminatorRef) {
+                    const auto& terminator = program[terminatorRef];
+                    if (terminator.value.has_value()) {
+                        countValue(*terminator.value);
+                    }
+                });
+        }
+
+        for (const auto blockRef : function.blocks) {
+            auto& block = program[blockRef];
+            const size_t oldSize = block.statements.size();
+            std::erase_if(block.statements, [&](const Statement& statement) {
+                const auto* defRef = std::get_if<Ref<SymbolDef>>(&statement);
+                if (defRef == nullptr) {
+                    return false;
+                }
+                const auto& def = program[*defRef];
+                return rhsIsRemovable(def.rhs)
+                    && !useCounts.contains(def.symbol.spelling);
+            });
+            changed = changed || oldSize != block.statements.size();
+        }
+
+        std::unordered_map<std::string, std::vector<size_t>>
+            removedParamIndexes;
+        for (const auto blockRef : function.blocks) {
+            auto& block = program[blockRef];
+            std::vector<size_t> removeIndexes;
+            for (size_t index = 0; index < block.params.size(); ++index) {
+                const auto& param = program[block.params[index]];
+                if (!useCounts.contains(param.symbol.spelling)) {
+                    removeIndexes.push_back(index);
+                }
+            }
+            if (removeIndexes.empty()) {
+                continue;
+            }
+            removedParamIndexes[block.label.spelling] = removeIndexes;
+            std::erase_if(block.params, [&](Ref<BlockParameter> paramRef) {
+                return !useCounts.contains(program[paramRef].symbol.spelling);
+            });
+            changed = true;
+        }
+
+        if (removedParamIndexes.empty()) {
+            continue;
+        }
+        auto eraseArgs = [&](const Symbol& target, std::vector<Value>& args) {
+            const auto removedIt = removedParamIndexes.find(target.spelling);
+            if (removedIt == removedParamIndexes.end()) {
+                return;
+            }
+            const auto& indexes = removedIt->second;
+            for (auto it = indexes.rbegin(); it != indexes.rend(); ++it) {
+                if (*it < args.size()) {
+                    args.erase(args.begin() + static_cast<std::ptrdiff_t>(*it));
+                }
+            }
+        };
+        for (const auto blockRef : function.blocks) {
+            auto& block = program[blockRef];
+            MATCH(block.terminator)
+            WITH(
+                [&](Ref<BranchTerminator> terminatorRef) {
+                    auto& terminator = program[terminatorRef];
+                    eraseArgs(terminator.trueTarget, terminator.trueArgs);
+                    eraseArgs(terminator.falseTarget, terminator.falseArgs);
+                },
+                [&](Ref<JumpTerminator> terminatorRef) {
+                    auto& terminator = program[terminatorRef];
+                    eraseArgs(terminator.target, terminator.args);
+                },
+                [&](Ref<ReturnTerminator>) { });
+        }
+    }
+}
+
 void validate(const Program& program)
 {
     std::unordered_map<std::string, ValidationType> valueTypes;
     std::unordered_map<std::string, Type> pointeeTypes;
+    std::unordered_map<std::string, ValidationType> functionReturnTypes;
     std::unordered_set<std::string> combineSymbols;
     std::unordered_set<std::string> pointwiseSymbols;
+    std::unordered_map<std::string, int32_t> fusionSourceBySymbol;
 
     for (const auto& item : program.items) {
         std::visit(
@@ -671,8 +1250,18 @@ void validate(const Program& program)
                     const auto& global = program[itemRef];
                     valueTypes[global.name.spelling] = ValidationType::pointer;
                     pointeeTypes[global.name.spelling] = global.allocType;
+                } else if constexpr (std::same_as<Item, FunctionDecl>) {
+                    const auto& function = program[itemRef];
+                    functionReturnTypes[function.name.spelling]
+                        = function.returnType.has_value()
+                        ? validationTypeOf(*function.returnType)
+                        : ValidationType::other;
                 } else if constexpr (std::same_as<Item, FunctionDef>) {
                     const auto& function = program[itemRef];
+                    functionReturnTypes[function.name.spelling]
+                        = function.returnType.has_value()
+                        ? validationTypeOf(*function.returnType)
+                        : ValidationType::other;
                     for (const auto paramRef : function.params) {
                         const auto& param = program[paramRef];
                         valueTypes[param.symbol.spelling]
@@ -693,11 +1282,17 @@ void validate(const Program& program)
                                         symbolDef.rhs)) {
                                     combineSymbols.insert(
                                         symbolDef.symbol.spelling);
+                                    fusionSourceBySymbol.insert_or_assign(
+                                        symbolDef.symbol.spelling,
+                                        symbolDef.sourcePos.m_offset);
                                 }
                                 if (std::holds_alternative<Ref<PointwiseExpr>>(
                                         symbolDef.rhs)) {
                                     pointwiseSymbols.insert(
                                         symbolDef.symbol.spelling);
+                                    fusionSourceBySymbol.insert_or_assign(
+                                        symbolDef.symbol.spelling,
+                                        symbolDef.sourcePos.m_offset);
                                 }
                             }
                         }
@@ -715,10 +1310,19 @@ void validate(const Program& program)
     };
     std::erase_if(combineSymbols, eraseLocalSymbol);
     std::erase_if(pointwiseSymbols, eraseLocalSymbol);
+    std::erase_if(fusionSourceBySymbol,
+        [&](const auto& item) { return eraseLocalSymbol(item.first); });
     const auto globalValueTypes = valueTypes;
     const auto globalPointeeTypes = pointeeTypes;
     const auto globalCombineSymbols = combineSymbols;
     const auto globalPointwiseSymbols = pointwiseSymbols;
+    const auto globalFusionSourceBySymbol = fusionSourceBySymbol;
+
+    auto hasSameFusionSource
+        = [&](const std::string& symbol, int32_t sourceOffset) -> bool {
+        const auto it = fusionSourceBySymbol.find(symbol);
+        return it != fusionSourceBySymbol.end() && it->second == sourceOffset;
+    };
 
     auto resultTypeForRhs = [&](const SymbolRhs& rhs) -> ValidationType {
         return MATCH(rhs) WITH(
@@ -786,8 +1390,10 @@ void validate(const Program& program)
                 }
             },
             [&](Ref<CallExpr> ref) -> ValidationType {
-                (void)ref;
-                return ValidationType::unknown;
+                const auto& expr = program[ref];
+                const auto it = functionReturnTypes.find(expr.callee.spelling);
+                return it == functionReturnTypes.end() ? ValidationType::unknown
+                                                       : it->second;
             },
             [&](Ref<CopyExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
@@ -847,11 +1453,13 @@ void validate(const Program& program)
                             if (const auto* symbol
                                 = std::get_if<Symbol>(&leaf.value);
                                 symbol != nullptr
-                                && pointwiseSymbols.contains(
-                                    symbol->spelling)) {
+                                && pointwiseSymbols.contains(symbol->spelling)
+                                && hasSameFusionSource(symbol->spelling,
+                                    program[ref].sourcePos.m_offset)) {
                                 throw std::runtime_error(
                                     "pointwise operand cannot be another "
-                                    "pointwise result");
+                                    "pointwise result from the same "
+                                    "expression");
                             }
                             const auto valueType
                                 = validationTypeOfValue(leaf.value, valueTypes);
@@ -881,7 +1489,9 @@ void validate(const Program& program)
                                     || rhsType != ValidationType::poly) {
                                     throw std::runtime_error(
                                         "pointwise add/sub/mul expect poly "
-                                        "operands");
+                                        "operands: "
+                                        + serializePointwiseNode(
+                                            nodeRef, program));
                                 }
                                 return ValidationType::poly;
                             case PvBinaryOp::times:
@@ -889,7 +1499,9 @@ void validate(const Program& program)
                                     || rhsType != ValidationType::mint) {
                                     throw std::runtime_error(
                                         "pointwise times expects poly and mint "
-                                        "operands");
+                                        "operands: "
+                                        + serializePointwiseNode(
+                                            nodeRef, program));
                                 }
                                 return ValidationType::poly;
                             }
@@ -917,9 +1529,12 @@ void validate(const Program& program)
                 for (const auto& term : expr.terms) {
                     if (const auto* symbol = std::get_if<Symbol>(&term.value);
                         symbol != nullptr
-                        && combineSymbols.contains(symbol->spelling)) {
+                        && combineSymbols.contains(symbol->spelling)
+                        && hasSameFusionSource(symbol->spelling,
+                            program[ref].sourcePos.m_offset)) {
                         throw std::runtime_error(
-                            "combine term source cannot be another combine");
+                            "combine term source cannot be another combine "
+                            "from the same expression");
                     }
                     const auto* termSymbol = std::get_if<Symbol>(&term.value);
                     allTermsAreTrivialPointwise = allTermsAreTrivialPointwise
@@ -999,6 +1614,7 @@ void validate(const Program& program)
                     pointeeTypes = globalPointeeTypes;
                     combineSymbols = globalCombineSymbols;
                     pointwiseSymbols = globalPointwiseSymbols;
+                    fusionSourceBySymbol = globalFusionSourceBySymbol;
                     for (const auto paramRef : function.params) {
                         const auto& param = program[paramRef];
                         valueTypes[param.symbol.spelling]
@@ -1014,11 +1630,17 @@ void validate(const Program& program)
                                         symbolDef.rhs)) {
                                     combineSymbols.insert(
                                         symbolDef.symbol.spelling);
+                                    fusionSourceBySymbol.insert_or_assign(
+                                        symbolDef.symbol.spelling,
+                                        symbolDef.sourcePos.m_offset);
                                 }
                                 if (std::holds_alternative<Ref<PointwiseExpr>>(
                                         symbolDef.rhs)) {
                                     pointwiseSymbols.insert(
                                         symbolDef.symbol.spelling);
+                                    fusionSourceBySymbol.insert_or_assign(
+                                        symbolDef.symbol.spelling,
+                                        symbolDef.sourcePos.m_offset);
                                 }
                             }
                         }

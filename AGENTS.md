@@ -79,7 +79,7 @@ Basic usage:
 
 ```sh
 cmake --build build -j 18
-ctest --test-dir build --output-on-failure
+ctest --test-dir build/test --output-on-failure
 ```
 
 If a build or test command fails or emits warnings, analyze the error output and propose a concise fix.

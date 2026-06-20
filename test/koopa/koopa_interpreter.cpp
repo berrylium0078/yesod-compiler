@@ -1064,11 +1064,6 @@ namespace {
                 m_output << '\n';
                 return std::optional<RuntimeValue> { };
             }
-            if (callee == "@putpoly") {
-                requireArgCount(callee, args, 1);
-                m_output << requirePoly(args[0]);
-                return std::optional<RuntimeValue> { };
-            }
             if (callee == "@starttime" || callee == "@stoptime") {
                 return std::optional<RuntimeValue> { };
             }
