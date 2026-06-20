@@ -205,6 +205,18 @@ namespace {
         std::vector<std::vector<IncomingEdge>>>;
     using BlockLabelMap = std::unordered_map<std::string, std::string>;
 
+    std::string edgeBlockLabel(
+        const std::string& predLabel, const std::string& suffix)
+    {
+        return "__ssa_edge_" + predLabel + "_" + suffix;
+    }
+
+    bool needsSameTargetBranchSplit(const koopa_ir::BranchTerminator& branch)
+    {
+        return branch.trueTarget.spelling == branch.falseTarget.spelling
+            && (!branch.trueArgs.empty() || !branch.falseArgs.empty());
+    }
+
     void collectPhiEdges(const koopa_ir::FunctionDef& function,
         const koopa_ir::Program& program, IncomingMap& incoming,
         BlockLabelMap& blockLabels)
@@ -235,6 +247,25 @@ namespace {
                 },
                 [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef) {
                     const auto& br = program[brRef];
+                    if (needsSameTargetBranchSplit(br)) {
+                        const std::string targetLabel = br.trueTarget.spelling;
+                        auto& slots = incoming[targetLabel];
+                        for (size_t i = 0;
+                            i < br.trueArgs.size() && i < slots.size(); ++i) {
+                            slots[i].push_back(IncomingEdge {
+                                edgeBlockLabel(predLabel, "true"),
+                                br.trueArgs[i],
+                            });
+                        }
+                        for (size_t i = 0;
+                            i < br.falseArgs.size() && i < slots.size(); ++i) {
+                            slots[i].push_back(IncomingEdge {
+                                edgeBlockLabel(predLabel, "false"),
+                                br.falseArgs[i],
+                            });
+                        }
+                        return;
+                    }
                     {
                         const std::string tlabel = br.trueTarget.spelling;
                         auto& tslots = incoming[tlabel];
@@ -891,6 +922,22 @@ namespace {
                     output << "  %" << condName << " = icmp ne i32 "
                            << emitValueOperand(br.condition, program)
                            << ", 0\n";
+                    if (needsSameTargetBranchSplit(br)) {
+                        const std::string trueEdgeLabel
+                            = edgeBlockLabel(llvmLabel, "true");
+                        const std::string falseEdgeLabel
+                            = edgeBlockLabel(llvmLabel, "false");
+                        output << "  br i1 %" << condName << ", label %"
+                               << trueEdgeLabel << ", label %" << falseEdgeLabel
+                               << "\n";
+                        output << trueEdgeLabel << ":\n";
+                        output << "  br label %"
+                               << blockLabels[br.trueTarget.spelling] << "\n";
+                        output << falseEdgeLabel << ":\n";
+                        output << "  br label %"
+                               << blockLabels[br.falseTarget.spelling] << "\n";
+                        return;
+                    }
                     output << "  br i1 %" << condName << ", label %"
                            << blockLabels[br.trueTarget.spelling] << ", label %"
                            << blockLabels[br.falseTarget.spelling] << "\n";

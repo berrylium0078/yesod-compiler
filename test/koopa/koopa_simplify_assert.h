@@ -204,6 +204,17 @@ namespace detail {
             }
             return false;
         }
+
+        [[nodiscard]] bool hasBlock(const std::string& label) const
+        {
+            const auto& function = program[functionRef.ref()];
+            for (const auto blockRef : function.blocks) {
+                if (program[blockRef].label.spelling == label) {
+                    return true;
+                }
+            }
+            return false;
+        }
     };
 
     inline void assertCopyForwardingAndDce()
@@ -426,6 +437,145 @@ namespace detail {
             "edge argument for live block parameter should be preserved");
     }
 
+    inline void assertEmptyBlockForwardingAndPruning()
+    {
+        SimplifyProgramBuilder builder;
+        auto mergeParamRef = builder.program.alloc<koopa_ir::BlockParameter>(
+            koopa_ir::BlockParameter {
+                .sourcePos = { },
+                .symbol = symbol("%result"),
+                .type = koopa_ir::PolyType { },
+                .annotations = { },
+            });
+        auto mergeRetRef = builder.program.alloc<koopa_ir::ReturnTerminator>(
+            koopa_ir::ReturnTerminator {
+                .sourcePos = { },
+                .value = symbol("%result"),
+                .annotations = { },
+            });
+        auto mergeRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%merge"),
+                .params = { mergeParamRef },
+                .statements = { },
+                .terminator = mergeRetRef,
+                .annotations = { },
+            });
+
+        auto middleParamRef = builder.program.alloc<koopa_ir::BlockParameter>(
+            koopa_ir::BlockParameter {
+                .sourcePos = { },
+                .symbol = symbol("%middleArg"),
+                .type = koopa_ir::PolyType { },
+                .annotations = { },
+            });
+        auto middleJumpRef = builder.program.alloc<koopa_ir::JumpTerminator>(
+            koopa_ir::JumpTerminator {
+                .sourcePos = { },
+                .target = symbol("%merge"),
+                .args = { symbol("%middleArg") },
+                .annotations = { },
+            });
+        auto middleRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%middle"),
+                .params = { middleParamRef },
+                .statements = { },
+                .terminator = middleJumpRef,
+                .annotations = { },
+            });
+
+        auto emptyParamRef = builder.program.alloc<koopa_ir::BlockParameter>(
+            koopa_ir::BlockParameter {
+                .sourcePos = { },
+                .symbol = symbol("%emptyArg"),
+                .type = koopa_ir::PolyType { },
+                .annotations = { },
+            });
+        auto emptyJumpRef = builder.program.alloc<koopa_ir::JumpTerminator>(
+            koopa_ir::JumpTerminator {
+                .sourcePos = { },
+                .target = symbol("%middle"),
+                .args = { symbol("%emptyArg") },
+                .annotations = { },
+            });
+        auto emptyRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%empty"),
+                .params = { emptyParamRef },
+                .statements = { },
+                .terminator = emptyJumpRef,
+                .annotations = { },
+            });
+
+        auto unreachableJumpRef
+            = builder.program.alloc<koopa_ir::JumpTerminator>(
+                koopa_ir::JumpTerminator {
+                    .sourcePos = { },
+                    .target = symbol("%merge"),
+                    .args = { symbol("%p2") },
+                    .annotations = { },
+                });
+        auto unreachableRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%unreachable"),
+                .params = { },
+                .statements = { },
+                .terminator = unreachableJumpRef,
+                .annotations = { },
+            });
+
+        auto branchRef = builder.program.alloc<koopa_ir::BranchTerminator>(
+            koopa_ir::BranchTerminator {
+                .sourcePos = { },
+                .condition = integer(1),
+                .trueTarget = symbol("%empty"),
+                .trueArgs = { symbol("%p1") },
+                .falseTarget = symbol("%merge"),
+                .falseArgs = { symbol("%p2") },
+                .annotations = { },
+            });
+        builder.program[builder.entryRef.ref()].terminator = branchRef;
+        auto& function = builder.program[builder.functionRef.ref()];
+        function.blocks.push_back(emptyRef);
+        function.blocks.push_back(middleRef);
+        function.blocks.push_back(mergeRef);
+        function.blocks.push_back(unreachableRef);
+
+        koopa_ir::eliminateEmptyBasicBlocks(builder.program, function);
+        koopa_ir::validate(builder.program);
+
+        const auto& branch = builder.program[branchRef];
+        requireSimplifyAssert(branch.trueTarget.spelling == "%merge",
+            "empty block forwarding should rewrite branch true target");
+        requireSimplifyAssert(branch.falseTarget.spelling == "%merge",
+            "branch false target should still reach merge");
+        requireSimplifyAssert(branch.trueArgs.size() == 1,
+            "forwarded branch edge should keep one block argument");
+        requireSimplifyAssert(branch.falseArgs.size() == 1,
+            "direct branch edge should keep one block argument");
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(branch.trueArgs.front()).spelling
+                == "%p1",
+            "forwarded branch edge should substitute empty block parameters");
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(branch.falseArgs.front()).spelling
+                == "%p2",
+            "direct branch edge argument should be preserved");
+        requireSimplifyAssert(function.blocks.size() == 2,
+            "only entry and merge blocks should remain reachable");
+        requireSimplifyAssert(!builder.hasBlock("%empty"),
+            "forwarded empty block should be removed");
+        requireSimplifyAssert(!builder.hasBlock("%middle"),
+            "chained empty block should be removed");
+        requireSimplifyAssert(!builder.hasBlock("%unreachable"),
+            "unreachable block should be removed");
+    }
+
 } // namespace detail
 
 inline void assertPolySimplificationPassApplied()
@@ -436,6 +586,7 @@ inline void assertPolySimplificationPassApplied()
     detail::assertCopyForwardingToCallArgument();
     detail::assertCopyForwardingToJumpBlockArgument();
     detail::assertDeadBlockParamElimination();
+    detail::assertEmptyBlockForwardingAndPruning();
 }
 
 } // namespace yesod::test_support::koopa

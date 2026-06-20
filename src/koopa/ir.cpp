@@ -1364,6 +1364,174 @@ void eliminateDeadValues(Program& program, FunctionDef& function)
     }
 }
 
+void eliminateEmptyBasicBlocks(Program& program, FunctionDef& function)
+{
+    if (function.blocks.empty()) {
+        return;
+    }
+
+    const Ref<BasicBlock> entryBlockRef = function.blocks.front();
+    auto buildBlockByLabel
+        = [&]() -> std::unordered_map<std::string, Ref<BasicBlock>> {
+        std::unordered_map<std::string, Ref<BasicBlock>> blockByLabel;
+        blockByLabel.reserve(function.blocks.size());
+        for (const auto blockRef : function.blocks) {
+            blockByLabel.insert_or_assign(
+                program[blockRef].label.spelling, blockRef);
+        }
+        return blockByLabel;
+    };
+
+    const auto blockByLabel = buildBlockByLabel();
+
+    auto isEmptyForwarder = [&](Ref<BasicBlock> blockRef) -> bool {
+        if (blockRef == entryBlockRef) {
+            return false;
+        }
+        const auto& block = program[blockRef];
+        return block.statements.empty()
+            && std::holds_alternative<Ref<JumpTerminator>>(block.terminator);
+    };
+
+    auto substituteValue
+        = [](const Value& value,
+              const std::unordered_map<std::string, Value>& replacementByParam)
+        -> Value {
+        const auto* symbol = std::get_if<Symbol>(&value);
+        if (symbol == nullptr) {
+            return value;
+        }
+        const auto replacementIt = replacementByParam.find(symbol->spelling);
+        if (replacementIt == replacementByParam.end()) {
+            return value;
+        }
+        return replacementIt->second;
+    };
+
+    struct ResolvedEdge {
+        Symbol target;
+        std::vector<Value> args;
+        bool changed = false;
+    };
+
+    auto resolveEdge = [&](const Symbol& target,
+                           const std::vector<Value>& args) -> ResolvedEdge {
+        ResolvedEdge resolved {
+            .target = target,
+            .args = args,
+            .changed = false,
+        };
+        std::unordered_set<std::string> visited;
+
+        while (true) {
+            const auto blockIt = blockByLabel.find(resolved.target.spelling);
+            if (blockIt == blockByLabel.end()
+                || !isEmptyForwarder(blockIt->second)) {
+                return resolved;
+            }
+            if (!visited.insert(resolved.target.spelling).second) {
+                return resolved;
+            }
+
+            const auto& block = program[blockIt->second];
+            assert(block.params.size() == resolved.args.size());
+            std::unordered_map<std::string, Value> replacementByParam;
+            replacementByParam.reserve(block.params.size());
+            for (size_t index = 0;
+                index < block.params.size() && index < resolved.args.size();
+                ++index) {
+                replacementByParam.insert_or_assign(
+                    program[block.params[index]].symbol.spelling,
+                    resolved.args[index]);
+            }
+
+            const auto jumpRef
+                = std::get<Ref<JumpTerminator>>(block.terminator);
+            const auto& jump = program[jumpRef];
+            std::vector<Value> nextArgs;
+            nextArgs.reserve(jump.args.size());
+            for (const auto& arg : jump.args) {
+                nextArgs.push_back(substituteValue(arg, replacementByParam));
+            }
+            resolved.target = jump.target;
+            resolved.args = std::move(nextArgs);
+            resolved.changed = true;
+        }
+    };
+
+    for (const auto blockRef : function.blocks) {
+        auto& block = program[blockRef];
+        MATCH(block.terminator)
+        WITH(
+            [&](Ref<BranchTerminator> terminatorRef) -> void {
+                auto& terminator = program[terminatorRef];
+                const auto trueEdge
+                    = resolveEdge(terminator.trueTarget, terminator.trueArgs);
+                if (trueEdge.changed) {
+                    terminator.trueTarget = trueEdge.target;
+                    terminator.trueArgs = trueEdge.args;
+                }
+                const auto falseEdge
+                    = resolveEdge(terminator.falseTarget, terminator.falseArgs);
+                if (falseEdge.changed) {
+                    terminator.falseTarget = falseEdge.target;
+                    terminator.falseArgs = falseEdge.args;
+                }
+            },
+            [&](Ref<JumpTerminator> terminatorRef) -> void {
+                auto& terminator = program[terminatorRef];
+                const auto edge
+                    = resolveEdge(terminator.target, terminator.args);
+                if (edge.changed) {
+                    terminator.target = edge.target;
+                    terminator.args = edge.args;
+                }
+            },
+            [&](Ref<ReturnTerminator>) -> void { });
+    }
+
+    std::vector<Ref<BasicBlock>> worklist { entryBlockRef };
+    std::unordered_set<Ref<BasicBlock>> reachable;
+    reachable.reserve(function.blocks.size());
+    while (!worklist.empty()) {
+        const auto blockRef = worklist.back();
+        worklist.pop_back();
+        if (!reachable.insert(blockRef).second) {
+            continue;
+        }
+
+        const auto& block = program[blockRef];
+        MATCH(block.terminator)
+        WITH(
+            [&](Ref<BranchTerminator> terminatorRef) -> void {
+                const auto& terminator = program[terminatorRef];
+                if (const auto trueIt
+                    = blockByLabel.find(terminator.trueTarget.spelling);
+                    trueIt != blockByLabel.end()) {
+                    worklist.push_back(trueIt->second);
+                }
+                if (const auto falseIt
+                    = blockByLabel.find(terminator.falseTarget.spelling);
+                    falseIt != blockByLabel.end()) {
+                    worklist.push_back(falseIt->second);
+                }
+            },
+            [&](Ref<JumpTerminator> terminatorRef) -> void {
+                const auto& terminator = program[terminatorRef];
+                if (const auto targetIt
+                    = blockByLabel.find(terminator.target.spelling);
+                    targetIt != blockByLabel.end()) {
+                    worklist.push_back(targetIt->second);
+                }
+            },
+            [&](Ref<ReturnTerminator>) -> void { });
+    }
+
+    std::erase_if(function.blocks, [&](Ref<BasicBlock> blockRef) -> bool {
+        return !reachable.contains(blockRef);
+    });
+}
+
 void validate(const Program& program)
 {
     std::unordered_map<std::string, ValidationType> valueTypes;
