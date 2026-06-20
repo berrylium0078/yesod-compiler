@@ -864,61 +864,25 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
         size_t index = 0;
     };
 
-    auto countUses = [&]() {
-        std::unordered_map<std::string, size_t> counts;
-        auto countValue = [&](const Value& value) {
-            if (const auto spelling = symbolSpelling(value);
-                spelling.has_value()) {
-                ++counts[*spelling];
-            }
-        };
-        for (const auto& value : liveValues) {
-            countValue(value);
-        }
-        for (const auto& statement : block.statements) {
-            MATCH(statement)
-            WITH(
-                [&](Ref<SymbolDef> defRef) {
-                    visitRhsValues(program, program[defRef].rhs, countValue);
-                },
-                [&](Ref<StoreStmt> storeRef) {
-                    visitStoreValue(
-                        program[storeRef].value, program, countValue);
-                    countValue(program[storeRef].destination);
-                },
-                [&](Ref<CallExpr> callRef) {
-                    for (const auto& arg : program[callRef].args) {
-                        countValue(arg);
-                    }
-                });
-        }
-        MATCH(block.terminator)
-        WITH(
-            [&](Ref<BranchTerminator> terminatorRef) {
-                const auto& terminator = program[terminatorRef];
-                countValue(terminator.condition);
-                for (const auto& arg : terminator.trueArgs) {
-                    countValue(arg);
-                }
-                for (const auto& arg : terminator.falseArgs) {
-                    countValue(arg);
-                }
-            },
-            [&](Ref<JumpTerminator> terminatorRef) {
-                for (const auto& arg : program[terminatorRef].args) {
-                    countValue(arg);
-                }
-            },
-            [&](Ref<ReturnTerminator> terminatorRef) {
-                const auto& terminator = program[terminatorRef];
-                if (terminator.value.has_value()) {
-                    countValue(*terminator.value);
-                }
-            });
-        return counts;
+    enum class UseSiteKind {
+        value,
+        combineTermValue,
     };
 
-    auto collectDefs = [&]() {
+    struct UseSite {
+        UseSiteKind kind = UseSiteKind::value;
+        size_t useIndex = 0;
+        Value* value = nullptr;
+        CombineTerm* term = nullptr;
+        Ptr<SymbolDef> userDef;
+    };
+
+    struct UseIndex {
+        std::unordered_map<std::string, size_t> counts;
+        std::unordered_map<std::string, std::vector<UseSite>> sites;
+    };
+
+    auto collectDefs = [&]() -> std::unordered_map<std::string, DefInfo> {
         std::unordered_map<std::string, DefInfo> defs;
         for (size_t index = 0; index < block.statements.size(); ++index) {
             const auto& statement = block.statements[index];
@@ -933,28 +897,221 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
         return defs;
     };
 
+    auto buildUseIndex = [&]() -> UseIndex {
+        UseIndex index;
+        auto countValue = [&](const Value& value) -> void {
+            if (const auto spelling = symbolSpelling(value);
+                spelling.has_value()) {
+                ++index.counts[*spelling];
+            }
+        };
+        auto recordValueSite
+            = [&](Value& value, size_t useIndex, UseSiteKind kind,
+                  CombineTerm* term, Ptr<SymbolDef> userDef) -> void {
+            const auto spelling = symbolSpelling(value);
+            if (!spelling.has_value()) {
+                return;
+            }
+            ++index.counts[*spelling];
+            index.sites[*spelling].push_back(UseSite {
+                .kind = kind,
+                .useIndex = useIndex,
+                .value = &value,
+                .term = term,
+                .userDef = userDef,
+            });
+        };
+        auto recordRhsSites = [&](SymbolRhs& rhs, size_t useIndex,
+                                  Ptr<SymbolDef> userDef) -> void {
+            MATCH(rhs)
+            WITH([&](Ref<MemoryDeclaration>) -> void { },
+                [&](Ref<LoadExpr>) -> void { },
+                [&](Ref<GetPointerExpr> ref) -> void {
+                    recordValueSite(program[ref].index, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<GetElementPointerExpr> ref) -> void {
+                    recordValueSite(program[ref].index, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<BinaryExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.lhs, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.rhs, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                },
+                [&](Ref<CallExpr> ref) -> void {
+                    for (auto& arg : program[ref].args) {
+                        recordValueSite(arg, useIndex, UseSiteKind::value,
+                            nullptr, userDef);
+                    }
+                },
+                [&](Ref<CopyExpr> ref) -> void {
+                    recordValueSite(program[ref].value, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<PolyLenExpr> ref) -> void {
+                    for (auto& arg : program[ref].args) {
+                        recordValueSite(arg, useIndex, UseSiteKind::value,
+                            nullptr, userDef);
+                    }
+                },
+                [&](Ref<PointwiseExpr> ref) -> void {
+                    visitPointwiseNodeValues(
+                        program, program[ref].root, [&](Value& value) -> void {
+                            recordValueSite(value, useIndex, UseSiteKind::value,
+                                nullptr, userDef);
+                        });
+                },
+                [&](Ref<CombineExpr> ref) -> void {
+                    for (auto& term : program[ref].terms) {
+                        recordValueSite(term.value, useIndex,
+                            UseSiteKind::combineTermValue, &term, userDef);
+                        recordValueSite(term.start, useIndex,
+                            UseSiteKind::value, nullptr, userDef);
+                        if (term.end.has_value()) {
+                            recordValueSite(*term.end, useIndex,
+                                UseSiteKind::value, nullptr, userDef);
+                        }
+                        recordValueSite(term.shift, useIndex,
+                            UseSiteKind::value, nullptr, userDef);
+                        recordValueSite(term.scale, useIndex,
+                            UseSiteKind::value, nullptr, userDef);
+                    }
+                },
+                [&](Ref<GetCoeffExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.value, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.index, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                },
+                [&](Ref<PolyConstructExpr> ref) -> void {
+                    for (auto& element : program[ref].elements) {
+                        recordValueSite(element, useIndex, UseSiteKind::value,
+                            nullptr, userDef);
+                    }
+                },
+                [&](Ref<ConversionExpr> ref) -> void {
+                    recordValueSite(program[ref].value, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                });
+        };
+        for (const auto& value : liveValues) {
+            countValue(value);
+        }
+        for (size_t statementIndex = 0;
+            statementIndex < block.statements.size(); ++statementIndex) {
+            auto& statement = block.statements[statementIndex];
+            MATCH(statement)
+            WITH(
+                [&](Ref<SymbolDef> defRef) -> void {
+                    if (statementIndex >= firstStatementIndex) {
+                        recordRhsSites(
+                            program[defRef].rhs, statementIndex, defRef.ptr());
+                    } else {
+                        visitRhsValues(
+                            program, program[defRef].rhs, countValue);
+                    }
+                },
+                [&](Ref<StoreStmt> storeRef) -> void {
+                    visitStoreValue(
+                        program[storeRef].value, program, countValue);
+                    countValue(program[storeRef].destination);
+                },
+                [&](Ref<CallExpr> callRef) -> void {
+                    for (auto& arg : program[callRef].args) {
+                        if (statementIndex >= firstStatementIndex) {
+                            recordValueSite(arg, statementIndex,
+                                UseSiteKind::value, nullptr, nullptr);
+                        } else {
+                            countValue(arg);
+                        }
+                    }
+                });
+        }
+        const size_t terminatorUseIndex = block.statements.size();
+        auto recordTerminatorValue = [&](Value& value) -> void {
+            recordValueSite(value, terminatorUseIndex, UseSiteKind::value,
+                nullptr, nullptr);
+        };
+        MATCH(block.terminator)
+        WITH(
+            [&](Ref<BranchTerminator> terminatorRef) -> void {
+                auto& terminator = program[terminatorRef];
+                recordTerminatorValue(terminator.condition);
+                for (auto& arg : terminator.trueArgs) {
+                    recordTerminatorValue(arg);
+                }
+                for (auto& arg : terminator.falseArgs) {
+                    recordTerminatorValue(arg);
+                }
+            },
+            [&](Ref<JumpTerminator> terminatorRef) -> void {
+                for (auto& arg : program[terminatorRef].args) {
+                    recordTerminatorValue(arg);
+                }
+            },
+            [&](Ref<ReturnTerminator> terminatorRef) -> void {
+                auto& terminator = program[terminatorRef];
+                if (terminator.value.has_value()) {
+                    recordTerminatorValue(*terminator.value);
+                }
+            });
+        return index;
+    };
+
     auto localDepsAvailable
         = [&](const SymbolRhs& rhs, size_t useIndex,
-              const std::unordered_map<std::string, DefInfo>& defs) {
-              bool available = true;
-              visitRhsValues(program, rhs, [&](const Value& value) {
-                  const auto spelling = symbolSpelling(value);
-                  if (!spelling.has_value()) {
-                      return;
-                  }
-                  const auto defIt = defs.find(*spelling);
-                  if (defIt != defs.end() && defIt->second.index >= useIndex) {
-                      available = false;
-                  }
-              });
-              return available;
-          };
+              const std::unordered_map<std::string, DefInfo>& defs) -> bool {
+        bool available = true;
+        visitRhsValues(program, rhs, [&](const Value& value) -> void {
+            const auto spelling = symbolSpelling(value);
+            if (!spelling.has_value()) {
+                return;
+            }
+            const auto defIt = defs.find(*spelling);
+            if (defIt != defs.end() && defIt->second.index >= useIndex) {
+                available = false;
+            }
+        });
+        return available;
+    };
+
+    auto countValueUse = [](std::unordered_map<std::string, size_t>& counts,
+                             const Value& value) -> void {
+        if (const auto spelling = symbolSpelling(value); spelling.has_value()) {
+            ++counts[*spelling];
+        }
+    };
+
+    auto countCombineTermUses
+        = [&](std::unordered_map<std::string, size_t>& counts,
+              const CombineTerm& term) -> void {
+        countValueUse(counts, term.value);
+        countValueUse(counts, term.start);
+        if (term.end.has_value()) {
+            countValueUse(counts, *term.end);
+        }
+        countValueUse(counts, term.shift);
+        countValueUse(counts, term.scale);
+    };
+
+    auto siteUsesSymbol
+        = [](const UseSite& site, const std::string& spelling) -> bool {
+        if (site.value == nullptr) {
+            return false;
+        }
+        const auto currentSpelling = symbolSpelling(*site.value);
+        return currentSpelling.has_value() && *currentSpelling == spelling;
+    };
 
     bool changed = true;
     while (changed) {
         changed = false;
         auto defs = collectDefs();
-        auto useCounts = countUses();
+        auto useIndex = buildUseIndex();
 
         for (size_t defIndex = firstStatementIndex;
             defIndex < block.statements.size(); ++defIndex) {
@@ -964,11 +1121,6 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
                 continue;
             }
             auto& def = program[*defRef];
-            const auto countIt = useCounts.find(def.symbol.spelling);
-            if (countIt == useCounts.end() || countIt->second != 1) {
-                continue;
-            }
-
             const auto* copyRef = std::get_if<Ref<CopyExpr>>(&def.rhs);
             const auto* combineRef = std::get_if<Ref<CombineExpr>>(&def.rhs);
             if (copyRef == nullptr && combineRef == nullptr) {
@@ -977,99 +1129,78 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
 
             const auto replacement
                 = copyRef == nullptr ? Value { } : program[*copyRef].value;
-            bool replaced = false;
-            for (size_t useIndex = firstStatementIndex;
-                useIndex < block.statements.size() && !replaced; ++useIndex) {
-                auto* useDefRef
-                    = std::get_if<Ref<SymbolDef>>(&block.statements[useIndex]);
-                if (useDefRef == nullptr || useIndex == defIndex) {
-                    continue;
-                }
-                auto& useDef = program[*useDefRef];
-                if (copyRef != nullptr) {
-                    if (!localDepsAvailable(def.rhs, useIndex, defs)) {
+            auto siteIt = useIndex.sites.find(def.symbol.spelling);
+            if (siteIt == useIndex.sites.end()) {
+                continue;
+            }
+
+            if (copyRef != nullptr) {
+                bool replacedAny = false;
+                for (auto& site : siteIt->second) {
+                    if (!siteUsesSymbol(site, def.symbol.spelling)) {
                         continue;
                     }
-                    visitRhsValues(program, useDef.rhs, [&](Value& value) {
-                        if (replaced) {
-                            return;
-                        }
-                        const auto spelling = symbolSpelling(value);
-                        if (spelling.has_value()
-                            && *spelling == def.symbol.spelling) {
-                            value = replacement;
-                            replaced = true;
-                        }
-                    });
-                    continue;
-                }
-
-                auto* useCombineRef
-                    = std::get_if<Ref<CombineExpr>>(&useDef.rhs);
-                if (useCombineRef == nullptr) {
-                    continue;
-                }
-                const auto& sourceExpr = program[*combineRef];
-                if (sourceExpr.terms.size() != 1) {
-                    continue;
-                }
-                if (!localDepsAvailable(def.rhs, useIndex, defs)) {
-                    continue;
-                }
-                auto& useExpr = program[*useCombineRef];
-                for (auto& term : useExpr.terms) {
-                    const auto spelling = symbolSpelling(term.value);
-                    if (spelling.has_value() && *spelling == def.symbol.spelling
-                        && isIdentityTerm(term)) {
-                        term = sourceExpr.terms.front();
-                        replaced = true;
-                        break;
+                    if (site.useIndex == defIndex) {
+                        continue;
                     }
+                    if (!localDepsAvailable(def.rhs, site.useIndex, defs)) {
+                        continue;
+                    }
+                    *site.value = replacement;
+                    --useIndex.counts[def.symbol.spelling];
+                    countValueUse(useIndex.counts, replacement);
+                    replacedAny = true;
                 }
+                changed = changed || replacedAny;
+                continue;
             }
 
-            if (!replaced && copyRef != nullptr
-                && localDepsAvailable(def.rhs, block.statements.size(), defs)) {
-                auto replaceTerminatorValue = [&](Value& value) {
-                    if (replaced) {
-                        return;
-                    }
-                    const auto spelling = symbolSpelling(value);
-                    if (spelling.has_value()
-                        && *spelling == def.symbol.spelling) {
-                        value = replacement;
-                        replaced = true;
-                    }
-                };
-                MATCH(block.terminator)
-                WITH(
-                    [&](Ref<BranchTerminator> terminatorRef) {
-                        auto& terminator = program[terminatorRef];
-                        replaceTerminatorValue(terminator.condition);
-                        for (auto& arg : terminator.trueArgs) {
-                            replaceTerminatorValue(arg);
-                        }
-                        for (auto& arg : terminator.falseArgs) {
-                            replaceTerminatorValue(arg);
-                        }
-                    },
-                    [&](Ref<JumpTerminator> terminatorRef) {
-                        for (auto& arg : program[terminatorRef].args) {
-                            replaceTerminatorValue(arg);
-                        }
-                    },
-                    [&](Ref<ReturnTerminator> terminatorRef) {
-                        auto& terminator = program[terminatorRef];
-                        if (terminator.value.has_value()) {
-                            replaceTerminatorValue(*terminator.value);
-                        }
-                    });
+            const auto countIt = useIndex.counts.find(def.symbol.spelling);
+            if (countIt == useIndex.counts.end() || countIt->second != 1) {
+                continue;
             }
+            UseSite* singleSite = nullptr;
+            size_t activeSiteCount = 0;
+            for (auto& site : siteIt->second) {
+                if (siteUsesSymbol(site, def.symbol.spelling)) {
+                    singleSite = &site;
+                    ++activeSiteCount;
+                }
+            }
+            if (activeSiteCount != 1 || singleSite == nullptr) {
+                continue;
+            }
+            if (singleSite->useIndex == defIndex) {
+                continue;
+            }
+
+            bool replaced = false;
+            if (singleSite->kind != UseSiteKind::combineTermValue
+                || singleSite->term == nullptr
+                || singleSite->userDef == nullptr) {
+                continue;
+            }
+            auto& useDef = program[singleSite->userDef.ref()];
+            auto* useCombineRef = std::get_if<Ref<CombineExpr>>(&useDef.rhs);
+            if (useCombineRef == nullptr) {
+                continue;
+            }
+            const auto& sourceExpr = program[*combineRef];
+            if (sourceExpr.terms.size() != 1) {
+                continue;
+            }
+            if (!localDepsAvailable(def.rhs, singleSite->useIndex, defs)) {
+                continue;
+            }
+            if (!isIdentityTerm(*singleSite->term)) {
+                continue;
+            }
+            *singleSite->term = sourceExpr.terms.front();
+            --useIndex.counts[def.symbol.spelling];
+            countCombineTermUses(useIndex.counts, sourceExpr.terms.front());
+            replaced = true;
 
             changed = changed || replaced;
-            if (replaced) {
-                break;
-            }
         }
     }
 
@@ -1080,7 +1211,7 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
     changed = true;
     while (changed) {
         changed = false;
-        const auto useCounts = countUses();
+        const auto useCounts = buildUseIndex().counts;
         std::erase_if(block.statements, [&](const Statement& statement) {
             const auto* defRef = std::get_if<Ref<SymbolDef>>(&statement);
             if (defRef == nullptr) {

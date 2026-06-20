@@ -399,6 +399,11 @@ poly add_one(poly p)
     return q;
 }
 
+poly add_twice(poly p, poly q)
+{
+    return p + q + p;
+}
+
 int main()
 {
     return 0;
@@ -425,6 +430,42 @@ int main()
         "poly locals and params should not lower to local loads");
     require(text.find("store %arg_0") == std::string::npos,
         "poly params should not be stored into local slots");
+    require(text.find("= %arg_0") == std::string::npos,
+        "poly function params should not be copied before use");
+    require(text.find("= %arg_1") == std::string::npos,
+        "poly function params should not be copied before use");
+}
+
+void testScalarParamArrayInitializerReadsSsaValue()
+{
+    constexpr const char* source = R"(
+int array_init_from_params(int a1, int a2)
+{
+    int arr[2] = {a1, a2};
+    return arr[0] + arr[1];
+}
+
+int main()
+{
+    return array_init_from_params(1, 2);
+}
+)";
+    frontend::Parser parser(
+        frontend::prependBuiltinFunctionDeclarations(std::string(source)));
+    auto parseOutput = parser.parse();
+    require(parseOutput.success(),
+        "scalar param array initializer test should parse");
+
+    frontend::SemanticAnalyzer semanticAnalyzer;
+    auto semanticOutput = semanticAnalyzer.analyze(
+        std::move(parseOutput.m_ast), parseOutput.m_root.ref());
+    require(semanticOutput.success(),
+        "scalar param array initializer test should be semantic");
+
+    yesod::koopa::Generator generator;
+    auto program = generator.generateIr(
+        semanticOutput.m_ast, semanticOutput.m_root, semanticOutput.m_info);
+    koopa_ir::validate(*program);
 }
 
 } // namespace
@@ -446,5 +487,6 @@ int main()
     testRejectsTrivialCombineOfPointwiseResults();
     testAcceptsCopyPseudoInstruction();
     testPolyLocalsLowerToSsaValues();
+    testScalarParamArrayInitializerReadsSsaValue();
     return 0;
 }

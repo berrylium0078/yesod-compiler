@@ -159,6 +159,18 @@ namespace detail {
                 }));
         }
 
+        void addCallStatement(
+            const std::string& callee, std::vector<koopa_ir::Value> args)
+        {
+            program[entryRef.ref()].statements.push_back(
+                program.alloc<koopa_ir::CallExpr>(koopa_ir::CallExpr {
+                    .sourcePos = { },
+                    .callee = symbol(callee),
+                    .args = std::move(args),
+                    .annotations = { },
+                }));
+        }
+
         void addCombine(const std::string& name, koopa_ir::Value value,
             koopa_ir::Value start = integer(0),
             std::optional<koopa_ir::Value> end = std::nullopt,
@@ -241,7 +253,7 @@ namespace detail {
             "combine forwarding should preserve slice start");
     }
 
-    inline void assertRepeatedUseBlocksForwarding()
+    inline void assertCopyForwardingAllowsRepeatedUses()
     {
         SimplifyProgramBuilder builder;
         builder.addCopy("%copy", symbol("%p1"));
@@ -252,8 +264,48 @@ namespace detail {
         koopa_ir::simplifyLocalValues(builder.program,
             builder.program[builder.entryRef.ref()], 0, { symbol("%use") });
 
-        requireSimplifyAssert(builder.hasDef("%copy"),
-            "a value used twice in one expression must not be forwarded");
+        requireSimplifyAssert(!builder.hasDef("%copy"),
+            "copy forwarding should apply even when the copy has repeated "
+            "uses");
+        const auto defRef = std::get<yesod::Ref<koopa_ir::SymbolDef>>(
+            builder.program[builder.entryRef.ref()].statements.front());
+        const auto pointwiseRef = std::get<yesod::Ref<koopa_ir::PointwiseExpr>>(
+            builder.program[defRef].rhs);
+        const auto& root = builder.program[builder.program[pointwiseRef].root];
+        const auto& binary = std::get<koopa_ir::PointwiseBinary>(root.kind);
+        const auto& lhs = std::get<koopa_ir::PointwiseLeaf>(
+            builder.program[binary.lhs].kind);
+        const auto& rhs = std::get<koopa_ir::PointwiseLeaf>(
+            builder.program[binary.rhs].kind);
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(lhs.value).spelling == "%p1",
+            "copy forwarding should rewrite the first repeated use");
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(rhs.value).spelling == "%p1",
+            "copy forwarding should rewrite the second repeated use");
+    }
+
+    inline void assertCopyForwardingToCallArgument()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addCopy("%copy", symbol("%p1"));
+        builder.addCallStatement("@putpoly", { symbol("%copy") });
+
+        koopa_ir::simplifyLocalValues(
+            builder.program, builder.program[builder.entryRef.ref()], 0, { });
+
+        requireSimplifyAssert(!builder.hasDef("%copy"),
+            "copy forwarding to call argument should delete the forwarded "
+            "value");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.front());
+        requireSimplifyAssert(builder.program[callRef].args.size() == 1,
+            "call should keep the argument count");
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(builder.program[callRef].args.front())
+                    .spelling
+                == "%p1",
+            "call argument should be rewritten to the forwarded value");
     }
 
     inline void assertCopyForwardingToJumpBlockArgument()
@@ -380,7 +432,8 @@ inline void assertPolySimplificationPassApplied()
 {
     detail::assertCopyForwardingAndDce();
     detail::assertCombineForwardingAndDce();
-    detail::assertRepeatedUseBlocksForwarding();
+    detail::assertCopyForwardingAllowsRepeatedUses();
+    detail::assertCopyForwardingToCallArgument();
     detail::assertCopyForwardingToJumpBlockArgument();
     detail::assertDeadBlockParamElimination();
 }

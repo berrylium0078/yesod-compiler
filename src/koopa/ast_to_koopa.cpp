@@ -440,7 +440,8 @@ namespace {
         }
 
         [[nodiscard]] koopa_ir::Value bindAlias(
-            Ref<frontend::Identifier> identifier, koopa_ir::Value value)
+            Ref<frontend::Identifier> identifier, koopa_ir::Value value,
+            bool materializeValue = true)
         {
             const auto alias = m_semanticInfo->findAlias(identifier);
             if (!alias.has_value()) {
@@ -453,8 +454,10 @@ namespace {
                 throw std::runtime_error(
                     "SSA alias should refer to an object symbol");
             }
-            auto freshValue = materializeFreshValue(
-                std::move(value), symbol.object().m_type);
+            auto freshValue = materializeValue
+                ? materializeFreshValue(
+                      std::move(value), symbol.object().m_type)
+                : std::move(value);
             m_valueByAliasKey[aliasKey(*alias)] = freshValue;
             m_valueBySymbolId[symbol.m_id] = freshValue;
             return freshValue;
@@ -484,6 +487,45 @@ namespace {
                 throw std::runtime_error(message);
             }
             return valueIt->second;
+        }
+
+        [[nodiscard]] std::optional<koopa_ir::Value> trySsaObjectValue(
+            Ref<frontend::Identifier> identifier) const
+        {
+            const auto& symbol = requireSymbolForIdentifier(identifier,
+                *m_semanticInfo, "lvalue is missing a symbol binding");
+            if (!symbol.isObject()) {
+                return std::nullopt;
+            }
+            const auto& type = symbol.object().m_type;
+            if (!type.isScalar() && !type.isPoly()) {
+                return std::nullopt;
+            }
+
+            const auto alias = m_semanticInfo->findAlias(identifier);
+            if (alias.has_value()) {
+                const auto aliasValueIt
+                    = m_valueByAliasKey.find(aliasKey(*alias));
+                if (aliasValueIt != m_valueByAliasKey.end()) {
+                    return aliasValueIt->second;
+                }
+            }
+
+            const auto valueIt = m_valueBySymbolId.find(symbol.m_id);
+            if (valueIt == m_valueBySymbolId.end()) {
+                return std::nullopt;
+            }
+            return valueIt->second;
+        }
+
+        [[nodiscard]] koopa_ir::Value requireSsaObjectValue(
+            Ref<frontend::Identifier> identifier, const char* message) const
+        {
+            auto value = trySsaObjectValue(identifier);
+            if (!value.has_value()) {
+                throw std::runtime_error(message);
+            }
+            return *value;
         }
 
         void pushStatement(koopa_ir::Statement statement)
@@ -1346,12 +1388,7 @@ namespace {
                 },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
                     if (expAlt.indices.empty()) {
-                        if (m_semanticInfo->findAlias(expAlt.identifier)
-                                .has_value()) {
-                            return requireAliasValue(expAlt.identifier,
-                                "poly lvalue is missing an SSA alias value");
-                        }
-                        return requireCurrentSymbolValue(expAlt.identifier,
+                        return requireSsaObjectValue(expAlt.identifier,
                             "poly lvalue is missing a current SSA value");
                     }
                     auto address = generateLValueAddress(expAlt);
@@ -1678,19 +1715,10 @@ namespace {
                             };
                             koopa_ir::Value baseValue;
                             if (baseLVal.indices.empty()) {
-                                if (m_semanticInfo
-                                        ->findAlias(baseLVal.identifier)
-                                        .has_value()) {
-                                    baseValue = requireAliasValue(
-                                        baseLVal.identifier,
-                                        "poly lvalue is missing an SSA alias "
-                                        "value");
-                                } else {
-                                    baseValue = requireCurrentSymbolValue(
-                                        baseLVal.identifier,
+                                baseValue
+                                    = requireSsaObjectValue(baseLVal.identifier,
                                         "poly lvalue is missing a current SSA "
                                         "value");
-                                }
                             } else {
                                 auto baseAddress
                                     = generateLValueAddress(baseLVal);
@@ -1700,10 +1728,11 @@ namespace {
                                 generateExp(expAlt.indices.back()));
                         }
                     }
-                    if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
-                        && expAlt.indices.empty()) {
-                        return requireAliasValue(expAlt.identifier,
-                            "scalar lvalue is missing an SSA alias value");
+                    if (expAlt.indices.empty()) {
+                        const auto value = trySsaObjectValue(expAlt.identifier);
+                        if (value.has_value()) {
+                            return *value;
+                        }
                     }
                     auto address = generateLValueAddress(expAlt);
                     const auto expType = m_semanticInfo->findExpType(exp);
@@ -2380,8 +2409,8 @@ namespace {
             if (semanticInfo.findAlias(funcFParam.identifier).has_value()
                 && (paramSymbol.object().m_type.isScalar()
                     || paramSymbol.object().m_type.isPoly())) {
-                (void)state.bindAlias(
-                    funcFParam.identifier, program[function.params[i]].symbol);
+                (void)state.bindAlias(funcFParam.identifier,
+                    program[function.params[i]].symbol, false);
                 continue;
             }
             const std::string allocName
