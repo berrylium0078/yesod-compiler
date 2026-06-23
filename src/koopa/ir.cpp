@@ -1384,13 +1384,88 @@ void eliminateEmptyBasicBlocks(Program& program, FunctionDef& function)
 
     const auto blockByLabel = buildBlockByLabel();
 
+    std::unordered_map<std::string, size_t> valueUseCounts;
+    auto countValue = [&](const Value& value) -> void {
+        if (const auto spelling = symbolSpelling(value); spelling.has_value()) {
+            ++valueUseCounts[*spelling];
+        }
+    };
+    for (const auto blockRef : function.blocks) {
+        const auto& block = program[blockRef];
+        for (const auto& statement : block.statements) {
+            MATCH(statement)
+            WITH(
+                [&](Ref<SymbolDef> defRef) -> void {
+                    visitRhsValues(program, program[defRef].rhs, countValue);
+                },
+                [&](Ref<StoreStmt> storeRef) -> void {
+                    visitStoreValue(
+                        program[storeRef].value, program, countValue);
+                    countValue(program[storeRef].destination);
+                },
+                [&](Ref<CallExpr> callRef) -> void {
+                    for (const auto& arg : program[callRef].args) {
+                        countValue(arg);
+                    }
+                });
+        }
+        MATCH(block.terminator)
+        WITH(
+            [&](Ref<BranchTerminator> terminatorRef) -> void {
+                const auto& terminator = program[terminatorRef];
+                countValue(terminator.condition);
+                for (const auto& arg : terminator.trueArgs) {
+                    countValue(arg);
+                }
+                for (const auto& arg : terminator.falseArgs) {
+                    countValue(arg);
+                }
+            },
+            [&](Ref<JumpTerminator> terminatorRef) -> void {
+                for (const auto& arg : program[terminatorRef].args) {
+                    countValue(arg);
+                }
+            },
+            [&](Ref<ReturnTerminator> terminatorRef) -> void {
+                const auto& terminator = program[terminatorRef];
+                if (terminator.value.has_value()) {
+                    countValue(*terminator.value);
+                }
+            });
+    }
+
     auto isEmptyForwarder = [&](Ref<BasicBlock> blockRef) -> bool {
         if (blockRef == entryBlockRef) {
             return false;
         }
         const auto& block = program[blockRef];
-        return block.statements.empty()
-            && std::holds_alternative<Ref<JumpTerminator>>(block.terminator);
+        if (!block.statements.empty()
+            || !std::holds_alternative<Ref<JumpTerminator>>(block.terminator)) {
+            return false;
+        }
+        const auto jumpRef = std::get<Ref<JumpTerminator>>(block.terminator);
+        std::unordered_map<std::string, size_t> localForwardUseCounts;
+        for (const auto& arg : program[jumpRef].args) {
+            if (const auto spelling = symbolSpelling(arg);
+                spelling.has_value()) {
+                ++localForwardUseCounts[*spelling];
+            }
+        }
+        for (const auto paramRef : block.params) {
+            const auto& param = program[paramRef];
+            const auto totalUseCount
+                = valueUseCounts.contains(param.symbol.spelling)
+                ? valueUseCounts.at(param.symbol.spelling)
+                : 0;
+            const auto forwardUseCount
+                = localForwardUseCounts.contains(param.symbol.spelling)
+                ? localForwardUseCounts.at(param.symbol.spelling)
+                : 0;
+            if (totalUseCount != forwardUseCount) {
+                return false;
+            }
+        }
+        return true;
     };
 
     auto substituteValue

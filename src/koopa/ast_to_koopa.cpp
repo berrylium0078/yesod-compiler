@@ -414,11 +414,11 @@ namespace {
             return "%bb_" + std::to_string(m_nextBlockId++);
         }
 
-        [[nodiscard]] static std::string makeBlockParamName(
-            int32_t blockId, size_t paramIndex)
+        [[nodiscard]] static std::string makeAliasName(
+            const frontend::SemanticSsaAlias& alias)
         {
-            return "%bp_" + std::to_string(blockId) + "_"
-                + std::to_string(paramIndex);
+            return "%a_" + std::to_string(alias.m_symbolId) + "_"
+                + std::to_string(alias.m_version);
         }
 
         [[nodiscard]] static int64_t aliasKey(
@@ -429,12 +429,13 @@ namespace {
         }
 
         [[nodiscard]] koopa_ir::Value materializeFreshValue(
-            koopa_ir::Value value, const SemanticType& type)
+            koopa_ir::Value value, const SemanticType& type,
+            const std::string& name)
         {
             if (type.kind == SemanticTypeKind::integer
                 || type.kind == SemanticTypeKind::boolean
                 || type.kind == SemanticTypeKind::mint || type.isPoly()) {
-                return emitCopy(std::move(value));
+                return emitCopy(std::move(value), name);
             }
             return value;
         }
@@ -454,10 +455,11 @@ namespace {
                 throw std::runtime_error(
                     "SSA alias should refer to an object symbol");
             }
+            const auto aliasName = makeAliasName(*alias);
             auto freshValue = materializeValue
                 ? materializeFreshValue(
-                      std::move(value), symbol.object().m_type)
-                : std::move(value);
+                      std::move(value), symbol.object().m_type, aliasName)
+                : emitCopy(std::move(value), aliasName);
             m_valueByAliasKey[aliasKey(*alias)] = freshValue;
             m_valueBySymbolId[symbol.m_id] = freshValue;
             return freshValue;
@@ -641,13 +643,19 @@ namespace {
 
         [[nodiscard]] koopa_ir::Value emitCopy(koopa_ir::Value value)
         {
+            return emitCopy(std::move(value), makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitCopy(
+            koopa_ir::Value value, const std::string& name)
+        {
             auto rhsRef
                 = m_program->alloc<koopa_ir::CopyExpr>(koopa_ir::CopyExpr {
                     .sourcePos = { },
                     .value = std::move(value),
                     .annotations = { },
                 });
-            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+            return emitNamedRhs(rhsRef, name);
         }
 
         [[nodiscard]] koopa_ir::Value emitPolyLen(
@@ -2384,9 +2392,8 @@ namespace {
                 block.params.push_back(program.alloc<koopa_ir::BlockParameter>(
                     koopa_ir::BlockParameter {
                         .sourcePos = { },
-                        .symbol
-                        = makeIrSymbol(IrFunctionGenerator::makeBlockParamName(
-                            blockId, i)),
+                        .symbol = makeIrSymbol(
+                            IrFunctionGenerator::makeAliasName(param.m_alias)),
                         .type = lowerSemanticTypeToIr(
                             program, blockParamSymbol->object().m_type, false),
                         .annotations = { },
