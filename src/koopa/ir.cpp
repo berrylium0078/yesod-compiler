@@ -1616,6 +1616,15 @@ void validate(const Program& program)
     std::unordered_set<std::string> pointwiseSymbols;
     std::unordered_map<std::string, int32_t> fusionSourceBySymbol;
 
+    auto recordTypedValue
+        = [&](const std::string& symbol, const Type& type) -> void {
+        valueTypes[symbol] = validationTypeOf(type);
+        if (const auto* pointerRef = std::get_if<Ref<PointerType>>(&type);
+            pointerRef != nullptr) {
+            pointeeTypes[symbol] = program[*pointerRef].pointeeType;
+        }
+    };
+
     for (const auto& item : program.items) {
         std::visit(
             [&](auto itemRef) {
@@ -1638,15 +1647,13 @@ void validate(const Program& program)
                         : ValidationType::other;
                     for (const auto paramRef : function.params) {
                         const auto& param = program[paramRef];
-                        valueTypes[param.symbol.spelling]
-                            = validationTypeOf(param.type);
+                        recordTypedValue(param.symbol.spelling, param.type);
                     }
                     for (const auto blockRef : function.blocks) {
                         const auto& block = program[blockRef];
                         for (const auto paramRef : block.params) {
                             const auto& param = program[paramRef];
-                            valueTypes[param.symbol.spelling]
-                                = validationTypeOf(param.type);
+                            recordTypedValue(param.symbol.spelling, param.type);
                         }
                         for (const auto& statement : block.statements) {
                             if (const auto* symbolDefRef
@@ -1991,8 +1998,7 @@ void validate(const Program& program)
                     fusionSourceBySymbol = globalFusionSourceBySymbol;
                     for (const auto paramRef : function.params) {
                         const auto& param = program[paramRef];
-                        valueTypes[param.symbol.spelling]
-                            = validationTypeOf(param.type);
+                        recordTypedValue(param.symbol.spelling, param.type);
                     }
                     for (const auto scanBlockRef : function.blocks) {
                         const auto& scanBlock = program[scanBlockRef];
@@ -2023,8 +2029,7 @@ void validate(const Program& program)
                         const auto& block = program[blockRef];
                         for (const auto paramRef : block.params) {
                             const auto& param = program[paramRef];
-                            valueTypes[param.symbol.spelling]
-                                = validationTypeOf(param.type);
+                            recordTypedValue(param.symbol.spelling, param.type);
                         }
                         for (const auto& statement : block.statements) {
                             std::visit(
@@ -2045,15 +2050,39 @@ void validate(const Program& program)
                                             pointeeTypes[symbolDef.symbol
                                                     .spelling]
                                                 = program[*memRef].allocType;
+                                        } else if (const auto* loadRef
+                                            = std::get_if<Ref<LoadExpr>>(
+                                                &symbolDef.rhs)) {
+                                            const auto& expr
+                                                = program[*loadRef];
+                                            const auto srcIt
+                                                = pointeeTypes.find(
+                                                    expr.source.spelling);
+                                            if (srcIt != pointeeTypes.end()) {
+                                                if (const auto* pointerRef
+                                                    = std::get_if<
+                                                        Ref<PointerType>>(
+                                                        &srcIt->second);
+                                                    pointerRef != nullptr) {
+                                                    pointeeTypes[symbolDef
+                                                            .symbol.spelling]
+                                                        = program[*pointerRef]
+                                                              .pointeeType;
+                                                }
+                                            }
                                         } else if (const auto* getPtrRef
                                             = std::get_if<Ref<GetPointerExpr>>(
                                                 &symbolDef.rhs)) {
                                             const auto& expr
                                                 = program[*getPtrRef];
-                                            pointeeTypes[symbolDef.symbol
-                                                    .spelling]
-                                                = pointeeTypes[expr.source
-                                                        .spelling];
+                                            const auto srcIt
+                                                = pointeeTypes.find(
+                                                    expr.source.spelling);
+                                            if (srcIt != pointeeTypes.end()) {
+                                                pointeeTypes[symbolDef.symbol
+                                                        .spelling]
+                                                    = srcIt->second;
+                                            }
                                         } else if (const auto* gepRef
                                             = std::get_if<
                                                 Ref<GetElementPointerExpr>>(

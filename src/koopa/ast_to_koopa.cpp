@@ -1396,8 +1396,12 @@ namespace {
                 },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
                     if (expAlt.indices.empty()) {
-                        return requireSsaObjectValue(expAlt.identifier,
-                            "poly lvalue is missing a current SSA value");
+                        const auto value = trySsaObjectValue(expAlt.identifier);
+                        if (value.has_value()) {
+                            return *value;
+                        }
+                        auto address = generateLValueAddress(expAlt);
+                        return emitLoad(address.symbol);
                     }
                     auto address = generateLValueAddress(expAlt);
                     return emitLoad(address.symbol);
