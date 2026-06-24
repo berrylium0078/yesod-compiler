@@ -318,7 +318,7 @@ namespace detail {
                         visitFuncDef(funcDef);
                     }
                 },
-                [&](const auto&) {});
+                [&](const auto&) { });
         }
     }
 
@@ -592,7 +592,7 @@ namespace detail {
                         "explicit cast for int/mint conversion");
                 }
             },
-            [&](const auto&) {});
+            [&](const auto&) { });
     }
 
     void SemanticTypeAnalyzerImpl::visitExpStmt(Ref<ExpStmt> expStmt)
@@ -855,25 +855,16 @@ namespace detail {
         const Exp& exp, const Exp::Unary& unary)
     {
         auto operand = analyzeExp(unary.lhs);
-        // Handle !poly -> int (length extraction, not boolean negation)
         if (operand.m_type.isPoly()) {
-            if (unary.op == UnaryOpKeyword::bang) {
-                return AnalyzedExp {
-                    .m_type = SemanticType::makeInteger(),
-                    .m_valueKind = ExpType::integer,
-                    .m_isConstant = false,
-                    .m_constantValue = 0,
-                };
-            }
-            if (unary.op == UnaryOpKeyword::plus
-                || unary.op == UnaryOpKeyword::minus) {
-                return operand;
-            }
             recordDiagnostic<TypeMismatchDiagnostic>(exp.sourcePos.m_offset,
-                "unary bitwise not requires a scalar operand");
+                "unary operator requires a scalar operand");
             return AnalyzedExp {
-                .m_type = SemanticType::makeInteger(),
-                .m_valueKind = ExpType::integer,
+                .m_type = unary.op == UnaryOpKeyword::bang
+                    ? SemanticType::makeBoolean()
+                    : SemanticType::makeInteger(),
+                .m_valueKind = unary.op == UnaryOpKeyword::bang
+                    ? ExpType::boolean
+                    : ExpType::integer,
                 .m_isConstant = false,
                 .m_constantValue = 0,
             };
@@ -1348,7 +1339,7 @@ namespace detail {
     {
         auto objectType = lowerBType(bType);
         for (auto dimIt = dimensions.rbegin(); dimIt != dimensions.rend();
-             ++dimIt) {
+            ++dimIt) {
             const auto analyzedDim = analyzeExp(*dimIt);
             if (analyzedDim.m_type.kind != SemanticTypeKind::integer
                 || !analyzedDim.m_isConstant) {
@@ -1474,8 +1465,8 @@ namespace detail {
         }
 
         for (int32_t i = 0;
-             i < expectedType.m_arrayLength && nextValueIndex < values.size();
-             ++i) {
+            i < expectedType.m_arrayLength && nextValueIndex < values.size();
+            ++i) {
             MATCH(values[nextValueIndex](m_ast).kind)
             WITH(
                 [&](Ref<Exp>) {
@@ -1609,8 +1600,8 @@ namespace detail {
         }
 
         for (int32_t i = 0;
-             i < expectedType.m_arrayLength && nextValueIndex < values.size();
-             ++i) {
+            i < expectedType.m_arrayLength && nextValueIndex < values.size();
+            ++i) {
             MATCH(values[nextValueIndex](m_ast).kind)
             WITH(
                 [&](Ref<Exp>) {

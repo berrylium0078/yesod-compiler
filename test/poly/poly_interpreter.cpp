@@ -534,10 +534,6 @@ namespace {
             const frontend::Exp::Unary& unary)
         {
             RuntimeValue value = evaluateExp(unary.lhs);
-            if (std::holds_alternative<Poly>(value)
-                && unary.op == frontend::UnaryOpKeyword::bang) {
-                return asPoly(value).length();
-            }
             if (std::holds_alternative<Mint>(value)) {
                 const Mint mint = asMint(value);
                 switch (unary.op) {

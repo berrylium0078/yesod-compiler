@@ -1,9 +1,9 @@
-void putpoly(poly f)
+void putpoly(poly f, int n)
 {
-    putint(!f);
+    putint(n);
     putch(58);
     int i = 0;
-    while (i < !f) {
+    while (i < n) {
         putch(32);
         putint(int(f[i]));
         i = i + 1;

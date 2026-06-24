@@ -1,9 +1,9 @@
-void putpoly(poly f)
+void putpoly(poly f, int n)
 {
-    putint(!f);
+    putint(n);
     putch(58);
     int i = 0;
-    while (i < !f) {
+    while (i < n) {
         putch(32);
         putint(int(f[i]));
         i = i + 1;
@@ -27,13 +27,13 @@ int main()
     globalValue = globalValue + poly(10);
     globalArray[0] = globalArray[0] + (poly(20) << 1);
 
-    putpoly(local);
-    putpoly(globalValue);
-    putpoly(globalArray[0]);
+    putpoly(local, 2);
+    putpoly(globalValue, 2);
+    putpoly(globalArray[0], 2);
 
     globalArray[1] = echo(globalValue);
     globalValue = poly(0);
-    putpoly(globalArray[1]);
-    putpoly(globalValue);
+    putpoly(globalArray[1], 2);
+    putpoly(globalValue, 1);
     return 0;
 }

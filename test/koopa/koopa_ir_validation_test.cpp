@@ -180,17 +180,6 @@ struct ValidationProgramBuilder {
             sourceId);
     }
 
-    void addPolyLen(const std::string& name, koopa_ir::Value value)
-    {
-        addSymbolDef(name,
-            program.alloc<koopa_ir::PolyLenExpr>(koopa_ir::PolyLenExpr {
-                .sourcePos = { },
-                .op = koopa_ir::PolyLenOp::len,
-                .args = { std::move(value) },
-                .annotations = { },
-            }));
-    }
-
     void addCopy(const std::string& name, koopa_ir::Value value)
     {
         addSymbolDef(name,
@@ -271,26 +260,6 @@ void testAcceptsCrossStatementNestedFusionValues()
     builder.addCombine("%combine2", symbol("%combine1"), integer(0),
         std::nullopt, integer(0), integer(1), 4);
     koopa_ir::validate(builder.program);
-}
-
-void testRejectsPolyLenOfCombine()
-{
-    requireInvalid("poly_len of combine",
-        "poly_len cannot consume a fused poly result",
-        [](ValidationProgramBuilder& builder) -> void {
-            builder.addCombine("%combine1", symbol("%p1"));
-            builder.addPolyLen("%bad", symbol("%combine1"));
-        });
-}
-
-void testRejectsPolyLenOfPointwise()
-{
-    requireInvalid("poly_len of pointwise",
-        "poly_len cannot consume a fused poly result",
-        [](ValidationProgramBuilder& builder) -> void {
-            builder.addPointwise("%pw1", builder.polyMulRoot());
-            builder.addPolyLen("%bad", symbol("%pw1"));
-        });
 }
 
 void testAcceptsCopyPseudoInstruction()
@@ -476,8 +445,6 @@ int main()
     testRejectsPointwiseOperandThatIsPointwiseResult();
     testRejectsNestedCombine();
     testAcceptsCrossStatementNestedFusionValues();
-    testRejectsPolyLenOfCombine();
-    testRejectsPolyLenOfPointwise();
     testRejectsPlainPolyBinary();
     testRejectsBadCombineStartType();
     testRejectsBadCombineScaleType();

@@ -1,9 +1,9 @@
-void putpoly(poly f)
+void putpoly(poly f, int n)
 {
-    putint(!f);
+    putint(n);
     putch(58);
     int i = 0;
-    while (i < !f) {
+    while (i < n) {
         putch(32);
         putint(int(f[i]));
         i = i + 1;
@@ -37,13 +37,13 @@ void rotate_first_three(poly a[])
 int main()
 {
     write_pair(store, 1);
-    putpoly(store[1]);
-    putpoly(store[2]);
+    putpoly(store[1], 3);
+    putpoly(store[2], 3);
 
     store[0] = poly(9);
     rotate_first_three(store);
-    putpoly(store[0]);
-    putpoly(store[1]);
-    putpoly(store[2]);
+    putpoly(store[0], 3);
+    putpoly(store[1], 3);
+    putpoly(store[2], 1);
     return 0;
 }

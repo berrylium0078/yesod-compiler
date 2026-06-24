@@ -205,20 +205,6 @@ namespace {
                                 const auto& expr = program[rhsRef];
                                 output << serializeValue(expr.value);
                             } else if constexpr (std::same_as<Rhs,
-                                                     PolyLenExpr>) {
-                                const auto& expr = program[rhsRef];
-                                output << toString(expr.op);
-                                if (!expr.args.empty()) {
-                                    output << ' ';
-                                }
-                                for (size_t index = 0; index < expr.args.size();
-                                    ++index) {
-                                    if (index != 0) {
-                                        output << ", ";
-                                    }
-                                    output << serializeValue(expr.args[index]);
-                                }
-                            } else if constexpr (std::same_as<Rhs,
                                                      PointwiseExpr>) {
                                 const auto& expr = program[rhsRef];
                                 output << "pointwise "
@@ -517,25 +503,6 @@ std::string_view toString(ConversionOp op)
     throw std::runtime_error("unknown conversion operation");
 }
 
-std::string_view toString(PolyLenOp op)
-{
-    switch (op) {
-    case PolyLenOp::len:
-        return "poly_len";
-    case PolyLenOp::max:
-        return "poly_len_max";
-    case PolyLenOp::min:
-        return "poly_len_min";
-    case PolyLenOp::mulLen:
-        return "poly_mul_len";
-    case PolyLenOp::shiftLen:
-        return "poly_shift_len";
-    case PolyLenOp::sliceLen:
-        return "poly_slice_len";
-    }
-    throw std::runtime_error("unknown poly length operation");
-}
-
 bool hasReturnType(const FunctionType& type)
 {
     return type.returnType.has_value();
@@ -662,11 +629,6 @@ namespace {
                 }
             },
             [&](Ref<CopyExpr> ref) { visitValue(program[ref].value, visit); },
-            [&](Ref<PolyLenExpr> ref) {
-                for (auto& arg : program[ref].args) {
-                    visitValue(arg, visit);
-                }
-            },
             [&](Ref<PointwiseExpr> ref) {
                 visitPointwiseNodeValues(program, program[ref].root, visit);
             },
@@ -715,11 +677,6 @@ namespace {
                 }
             },
             [&](Ref<CopyExpr> ref) { visit(program[ref].value); },
-            [&](Ref<PolyLenExpr> ref) {
-                for (const auto& arg : program[ref].args) {
-                    visit(arg);
-                }
-            },
             [&](Ref<PointwiseExpr> ref) {
                 visitPointwiseNodeValues(program, program[ref].root, visit);
             },
@@ -950,12 +907,6 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
                 [&](Ref<CopyExpr> ref) -> void {
                     recordValueSite(program[ref].value, useIndex,
                         UseSiteKind::value, nullptr, userDef);
-                },
-                [&](Ref<PolyLenExpr> ref) -> void {
-                    for (auto& arg : program[ref].args) {
-                        recordValueSite(arg, useIndex, UseSiteKind::value,
-                            nullptr, userDef);
-                    }
                 },
                 [&](Ref<PointwiseExpr> ref) -> void {
                     visitPointwiseNodeValues(
@@ -1780,50 +1731,6 @@ void validate(const Program& program)
                 const auto& expr = program[ref];
                 return validationTypeOfValue(expr.value, valueTypes);
             },
-            [&](Ref<PolyLenExpr> ref) -> ValidationType {
-                const auto& expr = program[ref];
-                auto requireArgCount = [&](size_t expected) {
-                    if (expr.args.size() != expected) {
-                        throw std::runtime_error(std::string(toString(expr.op))
-                            + " argument count mismatch");
-                    }
-                };
-                switch (expr.op) {
-                case PolyLenOp::len:
-                    requireArgCount(1);
-                    if (const auto* symbol = std::get_if<Symbol>(&expr.args[0]);
-                        symbol != nullptr
-                        && (combineSymbols.contains(symbol->spelling)
-                            || pointwiseSymbols.contains(symbol->spelling))) {
-                        throw std::runtime_error(
-                            "poly_len cannot consume a fused poly result: "
-                            + symbol->spelling);
-                    }
-                    requireValueType(expr.args[0], ValidationType::poly,
-                        valueTypes, "poly_len expects a poly operand",
-                        sourceOffset(expr.args[0]));
-                    break;
-                case PolyLenOp::max:
-                case PolyLenOp::min:
-                case PolyLenOp::mulLen:
-                case PolyLenOp::shiftLen:
-                    requireArgCount(2);
-                    break;
-                case PolyLenOp::sliceLen:
-                    requireArgCount(3);
-                    break;
-                }
-                if (expr.op != PolyLenOp::len) {
-                    for (const auto& arg : expr.args) {
-                        requireValueType(arg, ValidationType::integer,
-                            valueTypes,
-                            "poly length pseudo-instruction expects integer "
-                            "operands",
-                            sourceOffset(arg));
-                    }
-                }
-                return ValidationType::integer;
-            },
             [&](Ref<PointwiseExpr> ref) -> ValidationType {
                 std::function<ValidationType(Ref<PointwiseNode>)>
                     validatePointwiseNode
@@ -1915,7 +1822,9 @@ void validate(const Program& program)
                             program[ref].sourcePos.m_offset)) {
                         throw std::runtime_error(
                             "combine term source cannot be another combine "
-                            "from the same expression");
+                            "from the same expression: "
+                            + symbol->spelling + " source "
+                            + std::to_string(program[ref].sourcePos.m_offset));
                     }
                     const auto* termSymbol = std::get_if<Symbol>(&term.value);
                     allTermsAreTrivialPointwise = allTermsAreTrivialPointwise

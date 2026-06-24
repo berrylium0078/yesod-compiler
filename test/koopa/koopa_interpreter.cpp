@@ -716,12 +716,6 @@ namespace {
                     frame.types[name] = std::make_shared<TypeInfo>(
                         typeInfoForRuntimeValue(frame.values[name]));
                 },
-                [&](Ref<koopa_ir::PolyLenExpr> lenRef) -> void {
-                    frame.values[name]
-                        = makeInt(executePolyLen(m_program[lenRef], frame));
-                    frame.types[name] = std::make_shared<TypeInfo>(
-                        TypeInfo { .kind = TypeInfo::Kind::i32 });
-                },
                 [&](Ref<koopa_ir::PointwiseExpr> pointwiseRef) -> void {
                     frame.values[name] = makePoly(
                         executePointwise(m_program[pointwiseRef], frame));
@@ -803,40 +797,6 @@ namespace {
             const koopa_ir::PointwiseExpr& expr, Frame& frame)
         {
             return requirePoly(executePointwiseNode(expr.root, frame));
-        }
-
-        [[nodiscard]] int32_t executePolyLen(
-            const koopa_ir::PolyLenExpr& expr, Frame& frame)
-        {
-            auto intArg = [&](size_t index) -> int32_t {
-                return requireInt(evalValue(expr.args.at(index), frame));
-            };
-            switch (expr.op) {
-            case koopa_ir::PolyLenOp::len:
-                return requirePoly(evalValue(expr.args.at(0), frame)).length();
-            case koopa_ir::PolyLenOp::max:
-                return std::max(intArg(0), intArg(1));
-            case koopa_ir::PolyLenOp::min:
-                return std::min(intArg(0), intArg(1));
-            case koopa_ir::PolyLenOp::mulLen: {
-                const int32_t lhs = intArg(0);
-                const int32_t rhs = intArg(1);
-                return lhs != 0 && rhs != 0 ? lhs + rhs - 1 : 0;
-            }
-            case koopa_ir::PolyLenOp::shiftLen:
-                return std::max(0, intArg(0) - intArg(1));
-            case koopa_ir::PolyLenOp::sliceLen: {
-                const int32_t length = intArg(0);
-                const int32_t start = intArg(1);
-                const int32_t end = intArg(2);
-                if (end <= 0 || start >= end || start >= length) {
-                    return 0;
-                }
-                return std::min(end, length);
-            }
-            }
-            throw ExecuteException(
-                ExecuteStatus::runtimeError, "unknown poly length operation");
         }
 
         [[nodiscard]] Poly executeCombine(

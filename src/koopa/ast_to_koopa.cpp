@@ -658,19 +658,6 @@ namespace {
             return emitNamedRhs(rhsRef, name);
         }
 
-        [[nodiscard]] koopa_ir::Value emitPolyLen(
-            koopa_ir::PolyLenOp op, std::vector<koopa_ir::Value> args)
-        {
-            auto rhsRef = m_program->alloc<koopa_ir::PolyLenExpr>(
-                koopa_ir::PolyLenExpr {
-                    .sourcePos = { },
-                    .op = op,
-                    .args = std::move(args),
-                    .annotations = { },
-                });
-            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
-        }
-
         [[nodiscard]] Ref<koopa_ir::PointwiseNode> makePointwiseLeaf(
             koopa_ir::Value value)
         {
@@ -1283,82 +1270,6 @@ namespace {
                 generatePointwiseNode(binaryExp.rhs)));
         }
 
-        [[nodiscard]] koopa_ir::Value generateBasePolyLength(Ref<Exp> exp)
-        {
-            return emitPolyLen(
-                koopa_ir::PolyLenOp::len, { generatePolyBaseValue(exp) });
-        }
-
-        [[nodiscard]] koopa_ir::Value generatePolyLength(Ref<Exp> exp)
-        {
-            const auto& parsedExp = exp(m_ast);
-            return MATCH(parsedExp.kind) WITH(
-                [&](Exp::Binary expAlt) -> koopa_ir::Value {
-                    if ((expAlt.op == BinaryOpKeyword::plus
-                            || expAlt.op == BinaryOpKeyword::minus)
-                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
-                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return emitPolyLen(koopa_ir::PolyLenOp::max,
-                            { generatePolyLength(expAlt.lhs),
-                                generatePolyLength(expAlt.rhs) });
-                    }
-                    if (expAlt.op == BinaryOpKeyword::star
-                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
-                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return emitPolyLen(koopa_ir::PolyLenOp::mulLen,
-                            { generatePolyLength(expAlt.lhs),
-                                generatePolyLength(expAlt.rhs) });
-                    }
-                    if (expAlt.op == BinaryOpKeyword::star
-                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
-                        && !expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return generatePolyLength(expAlt.lhs);
-                    }
-                    if (expAlt.op == BinaryOpKeyword::star
-                        && !expHasType(expAlt.lhs, SemanticTypeKind::poly)
-                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
-                        return generatePolyLength(expAlt.rhs);
-                    }
-                    if ((expAlt.op == BinaryOpKeyword::sar
-                            || expAlt.op == BinaryOpKeyword::shl)
-                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)) {
-                        auto shift = generateExp(expAlt.rhs);
-                        if (expAlt.op == BinaryOpKeyword::shl) {
-                            shift = emitIntSub(
-                                koopa_ir::IntegerLiteral {
-                                    .sourcePos = { }, .value = 0 },
-                                std::move(shift));
-                        }
-                        return emitPolyLen(koopa_ir::PolyLenOp::shiftLen,
-                            { generatePolyLength(expAlt.lhs),
-                                std::move(shift) });
-                    }
-                    return generateBasePolyLength(exp);
-                },
-                [&](Exp::Slice expAlt) -> koopa_ir::Value {
-                    return emitPolyLen(koopa_ir::PolyLenOp::sliceLen,
-                        { generatePolyLength(expAlt.base),
-                            generateExp(expAlt.start),
-                            generateExp(expAlt.end) });
-                },
-                [&](Exp::PolyConstruct expAlt) -> koopa_ir::Value {
-                    return koopa_ir::IntegerLiteral {
-                        .sourcePos = { },
-                        .value = static_cast<int32_t>(expAlt.elements.size()),
-                    };
-                },
-                [&](Exp::Cast expAlt) -> koopa_ir::Value {
-                    if (expAlt.targetType == BTypeKeyword::polyKeyword) {
-                        return koopa_ir::IntegerLiteral { .sourcePos = { },
-                            .value = 1 };
-                    }
-                    return generateBasePolyLength(exp);
-                },
-                [&](const auto&) -> koopa_ir::Value {
-                    return generateBasePolyLength(exp);
-                });
-        }
-
         [[nodiscard]] koopa_ir::Value generatePolyBaseValue(Ref<Exp> exp)
         {
             const auto& parsedExp = exp(m_ast);
@@ -1406,6 +1317,23 @@ namespace {
                     auto address = generateLValueAddress(expAlt);
                     return emitLoad(address.symbol);
                 },
+                [&](Exp::Slice expAlt) -> koopa_ir::Value {
+                    const int32_t previousExpressionId = m_currentExpressionId;
+                    m_currentExpressionId = 0;
+                    auto baseValue = generatePolyExpression(expAlt.base);
+                    m_currentExpressionId = m_nextExpressionId++;
+                    auto result = emitCombine({ koopa_ir::CombineTerm {
+                        .value = std::move(baseValue),
+                        .start = generateExp(expAlt.start),
+                        .end = generateExp(expAlt.end),
+                        .shift = koopa_ir::IntegerLiteral { .sourcePos = { },
+                            .value = 0 },
+                        .scale = koopa_ir::IntegerLiteral { .sourcePos = { },
+                            .value = 1 },
+                    } });
+                    m_currentExpressionId = previousExpressionId;
+                    return result;
+                },
                 [&](Exp::PolyConstruct expAlt) -> koopa_ir::Value {
                     std::vector<koopa_ir::Value> elements;
                     elements.reserve(expAlt.elements.size());
@@ -1447,23 +1375,6 @@ namespace {
         {
             for (auto& term : terms) {
                 term.shift = emitIntAdd(std::move(term.shift), shift);
-            }
-        }
-
-        void sliceTerms(std::vector<koopa_ir::CombineTerm>& terms,
-            koopa_ir::Value start, koopa_ir::Value end)
-        {
-            for (auto& term : terms) {
-                auto shiftedStart = emitIntAdd(start, term.shift);
-                auto shiftedEnd = emitIntAdd(end, term.shift);
-                term.start = emitPolyLen(koopa_ir::PolyLenOp::max,
-                    { std::move(term.start), std::move(shiftedStart) });
-                if (term.end.has_value()) {
-                    term.end = emitPolyLen(koopa_ir::PolyLenOp::min,
-                        { std::move(*term.end), std::move(shiftedEnd) });
-                } else {
-                    term.end = std::move(shiftedEnd);
-                }
             }
         }
 
@@ -1520,11 +1431,8 @@ namespace {
                     }
                     return { makeIdentityPolyTerm(generatePolyBaseValue(exp)) };
                 },
-                [&](Exp::Slice expAlt) -> std::vector<koopa_ir::CombineTerm> {
-                    auto terms = generatePolyLinearTerms(expAlt.base);
-                    sliceTerms(terms, generateExp(expAlt.start),
-                        generateExp(expAlt.end));
-                    return terms;
+                [&](Exp::Slice) -> std::vector<koopa_ir::CombineTerm> {
+                    return { makeIdentityPolyTerm(generatePolyBaseValue(exp)) };
                 },
                 [&](const auto&) -> std::vector<koopa_ir::CombineTerm> {
                     return { makeIdentityPolyTerm(generatePolyBaseValue(exp)) };
@@ -1837,12 +1745,6 @@ namespace {
             const Exp::Unary& unaryExp)
         {
             const auto operandType = m_semanticInfo->findExpType(unaryExp.lhs);
-            if (operandType.has_value()
-                && operandType->kind == SemanticTypeKind::poly
-                && unaryExp.op == UnaryOpKeyword::bang) {
-                return generatePolyLength(unaryExp.lhs);
-            }
-
             auto operand = generateExp(unaryExp.lhs);
             if (operandType.has_value() && isMintType(*operandType)) {
                 switch (unaryExp.op) {

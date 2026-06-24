@@ -5,12 +5,12 @@
 
 namespace yesod::test_support::poly {
 
-inline constexpr const char* POLY_TEST_PRELUDE = R"(void putpoly(poly f)
+inline constexpr const char* POLY_TEST_PRELUDE = R"(void putpoly(poly f, int n)
 {
-    putint(!f);
+    putint(n);
     putch(58);
     int i = 0;
-    while (i < !f) {
+    while (i < n) {
         putch(32);
         putint(int(f[i]));
         i = i + 1;

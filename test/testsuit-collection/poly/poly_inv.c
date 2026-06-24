@@ -1,9 +1,9 @@
-void putpoly(poly f)
+void putpoly(poly f, int n)
 {
-    putint(!f);
+    putint(n);
     putch(58);
     int i = 0;
-    while (i < !f) {
+    while (i < n) {
         putch(32);
         putint(int(f[i]));
         i = i + 1;
@@ -11,9 +11,10 @@ void putpoly(poly f)
     putch(10);
 }
 
-poly poly_inv(poly f) {
+poly poly_inv(poly f, int n)
+{
     poly g = poly(mint(1) / f[0]);
-    int n = !f, k = 1;
+    int k = 1;
     while (k < n) {
         // len(g) == k
         g = g - (f * g * g)[k, k * 2][0, n];
@@ -22,7 +23,8 @@ poly poly_inv(poly f) {
     return g;
 }
 
-int main() {
+int main()
+{
     int n = getint();
     poly f = poly(0);
     int i = 0;
@@ -31,7 +33,7 @@ int main() {
         f = f + (poly(c) << i);
         i = i + 1;
     }
-    poly g = poly_inv(f);
-    putpoly(g);
+    poly g = poly_inv(f, n);
+    putpoly(g, n);
     return 0;
 }

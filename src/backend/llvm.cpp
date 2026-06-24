@@ -506,9 +506,6 @@ namespace {
                                         valueTypes[sname] = "i32";
                                     }
                                 },
-                                [&](const yesod::Ref<koopa_ir::PolyLenExpr>&) {
-                                    valueTypes[sname] = "i32";
-                                },
                                 [&](const yesod::Ref<
                                     koopa_ir::ConversionExpr>&) {
                                     valueTypes[sname] = "i32";
