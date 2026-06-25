@@ -224,9 +224,21 @@ namespace {
                                        << serializeValue(expr.trueValue) << ", "
                                        << serializeValue(expr.falseValue);
                             } else if constexpr (std::same_as<Rhs,
+                                                     NextPow2Expr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "next_pow2 "
+                                       << serializeValue(expr.value);
+                            } else if constexpr (std::same_as<Rhs, NttExpr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "ntt " << serializeValue(expr.value)
+                                       << ", " << serializeValue(expr.length);
+                            } else if constexpr (std::same_as<Rhs,
                                                      PointwiseExpr>) {
                                 const auto& expr = program[rhsRef];
                                 output << "pointwise "
+                                       << serializeValue(expr.length) << ", "
+                                       << serializeValue(expr.activeL) << ", "
+                                       << serializeValue(expr.activeR) << ' '
                                        << serializePointwiseNode(
                                               expr.root, program);
                             } else if constexpr (std::same_as<Rhs,
@@ -677,8 +689,20 @@ namespace {
                 visitValue(expr.trueValue, visit);
                 visitValue(expr.falseValue, visit);
             },
+            [&](Ref<NextPow2Expr> ref) {
+                visitValue(program[ref].value, visit);
+            },
+            [&](Ref<NttExpr> ref) {
+                auto& expr = program[ref];
+                visitValue(expr.value, visit);
+                visitValue(expr.length, visit);
+            },
             [&](Ref<PointwiseExpr> ref) {
-                visitPointwiseNodeValues(program, program[ref].root, visit);
+                auto& expr = program[ref];
+                visitValue(expr.length, visit);
+                visitValue(expr.activeL, visit);
+                visitValue(expr.activeR, visit);
+                visitPointwiseNodeValues(program, expr.root, visit);
             },
             [&](Ref<CombineExpr> ref) {
                 for (auto& term : program[ref].terms) {
@@ -737,8 +761,18 @@ namespace {
                 visit(expr.trueValue);
                 visit(expr.falseValue);
             },
+            [&](Ref<NextPow2Expr> ref) { visit(program[ref].value); },
+            [&](Ref<NttExpr> ref) {
+                const auto& expr = program[ref];
+                visit(expr.value);
+                visit(expr.length);
+            },
             [&](Ref<PointwiseExpr> ref) {
-                visitPointwiseNodeValues(program, program[ref].root, visit);
+                const auto& expr = program[ref];
+                visit(expr.length);
+                visit(expr.activeL);
+                visit(expr.activeR);
+                visitPointwiseNodeValues(program, expr.root, visit);
             },
             [&](Ref<CombineExpr> ref) {
                 for (const auto& term : program[ref].terms) {
@@ -793,6 +827,7 @@ namespace {
         integer,
         mint,
         poly,
+        pointValue,
         pointer,
         other,
         unknown,
@@ -988,9 +1023,27 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
                     recordValueSite(expr.falseValue, useIndex,
                         UseSiteKind::value, nullptr, userDef);
                 },
+                [&](Ref<NextPow2Expr> ref) -> void {
+                    recordValueSite(program[ref].value, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<NttExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.value, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.length, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                },
                 [&](Ref<PointwiseExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.length, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.activeL, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.activeR, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
                     visitPointwiseNodeValues(
-                        program, program[ref].root, [&](Value& value) -> void {
+                        program, expr.root, [&](Value& value) -> void {
                             recordValueSite(value, useIndex, UseSiteKind::value,
                                 nullptr, userDef);
                         });
@@ -1947,6 +2000,22 @@ void validate(const Program& program)
                 }
                 return trueType;
             },
+            [&](Ref<NextPow2Expr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                requireValueType(expr.value, ValidationType::integer,
+                    valueTypes, "next_pow2 expects an int operand",
+                    sourceOffset(expr.value));
+                return ValidationType::integer;
+            },
+            [&](Ref<NttExpr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                requireValueType(expr.value, ValidationType::poly, valueTypes,
+                    "ntt expects a poly operand", sourceOffset(expr.value));
+                requireValueType(expr.length, ValidationType::integer,
+                    valueTypes, "ntt length must be int",
+                    sourceOffset(expr.length));
+                return ValidationType::pointValue;
+            },
             [&](Ref<PointwiseExpr> ref) -> ValidationType {
                 std::function<ValidationType(Ref<PointwiseNode>)>
                     validatePointwiseNode
@@ -1967,18 +2036,23 @@ void validate(const Program& program)
                             }
                             const auto valueType
                                 = validationTypeOfValue(leaf.value, valueTypes);
-                            if (valueType != ValidationType::poly
-                                && valueType != ValidationType::mint
-                                && valueType != ValidationType::unknown
-                                && !std::holds_alternative<IntegerLiteral>(
+                            if (leaf.kind == PointwiseLeafKind::mint
+                                || std::holds_alternative<IntegerLiteral>(
                                     leaf.value)) {
-                                throw std::runtime_error(
-                                    "pointwise leaf must be poly or mint");
+                                if (valueType != ValidationType::mint
+                                    && valueType != ValidationType::integer
+                                    && valueType != ValidationType::unknown) {
+                                    throw std::runtime_error(
+                                        "pointwise mint leaf must be mint");
+                                }
+                                return ValidationType::mint;
                             }
-                            return std::holds_alternative<IntegerLiteral>(
-                                       leaf.value)
-                                ? ValidationType::mint
-                                : valueType;
+                            if (valueType != ValidationType::pointValue
+                                && valueType != ValidationType::unknown) {
+                                throw std::runtime_error(
+                                    "pointwise leaf must be point values");
+                            }
+                            return ValidationType::pointValue;
                         },
                         [&](const PointwiseBinary& binary) -> ValidationType {
                             const auto lhsType
@@ -1989,25 +2063,27 @@ void validate(const Program& program)
                             case PvBinaryOp::add:
                             case PvBinaryOp::sub:
                             case PvBinaryOp::mul:
-                                if (lhsType != ValidationType::poly
-                                    || rhsType != ValidationType::poly) {
+                                if (lhsType != ValidationType::pointValue
+                                    || rhsType != ValidationType::pointValue) {
                                     throw std::runtime_error(
-                                        "pointwise add/sub/mul expect poly "
+                                        "pointwise add/sub/mul expect "
+                                        "point-value "
                                         "operands: "
                                         + serializePointwiseNode(
                                             nodeRef, program));
                                 }
-                                return ValidationType::poly;
+                                return ValidationType::pointValue;
                             case PvBinaryOp::times:
-                                if (lhsType != ValidationType::poly
+                                if (lhsType != ValidationType::pointValue
                                     || rhsType != ValidationType::mint) {
                                     throw std::runtime_error(
-                                        "pointwise times expects poly and mint "
+                                        "pointwise times expects point values "
+                                        "and mint "
                                         "operands: "
                                         + serializePointwiseNode(
                                             nodeRef, program));
                                 }
-                                return ValidationType::poly;
+                                return ValidationType::pointValue;
                             }
                             throw std::runtime_error(
                                 "unknown pointwise operation");
@@ -2015,10 +2091,19 @@ void validate(const Program& program)
                 };
 
                 const auto& expr = program[ref];
+                requireValueType(expr.length, ValidationType::integer,
+                    valueTypes, "pointwise length must be int",
+                    sourceOffset(expr.length));
+                requireValueType(expr.activeL, ValidationType::integer,
+                    valueTypes, "pointwise active l must be int",
+                    sourceOffset(expr.activeL));
+                requireValueType(expr.activeR, ValidationType::integer,
+                    valueTypes, "pointwise active r must be int",
+                    sourceOffset(expr.activeR));
                 const auto resultType = validatePointwiseNode(expr.root);
-                if (resultType != ValidationType::poly) {
+                if (resultType != ValidationType::pointValue) {
                     throw std::runtime_error(
-                        "pointwise expression root must produce poly");
+                        "pointwise expression root must produce point values");
                 }
                 return ValidationType::poly;
             },

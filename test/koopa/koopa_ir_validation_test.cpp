@@ -98,12 +98,15 @@ struct ValidationProgramBuilder {
     }
 
     [[nodiscard]] yesod::Ref<koopa_ir::PointwiseNode> leaf(
-        koopa_ir::Value value)
+        koopa_ir::Value value,
+        koopa_ir::PointwiseLeafKind kind
+        = koopa_ir::PointwiseLeafKind::pointValue)
     {
         return program.alloc<koopa_ir::PointwiseNode>(
             koopa_ir::PointwiseNode {
                 .sourcePos = { },
                 .kind = koopa_ir::PointwiseLeaf {
+                    .kind = kind,
                     .value = std::move(value),
                 },
             });
@@ -127,8 +130,8 @@ struct ValidationProgramBuilder {
 
     [[nodiscard]] yesod::Ref<koopa_ir::PointwiseNode> polyMulRoot()
     {
-        return binary(koopa_ir::PvBinaryOp::mul, leaf(symbol("%p1")),
-            leaf(symbol("%p2")));
+        return binary(koopa_ir::PvBinaryOp::mul, leaf(symbol("%pv1")),
+            leaf(symbol("%pv2")));
     }
 
     void addSymbolDef(
@@ -144,15 +147,43 @@ struct ValidationProgramBuilder {
     }
 
     void addPointwise(const std::string& name,
-        yesod::Ref<koopa_ir::PointwiseNode> root, int32_t sourceId = 1)
+        yesod::Ref<koopa_ir::PointwiseNode> root, int32_t sourceId = 1,
+        koopa_ir::Value length = integer(4),
+        koopa_ir::Value activeL = integer(0),
+        koopa_ir::Value activeR = integer(4))
     {
         addSymbolDef(name,
             program.alloc<koopa_ir::PointwiseExpr>(koopa_ir::PointwiseExpr {
                 .sourcePos = koopa_ir::SourcePos { sourceId },
+                .length = std::move(length),
+                .activeL = std::move(activeL),
+                .activeR = std::move(activeR),
                 .root = root,
                 .annotations = { },
             }),
             sourceId);
+    }
+
+    void addNextPow2(const std::string& name, koopa_ir::Value value)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::NextPow2Expr>(koopa_ir::NextPow2Expr {
+                .sourcePos = { },
+                .value = std::move(value),
+                .annotations = { },
+            }));
+    }
+
+    void addNtt(
+        const std::string& name, koopa_ir::Value value, koopa_ir::Value length)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::NttExpr>(koopa_ir::NttExpr {
+                .sourcePos = { },
+                .value = std::move(value),
+                .length = std::move(length),
+                .annotations = { },
+            }));
     }
 
     void addCombine(const std::string& name, koopa_ir::Value value,
@@ -344,9 +375,10 @@ void testAcceptsCrossStatementNestedFusionValues()
 {
     ValidationProgramBuilder builder;
     builder.addPointwise("%pw1", builder.polyMulRoot(), 1);
+    builder.addNtt("%pw1_pv", symbol("%pw1"), integer(4));
     builder.addPointwise("%pw2",
-        builder.binary(koopa_ir::PvBinaryOp::mul, builder.leaf(symbol("%pw1")),
-            builder.leaf(symbol("%p1"))),
+        builder.binary(koopa_ir::PvBinaryOp::mul,
+            builder.leaf(symbol("%pw1_pv")), builder.leaf(symbol("%pv1"))),
         2);
     builder.addCombine("%combine1", symbol("%p1"), integer(0), std::nullopt,
         integer(0), integer(1), 3);
@@ -411,6 +443,113 @@ void testRejectsBadPolyAttrTypes()
                 "%set", koopa_ir::PolyAttr::l, symbol("%p1"), integer(0));
             builder.addGetAttr("%bad", koopa_ir::PolyAttr::l, symbol("%set"));
         });
+}
+
+void testRejectsBadNttAndPointwiseTypes()
+{
+    requireInvalid("next_pow2 non-int", "next_pow2 expects an int operand",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addNextPow2("%bad", symbol("%p1"));
+        });
+    requireInvalid("ntt non-poly", "ntt expects a poly operand",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addNtt("%bad", symbol("%i1"), integer(4));
+        });
+    requireInvalid("ntt bad length", "ntt length must be int",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addNtt("%bad", symbol("%p1"), symbol("%p2"));
+        });
+    requireInvalid("pointwise raw poly leaf",
+        "pointwise leaf must be point values",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addPointwise("%bad",
+                builder.leaf(symbol("%p1"), koopa_ir::PointwiseLeafKind::poly));
+        });
+}
+
+void testKoopaInterpreterNextPow2()
+{
+    ValidationProgramBuilder builder;
+    builder.program[builder.functionRef.ref()].params.clear();
+    builder.program[builder.functionRef.ref()].returnType
+        = koopa_ir::I32Type { };
+    builder.addNextPow2("%n0", integer(0));
+    builder.addNextPow2("%n1", integer(1));
+    builder.addNextPow2("%n2", integer(2));
+    builder.addNextPow2("%n3", integer(3));
+    builder.addNextPow2("%n8", integer(8));
+    builder.addNextPow2("%n9", integer(9));
+    builder.addBinary(
+        "%s01", koopa_ir::BinaryOp::add, symbol("%n0"), symbol("%n1"));
+    builder.addBinary(
+        "%s23", koopa_ir::BinaryOp::add, symbol("%n2"), symbol("%n3"));
+    builder.addBinary(
+        "%s89", koopa_ir::BinaryOp::add, symbol("%n8"), symbol("%n9"));
+    builder.addBinary(
+        "%s0123", koopa_ir::BinaryOp::add, symbol("%s01"), symbol("%s23"));
+    builder.addBinary(
+        "%sum", koopa_ir::BinaryOp::add, symbol("%s0123"), symbol("%s89"));
+    builder.setReturn(symbol("%sum"));
+    koopa_ir::validate(builder.program);
+
+    std::istringstream input;
+    std::ostringstream output;
+    const auto result = koopa_interpreter::execute(
+        builder.program, input, output, std::stop_token { });
+    require(result.status == koopa_interpreter::ExecuteStatus::normal,
+        std::string("next_pow2 execution failed: ") + result.message);
+    require(result.returnValue == 32,
+        "next_pow2 should return rounded power-of-two lengths");
+}
+
+void testKoopaInterpreterRejectsBadNttLength()
+{
+    ValidationProgramBuilder builder;
+    builder.program[builder.functionRef.ref()].params.clear();
+    builder.program[builder.functionRef.ref()].returnType
+        = koopa_ir::I32Type { };
+    builder.addPolyConstruct("%p", { integer(1), integer(2) });
+    builder.addNtt("%pv", symbol("%p"), integer(3));
+    builder.setReturn(integer(0));
+    koopa_ir::validate(builder.program);
+
+    std::istringstream input;
+    std::ostringstream output;
+    const auto result = koopa_interpreter::execute(
+        builder.program, input, output, std::stop_token { });
+    require(result.status == koopa_interpreter::ExecuteStatus::runtimeError,
+        "non-power-of-two NTT length should fail at runtime");
+}
+
+void testKoopaInterpreterPointwiseCyclicExtraction()
+{
+    ValidationProgramBuilder builder;
+    builder.program[builder.functionRef.ref()].params.clear();
+    builder.program[builder.functionRef.ref()].returnType
+        = koopa_ir::I32Type { };
+    builder.addPolyConstruct(
+        "%p", { integer(0), integer(0), integer(0), integer(0), integer(1) });
+    builder.addSetAttr("%p_l", koopa_ir::PolyAttr::l, symbol("%p"), integer(4));
+    builder.addSetAttr(
+        "%p_r", koopa_ir::PolyAttr::r, symbol("%p_l"), integer(5));
+    builder.addNtt("%pv1", symbol("%p_r"), integer(8));
+    builder.addNtt("%pv2", symbol("%p_r"), integer(8));
+    builder.addPointwise("%cyclic", builder.polyMulRoot(), 1, integer(8),
+        integer(4), integer(9));
+    builder.addGetCoeff("%c8", symbol("%cyclic"), integer(8));
+    builder.addConversion(
+        "%i8", koopa_ir::ConversionOp::mint2int, symbol("%c8"));
+    builder.setReturn(symbol("%i8"));
+    koopa_ir::validate(builder.program);
+
+    std::istringstream input;
+    std::ostringstream output;
+    const auto result = koopa_interpreter::execute(
+        builder.program, input, output, std::stop_token { });
+    require(result.status == koopa_interpreter::ExecuteStatus::normal,
+        std::string("cyclic pointwise execution failed: ") + result.message);
+    require(result.returnValue == 1,
+        "cyclic pointwise should extract wrapped coefficient into degree 8");
 }
 
 void testKoopaInterpreterPolyAttrActiveInterval()
@@ -504,33 +643,39 @@ void testRejectsBadCombineScaleType()
 void testRejectsPointwiseAddTypeMismatch()
 {
     requireInvalid("pointwise add type mismatch",
-        "pointwise add/sub/mul expect poly operands",
+        "pointwise add/sub/mul expect point-value operands",
         [](ValidationProgramBuilder& builder) -> void {
             builder.addPointwise("%bad",
                 builder.binary(koopa_ir::PvBinaryOp::add,
-                    builder.leaf(symbol("%p1")), builder.leaf(symbol("%m1"))));
+                    builder.leaf(symbol("%pv1")),
+                    builder.leaf(
+                        symbol("%m1"), koopa_ir::PointwiseLeafKind::mint)));
         });
 }
 
 void testRejectsPointwiseMulTypeMismatch()
 {
     requireInvalid("pointwise mul type mismatch",
-        "pointwise add/sub/mul expect poly operands",
+        "pointwise add/sub/mul expect point-value operands",
         [](ValidationProgramBuilder& builder) -> void {
             builder.addPointwise("%bad",
                 builder.binary(koopa_ir::PvBinaryOp::mul,
-                    builder.leaf(symbol("%p1")), builder.leaf(symbol("%m1"))));
+                    builder.leaf(symbol("%pv1")),
+                    builder.leaf(
+                        symbol("%m1"), koopa_ir::PointwiseLeafKind::mint)));
         });
 }
 
 void testRejectsPointwiseTimesTypeMismatch()
 {
     requireInvalid("pointwise times type mismatch",
-        "pointwise times expects poly and mint operands",
+        "pointwise times expects point values and mint operands",
         [](ValidationProgramBuilder& builder) -> void {
             builder.addPointwise("%bad",
                 builder.binary(koopa_ir::PvBinaryOp::times,
-                    builder.leaf(symbol("%m1")), builder.leaf(symbol("%p1"))));
+                    builder.leaf(
+                        symbol("%m1"), koopa_ir::PointwiseLeafKind::mint),
+                    builder.leaf(symbol("%pv1"))));
         });
 }
 
@@ -542,7 +687,8 @@ void testRejectsTrivialCombineOfPointwiseResults()
             builder.addPointwise("%pw1", builder.polyMulRoot());
             builder.addPointwise("%pw2",
                 builder.binary(koopa_ir::PvBinaryOp::mul,
-                    builder.leaf(symbol("%p2")), builder.leaf(symbol("%p1"))));
+                    builder.leaf(symbol("%pv2")),
+                    builder.leaf(symbol("%pv1"))));
             builder.addCombineTerms("%bad",
                 {
                     koopa_ir::CombineTerm {
@@ -660,6 +806,10 @@ int main()
     testAcceptsCopyPseudoInstruction();
     testAcceptsPolyAttrPseudoInstructions();
     testRejectsBadPolyAttrTypes();
+    testRejectsBadNttAndPointwiseTypes();
+    testKoopaInterpreterNextPow2();
+    testKoopaInterpreterRejectsBadNttLength();
+    testKoopaInterpreterPointwiseCyclicExtraction();
     testKoopaInterpreterPolyAttrActiveInterval();
     testKoopaInterpreterRejectsInvalidPolyActiveInterval();
     testPolyLocalsLowerToSsaValues();

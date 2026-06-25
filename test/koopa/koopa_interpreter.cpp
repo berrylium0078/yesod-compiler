@@ -68,6 +68,7 @@ namespace {
             i32,
             mint,
             poly,
+            pointValue,
             array,
             pointer,
             unsupported,
@@ -92,8 +93,13 @@ namespace {
         int32_t activeR = 0;
     };
 
+    struct PointValues {
+        std::vector<Mint> values;
+    };
+
     struct RuntimeValue {
-        std::variant<int32_t, Address, Mint, RuntimePoly> value = int32_t { 0 };
+        std::variant<int32_t, Address, Mint, RuntimePoly, PointValues> value
+            = int32_t { 0 };
     };
 
     struct MemoryObject {
@@ -189,6 +195,15 @@ namespace {
         return Poly(std::move(coefficients));
     }
 
+    [[nodiscard]] PointValues requirePointValues(const RuntimeValue& value)
+    {
+        if (const auto* pointValues = std::get_if<PointValues>(&value.value)) {
+            return *pointValues;
+        }
+        throw ExecuteException(
+            ExecuteStatus::runtimeError, "expected point-value runtime value");
+    }
+
     [[nodiscard]] RuntimeValue makeInt(int32_t value)
     {
         return RuntimeValue { .value = value };
@@ -214,6 +229,11 @@ namespace {
     }
 
     [[nodiscard]] RuntimeValue makePoly(RuntimePoly value)
+    {
+        return RuntimeValue { .value = std::move(value) };
+    }
+
+    [[nodiscard]] RuntimeValue makePointValues(PointValues value)
     {
         return RuntimeValue { .value = std::move(value) };
     }
@@ -295,6 +315,7 @@ namespace {
             case TypeInfo::Kind::i32:
             case TypeInfo::Kind::mint:
             case TypeInfo::Kind::poly:
+            case TypeInfo::Kind::pointValue:
                 return 1;
             case TypeInfo::Kind::array:
                 return type->length * typeSize(type->element);
@@ -320,6 +341,8 @@ namespace {
                 return makeMint(Mint(0));
             case TypeInfo::Kind::poly:
                 return makePoly(Poly());
+            case TypeInfo::Kind::pointValue:
+                return makePointValues(PointValues { .values = { } });
             case TypeInfo::Kind::array:
                 return defaultCellValue(type->element);
             case TypeInfo::Kind::pointer:
@@ -836,6 +859,21 @@ namespace {
                     frame.types[name] = std::make_shared<TypeInfo>(
                         typeInfoForRuntimeValue(frame.values[name]));
                 },
+                [&](Ref<koopa_ir::NextPow2Expr> nextPow2Ref) -> void {
+                    const auto& expr = m_program[nextPow2Ref];
+                    frame.values[name] = makeInt(
+                        nextPow2(requireInt(evalValue(expr.value, frame))));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::i32 });
+                },
+                [&](Ref<koopa_ir::NttExpr> nttRef) -> void {
+                    const auto& expr = m_program[nttRef];
+                    frame.values[name] = makePointValues(executeNtt(
+                        requireRuntimePoly(evalValue(expr.value, frame)),
+                        requireInt(evalValue(expr.length, frame))));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::pointValue });
+                },
                 [&](Ref<koopa_ir::PointwiseExpr> pointwiseRef) -> void {
                     frame.values[name] = makePoly(
                         executePointwise(m_program[pointwiseRef], frame));
@@ -885,28 +923,123 @@ namespace {
                 });
         }
 
-        [[nodiscard]] RuntimeValue executePointwiseNode(
-            Ref<koopa_ir::PointwiseNode> nodeRef, Frame& frame)
+        [[nodiscard]] int32_t nextPow2(int32_t value) const
+        {
+            if (value <= 1) {
+                return 1;
+            }
+            int32_t result = 1;
+            while (result < value) {
+                if (result > std::numeric_limits<int32_t>::max() / 2) {
+                    throw ExecuteException(
+                        ExecuteStatus::runtimeError, "next_pow2 overflow");
+                }
+                result *= 2;
+            }
+            return result;
+        }
+
+        [[nodiscard]] Mint mintPow(Mint base, int64_t exponent) const
+        {
+            Mint result(1);
+            while (exponent > 0) {
+                if ((exponent & 1) != 0) {
+                    result *= base;
+                }
+                base *= base;
+                exponent >>= 1;
+            }
+            return result;
+        }
+
+        void checkNttLength(int32_t length) const
+        {
+            if (length < 0 || (length != 0 && (length & (length - 1)) != 0)) {
+                throw ExecuteException(ExecuteStatus::runtimeError,
+                    "ntt length must be a non-negative power of two");
+            }
+        }
+
+        [[nodiscard]] std::vector<Mint> transform(
+            const std::vector<Mint>& coefficients, bool inverse) const
+        {
+            const int32_t length = static_cast<int32_t>(coefficients.size());
+            if (length == 0) {
+                return { };
+            }
+            const Mint primitiveRoot(3);
+            const int64_t rootExponent = (Mint::MOD - 1) / length;
+            const Mint root = inverse
+                ? Mint(1) / mintPow(primitiveRoot, rootExponent)
+                : mintPow(primitiveRoot, rootExponent);
+            std::vector<Mint> result(static_cast<size_t>(length), Mint(0));
+            for (int32_t j = 0; j < length; ++j) {
+                Mint power(1);
+                const Mint step = mintPow(root, j);
+                for (int32_t k = 0; k < length; ++k) {
+                    result[static_cast<size_t>(j)]
+                        += coefficients[static_cast<size_t>(k)] * power;
+                    power *= step;
+                }
+            }
+            if (inverse) {
+                const Mint invLength = Mint(1) / Mint(length);
+                for (auto& value : result) {
+                    value *= invLength;
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] PointValues executeNtt(
+            const RuntimePoly& poly, int32_t length)
+        {
+            checkNttLength(length);
+            if (length == 0) {
+                return PointValues { .values = { } };
+            }
+            const Poly coefficients = requirePoly(makePoly(poly));
+            std::vector<Mint> folded(static_cast<size_t>(length), Mint(0));
+            for (int32_t index = 0; index < coefficients.length(); ++index) {
+                folded[static_cast<size_t>(index % length)]
+                    += coefficients.coeff(index);
+            }
+            return PointValues { .values = transform(folded, false) };
+        }
+
+        [[nodiscard]] Mint executePointwiseNodeAt(
+            Ref<koopa_ir::PointwiseNode> nodeRef, int32_t index, Frame& frame)
         {
             const auto& node = m_program[nodeRef];
             return MATCH(node.kind) WITH(
-                [&](const koopa_ir::PointwiseLeaf& leaf) -> RuntimeValue {
-                    return evalValue(leaf.value, frame);
+                [&](const koopa_ir::PointwiseLeaf& leaf) -> Mint {
+                    if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
+                        return requireMint(evalValue(leaf.value, frame));
+                    }
+                    const auto pointValues
+                        = requirePointValues(evalValue(leaf.value, frame));
+                    if (index < 0
+                        || index >= static_cast<int32_t>(
+                               pointValues.values.size())) {
+                        throw ExecuteException(ExecuteStatus::runtimeError,
+                            "pointwise index out of range");
+                    }
+                    return pointValues.values[static_cast<size_t>(index)];
                 },
-                [&](const koopa_ir::PointwiseBinary& binary) -> RuntimeValue {
-                    const RuntimeValue lhs
-                        = executePointwiseNode(binary.lhs, frame);
-                    const RuntimeValue rhs
-                        = executePointwiseNode(binary.rhs, frame);
+                [&](const koopa_ir::PointwiseBinary& binary) -> Mint {
+                    const Mint lhs
+                        = executePointwiseNodeAt(binary.lhs, index, frame);
+                    const Mint rhs
+                        = executePointwiseNodeAt(binary.rhs, index, frame);
                     switch (binary.op) {
                     case koopa_ir::PvBinaryOp::add:
-                        return makePoly(requirePoly(lhs) + requirePoly(rhs));
+                        return lhs + rhs;
                     case koopa_ir::PvBinaryOp::sub:
-                        return makePoly(requirePoly(lhs) - requirePoly(rhs));
+                        return lhs - rhs;
                     case koopa_ir::PvBinaryOp::mul:
-                        return makePoly(requirePoly(lhs) * requirePoly(rhs));
+                        return lhs * rhs;
                     case koopa_ir::PvBinaryOp::times:
-                        return makePoly(requirePoly(lhs) * requireMint(rhs));
+                        return lhs * rhs;
                     }
                     throw ExecuteException(ExecuteStatus::runtimeError,
                         "unknown pointwise operation");
@@ -916,7 +1049,29 @@ namespace {
         [[nodiscard]] Poly executePointwise(
             const koopa_ir::PointwiseExpr& expr, Frame& frame)
         {
-            return requirePoly(executePointwiseNode(expr.root, frame));
+            const int32_t length = requireInt(evalValue(expr.length, frame));
+            const int32_t activeL = requireInt(evalValue(expr.activeL, frame));
+            const int32_t activeR = requireInt(evalValue(expr.activeR, frame));
+            checkNttLength(length);
+            if (activeL >= activeR) {
+                return Poly();
+            }
+            if (length == 0 || activeL < 0) {
+                throw ExecuteException(ExecuteStatus::runtimeError,
+                    "invalid pointwise active interval");
+            }
+            std::vector<Mint> pointValues(static_cast<size_t>(length), Mint(0));
+            for (int32_t index = 0; index < length; ++index) {
+                pointValues[static_cast<size_t>(index)]
+                    = executePointwiseNodeAt(expr.root, index, frame);
+            }
+            const auto coefficients = transform(pointValues, true);
+            std::vector<Mint> result(static_cast<size_t>(activeR), Mint(0));
+            for (int32_t index = activeL; index < activeR; ++index) {
+                result[static_cast<size_t>(index)]
+                    = coefficients[static_cast<size_t>(index % length)];
+            }
+            return Poly(std::move(result));
         }
 
         [[nodiscard]] Poly executeCombine(
@@ -957,6 +1112,9 @@ namespace {
                 },
                 [](const RuntimePoly&) -> TypeInfo {
                     return TypeInfo { .kind = TypeInfo::Kind::poly };
+                },
+                [](const PointValues&) -> TypeInfo {
+                    return TypeInfo { .kind = TypeInfo::Kind::pointValue };
                 });
         }
 

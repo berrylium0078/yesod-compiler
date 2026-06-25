@@ -154,6 +154,9 @@ namespace detail {
             addSymbolDef(name,
                 program.alloc<koopa_ir::PointwiseExpr>(koopa_ir::PointwiseExpr {
                     .sourcePos = koopa_ir::SourcePos { 1 },
+                    .length = integer(4),
+                    .activeL = integer(0),
+                    .activeR = integer(4),
                     .root = root,
                     .annotations = { },
                 }));

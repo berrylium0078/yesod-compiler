@@ -659,12 +659,15 @@ namespace {
         }
 
         [[nodiscard]] Ref<koopa_ir::PointwiseNode> makePointwiseLeaf(
-            koopa_ir::Value value)
+            koopa_ir::Value value,
+            koopa_ir::PointwiseLeafKind kind
+            = koopa_ir::PointwiseLeafKind::poly)
         {
             return m_program->alloc<koopa_ir::PointwiseNode>(
                 koopa_ir::PointwiseNode {
                     .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .kind = koopa_ir::PointwiseLeaf {
+                        .kind = kind,
                         .value = std::move(value),
                     },
                 });
@@ -692,10 +695,16 @@ namespace {
         {
             const auto activeInterval = emitPointwiseInterval(root);
             const auto nonzeroInterval = activeInterval;
+            const auto length
+                = emitPointwiseLength(nonzeroInterval, activeInterval);
+            const auto loweredRoot = emitNttPointwiseNode(root, length);
             auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
                 koopa_ir::PointwiseExpr {
                     .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
-                    .root = root,
+                    .length = length,
+                    .activeL = activeInterval.l,
+                    .activeR = activeInterval.r,
+                    .root = loweredRoot,
                     .annotations = { },
                 });
             return attachPolyIntervals(
@@ -750,6 +759,30 @@ namespace {
                     .condition = std::move(condition),
                     .trueValue = std::move(trueValue),
                     .falseValue = std::move(falseValue),
+                    .annotations = { },
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitNextPow2(koopa_ir::Value value)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::NextPow2Expr>(
+                koopa_ir::NextPow2Expr {
+                    .sourcePos = { },
+                    .value = std::move(value),
+                    .annotations = { },
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitNtt(
+            koopa_ir::Value value, koopa_ir::Value length)
+        {
+            auto rhsRef
+                = m_program->alloc<koopa_ir::NttExpr>(koopa_ir::NttExpr {
+                    .sourcePos = { },
+                    .value = std::move(value),
+                    .length = std::move(length),
                     .annotations = { },
                 });
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
@@ -828,6 +861,19 @@ namespace {
                 std::move(eitherEmpty), emptyInterval(), product);
         }
 
+        [[nodiscard]] koopa_ir::Value emitPointwiseLength(
+            const PolyInterval& nonzeroInterval,
+            const PolyInterval& activeInterval)
+        {
+            auto activeEmpty = emitIntervalEmpty(activeInterval);
+            auto leftSlack = emitIntSub(nonzeroInterval.r, activeInterval.l);
+            auto rightSlack = emitIntSub(activeInterval.r, nonzeroInterval.l);
+            auto rawLength
+                = emitIntMax(std::move(leftSlack), std::move(rightSlack));
+            return emitSelect(std::move(activeEmpty), intLiteral(0),
+                emitNextPow2(std::move(rawLength)));
+        }
+
         [[nodiscard]] PolyInterval termInterval(
             const koopa_ir::CombineTerm& term)
         {
@@ -879,6 +925,28 @@ namespace {
                         return lhs;
                     }
                     return emptyInterval();
+                });
+        }
+
+        [[nodiscard]] Ref<koopa_ir::PointwiseNode> emitNttPointwiseNode(
+            Ref<koopa_ir::PointwiseNode> nodeRef, const koopa_ir::Value& length)
+        {
+            const auto& node = (*m_program)[nodeRef];
+            return MATCH(node.kind) WITH(
+                [&](const koopa_ir::PointwiseLeaf& leaf)
+                    -> Ref<koopa_ir::PointwiseNode> {
+                    if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
+                        return makePointwiseLeaf(
+                            leaf.value, koopa_ir::PointwiseLeafKind::mint);
+                    }
+                    return makePointwiseLeaf(emitNtt(leaf.value, length),
+                        koopa_ir::PointwiseLeafKind::pointValue);
+                },
+                [&](const koopa_ir::PointwiseBinary& binary)
+                    -> Ref<koopa_ir::PointwiseNode> {
+                    return makePointwiseBinary(binary.op,
+                        emitNttPointwiseNode(binary.lhs, length),
+                        emitNttPointwiseNode(binary.rhs, length));
                 });
         }
 
@@ -1444,13 +1512,15 @@ namespace {
                             return makePointwiseBinary(
                                 koopa_ir::PvBinaryOp::times,
                                 generatePointwiseNode(expAlt.lhs),
-                                makePointwiseLeaf(mintValueForExp(expAlt.rhs)));
+                                makePointwiseLeaf(mintValueForExp(expAlt.rhs),
+                                    koopa_ir::PointwiseLeafKind::mint));
                         }
                         if (rhsIsPoly) {
                             return makePointwiseBinary(
                                 koopa_ir::PvBinaryOp::times,
                                 generatePointwiseNode(expAlt.rhs),
-                                makePointwiseLeaf(mintValueForExp(expAlt.lhs)));
+                                makePointwiseLeaf(mintValueForExp(expAlt.lhs),
+                                    koopa_ir::PointwiseLeafKind::mint));
                         }
                     }
                     return makePointwiseLeaf(generatePolyBaseValue(exp));

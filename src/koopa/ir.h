@@ -123,6 +123,8 @@ struct CopyExpr;
 struct GetAttrExpr;
 struct SetAttrExpr;
 struct SelectExpr;
+struct NextPow2Expr;
+struct NttExpr;
 struct PointwiseExpr;
 struct PointwiseNode;
 struct CombineExpr;
@@ -167,6 +169,12 @@ enum class PolyAttr {
     addr,
     l,
     r,
+};
+
+enum class PointwiseLeafKind {
+    poly,
+    pointValue,
+    mint,
 };
 
 enum class BinaryOp {
@@ -259,6 +267,7 @@ struct CopyExpr {
 };
 
 struct PointwiseLeaf {
+    PointwiseLeafKind kind = PointwiseLeafKind::poly;
     Value value;
 };
 
@@ -277,7 +286,23 @@ struct PointwiseNode {
 
 struct PointwiseExpr {
     SourcePos sourcePos;
+    Value length;
+    Value activeL;
+    Value activeR;
     Ref<PointwiseNode> root;
+    AnnotationList annotations;
+};
+
+struct NextPow2Expr {
+    SourcePos sourcePos;
+    Value value;
+    AnnotationList annotations;
+};
+
+struct NttExpr {
+    SourcePos sourcePos;
+    Value value;
+    Value length;
     AnnotationList annotations;
 };
 
@@ -338,11 +363,12 @@ struct SelectExpr {
     AnnotationList annotations;
 };
 
-using SymbolRhs = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>,
-    Ref<GetPointerExpr>, Ref<GetElementPointerExpr>, Ref<BinaryExpr>,
-    Ref<CallExpr>, Ref<CopyExpr>, Ref<GetAttrExpr>, Ref<SetAttrExpr>,
-    Ref<SelectExpr>, Ref<PointwiseExpr>, Ref<CombineExpr>, Ref<GetCoeffExpr>,
-    Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
+using SymbolRhs
+    = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>, Ref<GetPointerExpr>,
+        Ref<GetElementPointerExpr>, Ref<BinaryExpr>, Ref<CallExpr>,
+        Ref<CopyExpr>, Ref<GetAttrExpr>, Ref<SetAttrExpr>, Ref<SelectExpr>,
+        Ref<NextPow2Expr>, Ref<NttExpr>, Ref<PointwiseExpr>, Ref<CombineExpr>,
+        Ref<GetCoeffExpr>, Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
 
 struct SymbolDef {
     SourcePos sourcePos;
@@ -441,11 +467,11 @@ struct Program {
     using NodeArena = Arena<ArrayType, PointerType, FunctionType,
         AggregateInitializer, MemoryDeclaration, LoadExpr, GetPointerExpr,
         GetElementPointerExpr, BinaryExpr, CallExpr, CopyExpr, GetAttrExpr,
-        SetAttrExpr, SelectExpr, PointwiseNode, PointwiseExpr, CombineExpr,
-        GetCoeffExpr, PolyConstructExpr, ConversionExpr, SymbolDef, StoreStmt,
-        BranchTerminator, JumpTerminator, ReturnTerminator, BlockParameter,
-        BasicBlock, FunctionParameter, FunctionDecl, FunctionDef,
-        GlobalMemoryDef>;
+        SetAttrExpr, SelectExpr, NextPow2Expr, NttExpr, PointwiseNode,
+        PointwiseExpr, CombineExpr, GetCoeffExpr, PolyConstructExpr,
+        ConversionExpr, SymbolDef, StoreStmt, BranchTerminator, JumpTerminator,
+        ReturnTerminator, BlockParameter, BasicBlock, FunctionParameter,
+        FunctionDecl, FunctionDef, GlobalMemoryDef>;
 
     SourcePos sourcePos;
     AnnotationList annotations;
