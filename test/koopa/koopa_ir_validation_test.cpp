@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -9,12 +10,14 @@
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
 #include "koopa/ir.h"
+#include "koopa/koopa_interpreter.h"
 #include "koopa/koopa_simplify_assert.h"
 
 namespace {
 
 namespace koopa_ir = yesod::koopa::ir;
 namespace frontend = yesod::frontend;
+namespace koopa_interpreter = yesod::test_support::koopa::interpreter;
 
 [[noreturn]] void fail(const std::string& message)
 {
@@ -75,6 +78,11 @@ struct ValidationProgramBuilder {
         addParam("%p2", koopa_ir::PolyType { });
         addParam("%m1", koopa_ir::MintType { });
         addParam("%i1", koopa_ir::I32Type { });
+        addParam("%mp1",
+            program.alloc<koopa_ir::PointerType>(koopa_ir::PointerType {
+                .sourcePos = { },
+                .pointeeType = koopa_ir::MintType { },
+            }));
     }
 
     void addParam(const std::string& name, koopa_ir::Type type)
@@ -190,6 +198,44 @@ struct ValidationProgramBuilder {
             }));
     }
 
+    void addGetAttr(
+        const std::string& name, koopa_ir::PolyAttr attr, koopa_ir::Value value)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::GetAttrExpr>(koopa_ir::GetAttrExpr {
+                .sourcePos = { },
+                .attr = attr,
+                .value = std::move(value),
+                .annotations = { },
+            }));
+    }
+
+    void addSetAttr(const std::string& name, koopa_ir::PolyAttr attr,
+        koopa_ir::Value value, koopa_ir::Value attrValue)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::SetAttrExpr>(koopa_ir::SetAttrExpr {
+                .sourcePos = { },
+                .attr = attr,
+                .value = std::move(value),
+                .attrValue = std::move(attrValue),
+                .annotations = { },
+            }));
+    }
+
+    void addSelect(const std::string& name, koopa_ir::Value condition,
+        koopa_ir::Value trueValue, koopa_ir::Value falseValue)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::SelectExpr>(koopa_ir::SelectExpr {
+                .sourcePos = { },
+                .condition = std::move(condition),
+                .trueValue = std::move(trueValue),
+                .falseValue = std::move(falseValue),
+                .annotations = { },
+            }));
+    }
+
     void addBinary(const std::string& name, koopa_ir::BinaryOp op,
         koopa_ir::Value lhs, koopa_ir::Value rhs)
     {
@@ -201,6 +247,53 @@ struct ValidationProgramBuilder {
                 .rhs = std::move(rhs),
                 .annotations = { },
             }));
+    }
+
+    void addPolyConstruct(
+        const std::string& name, std::vector<koopa_ir::Value> elements)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::PolyConstructExpr>(
+                koopa_ir::PolyConstructExpr {
+                    .sourcePos = { },
+                    .elements = std::move(elements),
+                    .annotations = { },
+                }));
+    }
+
+    void addGetCoeff(
+        const std::string& name, koopa_ir::Value value, koopa_ir::Value index)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::GetCoeffExpr>(koopa_ir::GetCoeffExpr {
+                .sourcePos = { },
+                .value = std::move(value),
+                .index = std::move(index),
+                .annotations = { },
+            }));
+    }
+
+    void addConversion(const std::string& name, koopa_ir::ConversionOp op,
+        koopa_ir::Value value)
+    {
+        addSymbolDef(name,
+            program.alloc<koopa_ir::ConversionExpr>(koopa_ir::ConversionExpr {
+                .sourcePos = { },
+                .op = op,
+                .value = std::move(value),
+                .annotations = { },
+            }));
+    }
+
+    void setReturn(koopa_ir::Value value)
+    {
+        program[blockRef.ref()].terminator
+            = program.alloc<koopa_ir::ReturnTerminator>(
+                koopa_ir::ReturnTerminator {
+                    .sourcePos = { },
+                    .value = std::move(value),
+                    .annotations = { },
+                });
     }
 };
 
@@ -267,6 +360,118 @@ void testAcceptsCopyPseudoInstruction()
     ValidationProgramBuilder builder;
     builder.addCopy("%copy1", symbol("%i1"));
     koopa_ir::validate(builder.program);
+}
+
+void testAcceptsPolyAttrPseudoInstructions()
+{
+    ValidationProgramBuilder builder;
+    builder.addGetAttr("%base", koopa_ir::PolyAttr::base, symbol("%p1"));
+    builder.addGetAttr("%left", koopa_ir::PolyAttr::l, symbol("%p1"));
+    builder.addSetAttr(
+        "%with_base", koopa_ir::PolyAttr::base, symbol("%p1"), symbol("%base"));
+    builder.addSetAttr("%with_l", koopa_ir::PolyAttr::l, symbol("%with_base"),
+        symbol("%left"));
+    builder.addSelect("%selected_l", integer(1), symbol("%left"), integer(0));
+    builder.addSelect(
+        "%selected_ptr", integer(1), symbol("%base"), symbol("%mp1"));
+    koopa_ir::validate(builder.program);
+}
+
+void testRejectsBadPolyAttrTypes()
+{
+    requireInvalid("get_attr non-poly", "get_attr expects a poly operand",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addGetAttr("%bad", koopa_ir::PolyAttr::l, symbol("%i1"));
+        });
+    requireInvalid("set_attr non-poly", "set_attr expects a poly operand",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addSetAttr(
+                "%bad", koopa_ir::PolyAttr::l, symbol("%i1"), integer(0));
+        });
+    requireInvalid("set_attr l pointer", "set_attr l/r expects int",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addSetAttr(
+                "%bad", koopa_ir::PolyAttr::l, symbol("%p1"), symbol("%mp1"));
+        });
+    requireInvalid("set_attr base int",
+        "set_attr base/addr expects mint pointer",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addSetAttr(
+                "%bad", koopa_ir::PolyAttr::base, symbol("%p1"), integer(0));
+        });
+    requireInvalid("select mismatched",
+        "select operands must have matching types",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addSelect("%bad", integer(1), symbol("%i1"), symbol("%p1"));
+        });
+    requireInvalid("get_attr set_attr result",
+        "get_attr input must not be a set_attr result",
+        [](ValidationProgramBuilder& builder) -> void {
+            builder.addSetAttr(
+                "%set", koopa_ir::PolyAttr::l, symbol("%p1"), integer(0));
+            builder.addGetAttr("%bad", koopa_ir::PolyAttr::l, symbol("%set"));
+        });
+}
+
+void testKoopaInterpreterPolyAttrActiveInterval()
+{
+    ValidationProgramBuilder builder;
+    builder.program[builder.functionRef.ref()].params.clear();
+    builder.program[builder.functionRef.ref()].returnType
+        = koopa_ir::I32Type { };
+    builder.addPolyConstruct(
+        "%p", { integer(1), integer(2), integer(3), integer(4) });
+    builder.addSetAttr("%p_l", koopa_ir::PolyAttr::l, symbol("%p"), integer(1));
+    builder.addSetAttr(
+        "%p_r", koopa_ir::PolyAttr::r, symbol("%p_l"), integer(3));
+    builder.addGetCoeff("%c0", symbol("%p_r"), integer(0));
+    builder.addGetCoeff("%c1", symbol("%p_r"), integer(1));
+    builder.addGetCoeff("%c3", symbol("%p_r"), integer(3));
+    builder.addConversion(
+        "%i0", koopa_ir::ConversionOp::mint2int, symbol("%c0"));
+    builder.addConversion(
+        "%i1", koopa_ir::ConversionOp::mint2int, symbol("%c1"));
+    builder.addConversion(
+        "%i3", koopa_ir::ConversionOp::mint2int, symbol("%c3"));
+    builder.addBinary(
+        "%sum01", koopa_ir::BinaryOp::add, symbol("%i0"), symbol("%i1"));
+    builder.addBinary(
+        "%sum", koopa_ir::BinaryOp::add, symbol("%sum01"), symbol("%i3"));
+    builder.setReturn(symbol("%sum"));
+    koopa_ir::validate(builder.program);
+
+    std::istringstream input;
+    std::ostringstream output;
+    const auto result = koopa_interpreter::execute(
+        builder.program, input, output, std::stop_token { });
+    require(result.status == koopa_interpreter::ExecuteStatus::normal,
+        std::string("active interval execution failed: ") + result.message);
+    require(result.returnValue == 2,
+        "active interval should zero coefficients outside [l, r)");
+}
+
+void testKoopaInterpreterRejectsInvalidPolyActiveInterval()
+{
+    ValidationProgramBuilder builder;
+    builder.program[builder.functionRef.ref()].params.clear();
+    builder.program[builder.functionRef.ref()].returnType
+        = koopa_ir::I32Type { };
+    builder.addPolyConstruct("%p", { integer(1), integer(2) });
+    builder.addSetAttr(
+        "%p_l", koopa_ir::PolyAttr::l, symbol("%p"), integer(-1));
+    builder.addSetAttr(
+        "%p_r", koopa_ir::PolyAttr::r, symbol("%p_l"), integer(1));
+    builder.addGetCoeff("%c", symbol("%p_r"), integer(0));
+    builder.addConversion("%i", koopa_ir::ConversionOp::mint2int, symbol("%c"));
+    builder.setReturn(symbol("%i"));
+    koopa_ir::validate(builder.program);
+
+    std::istringstream input;
+    std::ostringstream output;
+    const auto result = koopa_interpreter::execute(
+        builder.program, input, output, std::stop_token { });
+    require(result.status == koopa_interpreter::ExecuteStatus::runtimeError,
+        "invalid active interval should be rejected at runtime");
 }
 
 void testRejectsPlainPolyBinary()
@@ -453,6 +658,10 @@ int main()
     testRejectsPointwiseTimesTypeMismatch();
     testRejectsTrivialCombineOfPointwiseResults();
     testAcceptsCopyPseudoInstruction();
+    testAcceptsPolyAttrPseudoInstructions();
+    testRejectsBadPolyAttrTypes();
+    testKoopaInterpreterPolyAttrActiveInterval();
+    testKoopaInterpreterRejectsInvalidPolyActiveInterval();
     testPolyLocalsLowerToSsaValues();
     testScalarParamArrayInitializerReadsSsaValue();
     return 0;

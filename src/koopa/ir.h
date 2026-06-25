@@ -120,6 +120,9 @@ struct GetElementPointerExpr;
 struct BinaryExpr;
 struct CallExpr;
 struct CopyExpr;
+struct GetAttrExpr;
+struct SetAttrExpr;
+struct SelectExpr;
 struct PointwiseExpr;
 struct PointwiseNode;
 struct CombineExpr;
@@ -157,6 +160,13 @@ enum class PvBinaryOp {
 enum class ConversionOp {
     int2mint,
     mint2int,
+};
+
+enum class PolyAttr {
+    base,
+    addr,
+    l,
+    r,
 };
 
 enum class BinaryOp {
@@ -305,10 +315,34 @@ struct ConversionExpr {
     AnnotationList annotations;
 };
 
+struct GetAttrExpr {
+    SourcePos sourcePos;
+    PolyAttr attr = PolyAttr::l;
+    Value value;
+    AnnotationList annotations;
+};
+
+struct SetAttrExpr {
+    SourcePos sourcePos;
+    PolyAttr attr = PolyAttr::l;
+    Value value;
+    Value attrValue;
+    AnnotationList annotations;
+};
+
+struct SelectExpr {
+    SourcePos sourcePos;
+    Value condition;
+    Value trueValue;
+    Value falseValue;
+    AnnotationList annotations;
+};
+
 using SymbolRhs = std::variant<Ref<MemoryDeclaration>, Ref<LoadExpr>,
     Ref<GetPointerExpr>, Ref<GetElementPointerExpr>, Ref<BinaryExpr>,
-    Ref<CallExpr>, Ref<CopyExpr>, Ref<PointwiseExpr>, Ref<CombineExpr>,
-    Ref<GetCoeffExpr>, Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
+    Ref<CallExpr>, Ref<CopyExpr>, Ref<GetAttrExpr>, Ref<SetAttrExpr>,
+    Ref<SelectExpr>, Ref<PointwiseExpr>, Ref<CombineExpr>, Ref<GetCoeffExpr>,
+    Ref<PolyConstructExpr>, Ref<ConversionExpr>>;
 
 struct SymbolDef {
     SourcePos sourcePos;
@@ -406,11 +440,12 @@ using TopLevelItem
 struct Program {
     using NodeArena = Arena<ArrayType, PointerType, FunctionType,
         AggregateInitializer, MemoryDeclaration, LoadExpr, GetPointerExpr,
-        GetElementPointerExpr, BinaryExpr, CallExpr, CopyExpr, PointwiseNode,
-        PointwiseExpr, CombineExpr, GetCoeffExpr, PolyConstructExpr,
-        ConversionExpr, SymbolDef, StoreStmt, BranchTerminator, JumpTerminator,
-        ReturnTerminator, BlockParameter, BasicBlock, FunctionParameter,
-        FunctionDecl, FunctionDef, GlobalMemoryDef>;
+        GetElementPointerExpr, BinaryExpr, CallExpr, CopyExpr, GetAttrExpr,
+        SetAttrExpr, SelectExpr, PointwiseNode, PointwiseExpr, CombineExpr,
+        GetCoeffExpr, PolyConstructExpr, ConversionExpr, SymbolDef, StoreStmt,
+        BranchTerminator, JumpTerminator, ReturnTerminator, BlockParameter,
+        BasicBlock, FunctionParameter, FunctionDecl, FunctionDef,
+        GlobalMemoryDef>;
 
     SourcePos sourcePos;
     AnnotationList annotations;
@@ -440,6 +475,7 @@ private:
 std::string_view toString(BinaryOp op);
 std::string_view toString(PvBinaryOp op);
 std::string_view toString(ConversionOp op);
+std::string_view toString(PolyAttr attr);
 bool hasReturnType(const FunctionType& type);
 bool hasReturnValue(const ReturnTerminator& terminator);
 bool usesSsaExtension(const BranchTerminator& terminator);

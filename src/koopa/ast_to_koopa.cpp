@@ -690,25 +690,223 @@ namespace {
         [[nodiscard]] koopa_ir::Value emitPointwise(
             Ref<koopa_ir::PointwiseNode> root)
         {
+            const auto activeInterval = emitPointwiseInterval(root);
+            const auto nonzeroInterval = activeInterval;
             auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
                 koopa_ir::PointwiseExpr {
                     .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .root = root,
                     .annotations = { },
                 });
+            return attachPolyIntervals(
+                emitNamedRhs(rhsRef, makeTempName(m_nextTempId)),
+                nonzeroInterval, activeInterval);
+        }
+
+        struct PolyInterval {
+            koopa_ir::Value l;
+            koopa_ir::Value r;
+        };
+
+        [[nodiscard]] koopa_ir::Value intLiteral(int32_t value) const
+        {
+            return koopa_ir::IntegerLiteral { .sourcePos = { },
+                .value = value };
+        }
+
+        [[nodiscard]] koopa_ir::Value emitGetAttr(
+            koopa_ir::PolyAttr attr, koopa_ir::Value value)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::GetAttrExpr>(
+                koopa_ir::GetAttrExpr {
+                    .sourcePos = { },
+                    .attr = attr,
+                    .value = std::move(value),
+                    .annotations = { },
+                });
             return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitSetAttr(koopa_ir::PolyAttr attr,
+            koopa_ir::Value value, koopa_ir::Value attrValue)
+        {
+            auto rhsRef = m_program->alloc<koopa_ir::SetAttrExpr>(
+                koopa_ir::SetAttrExpr {
+                    .sourcePos = { },
+                    .attr = attr,
+                    .value = std::move(value),
+                    .attrValue = std::move(attrValue),
+                    .annotations = { },
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitSelect(koopa_ir::Value condition,
+            koopa_ir::Value trueValue, koopa_ir::Value falseValue)
+        {
+            auto rhsRef
+                = m_program->alloc<koopa_ir::SelectExpr>(koopa_ir::SelectExpr {
+                    .sourcePos = { },
+                    .condition = std::move(condition),
+                    .trueValue = std::move(trueValue),
+                    .falseValue = std::move(falseValue),
+                    .annotations = { },
+                });
+            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitIntMin(
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            auto condition = emitBinary(koopa_ir::BinaryOp::lt, lhs, rhs);
+            return emitSelect(
+                std::move(condition), std::move(lhs), std::move(rhs));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitIntMax(
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            auto condition = emitBinary(koopa_ir::BinaryOp::gt, lhs, rhs);
+            return emitSelect(
+                std::move(condition), std::move(lhs), std::move(rhs));
+        }
+
+        [[nodiscard]] koopa_ir::Value emitIntervalEmpty(
+            const PolyInterval& interval)
+        {
+            return emitBinary(koopa_ir::BinaryOp::ge, interval.l, interval.r);
+        }
+
+        [[nodiscard]] PolyInterval emptyInterval() const
+        {
+            return PolyInterval { .l = intLiteral(0), .r = intLiteral(0) };
+        }
+
+        [[nodiscard]] PolyInterval selectInterval(koopa_ir::Value condition,
+            const PolyInterval& trueInterval, const PolyInterval& falseInterval)
+        {
+            auto l = emitSelect(condition, trueInterval.l, falseInterval.l);
+            auto r = emitSelect(
+                std::move(condition), trueInterval.r, falseInterval.r);
+            return PolyInterval { .l = std::move(l), .r = std::move(r) };
+        }
+
+        [[nodiscard]] PolyInterval polyActiveInterval(koopa_ir::Value value)
+        {
+            auto l = emitGetAttr(koopa_ir::PolyAttr::l, value);
+            auto r = emitGetAttr(koopa_ir::PolyAttr::r, std::move(value));
+            return PolyInterval { .l = std::move(l), .r = std::move(r) };
+        }
+
+        [[nodiscard]] PolyInterval addIntervals(
+            const PolyInterval& lhs, const PolyInterval& rhs)
+        {
+            const auto lhsEmpty = emitIntervalEmpty(lhs);
+            const auto rhsEmpty = emitIntervalEmpty(rhs);
+            auto merged = PolyInterval {
+                .l = emitIntMin(lhs.l, rhs.l),
+                .r = emitIntMax(lhs.r, rhs.r),
+            };
+            merged = selectInterval(rhsEmpty, lhs, merged);
+            return selectInterval(lhsEmpty, rhs, merged);
+        }
+
+        [[nodiscard]] PolyInterval mulIntervals(
+            const PolyInterval& lhs, const PolyInterval& rhs)
+        {
+            const auto lhsEmpty = emitIntervalEmpty(lhs);
+            const auto rhsEmpty = emitIntervalEmpty(rhs);
+            auto eitherEmpty
+                = emitBinary(koopa_ir::BinaryOp::ne, lhsEmpty, intLiteral(0));
+            eitherEmpty = emitBinary(
+                koopa_ir::BinaryOp::bitOr, std::move(eitherEmpty), rhsEmpty);
+            auto product = PolyInterval {
+                .l = emitIntAdd(lhs.l, rhs.l),
+                .r = emitIntSub(emitIntAdd(lhs.r, rhs.r), intLiteral(1)),
+            };
+            return selectInterval(
+                std::move(eitherEmpty), emptyInterval(), product);
+        }
+
+        [[nodiscard]] PolyInterval termInterval(
+            const koopa_ir::CombineTerm& term)
+        {
+            auto base = polyActiveInterval(term.value);
+            const auto lower = emitIntMax(base.l, term.start);
+            auto upper = base.r;
+            if (term.end.has_value()) {
+                upper = emitIntMin(std::move(upper), *term.end);
+            }
+            auto sliced = PolyInterval {
+                .l = emitIntSub(lower, term.shift),
+                .r = emitIntSub(std::move(upper), term.shift),
+            };
+            return selectInterval(
+                emitIntervalEmpty(sliced), emptyInterval(), sliced);
+        }
+
+        [[nodiscard]] PolyInterval emitCombineInterval(
+            const std::vector<koopa_ir::CombineTerm>& terms)
+        {
+            auto result = emptyInterval();
+            for (const auto& term : terms) {
+                result = addIntervals(result, termInterval(term));
+            }
+            return result;
+        }
+
+        [[nodiscard]] PolyInterval emitPointwiseInterval(
+            Ref<koopa_ir::PointwiseNode> nodeRef)
+        {
+            const auto& node = (*m_program)[nodeRef];
+            return MATCH(node.kind) WITH(
+                [&](const koopa_ir::PointwiseLeaf& leaf) -> PolyInterval {
+                    return polyActiveInterval(leaf.value);
+                },
+                [&](const koopa_ir::PointwiseBinary& binary) -> PolyInterval {
+                    const auto lhs = emitPointwiseInterval(binary.lhs);
+                    if (binary.op == koopa_ir::PvBinaryOp::times) {
+                        return lhs;
+                    }
+                    const auto rhs = emitPointwiseInterval(binary.rhs);
+                    switch (binary.op) {
+                    case koopa_ir::PvBinaryOp::add:
+                    case koopa_ir::PvBinaryOp::sub:
+                        return addIntervals(lhs, rhs);
+                    case koopa_ir::PvBinaryOp::mul:
+                        return mulIntervals(lhs, rhs);
+                    case koopa_ir::PvBinaryOp::times:
+                        return lhs;
+                    }
+                    return emptyInterval();
+                });
+        }
+
+        [[nodiscard]] koopa_ir::Value attachPolyIntervals(koopa_ir::Value value,
+            const PolyInterval& nonzeroInterval,
+            const PolyInterval& activeInterval)
+        {
+            (void)nonzeroInterval;
+            value = emitSetAttr(
+                koopa_ir::PolyAttr::l, std::move(value), activeInterval.l);
+            return emitSetAttr(
+                koopa_ir::PolyAttr::r, std::move(value), activeInterval.r);
         }
 
         [[nodiscard]] koopa_ir::Value emitCombine(
             std::vector<koopa_ir::CombineTerm> terms)
         {
+            const auto activeInterval = emitCombineInterval(terms);
+            const auto nonzeroInterval = activeInterval;
             auto rhsRef = m_program->alloc<koopa_ir::CombineExpr>(
                 koopa_ir::CombineExpr {
                     .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
                     .terms = std::move(terms),
                     .annotations = { },
                 });
-            return emitNamedRhs(rhsRef, makeTempName(m_nextTempId));
+            return attachPolyIntervals(
+                emitNamedRhs(rhsRef, makeTempName(m_nextTempId)),
+                nonzeroInterval, activeInterval);
         }
 
         [[nodiscard]] koopa_ir::Value emitGetCoeff(

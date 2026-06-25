@@ -205,6 +205,25 @@ namespace {
                                 const auto& expr = program[rhsRef];
                                 output << serializeValue(expr.value);
                             } else if constexpr (std::same_as<Rhs,
+                                                     GetAttrExpr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "get_attr " << toString(expr.attr)
+                                       << ' ' << serializeValue(expr.value);
+                            } else if constexpr (std::same_as<Rhs,
+                                                     SetAttrExpr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "set_attr " << toString(expr.attr)
+                                       << ' ' << serializeValue(expr.value)
+                                       << ", "
+                                       << serializeValue(expr.attrValue);
+                            } else if constexpr (std::same_as<Rhs,
+                                                     SelectExpr>) {
+                                const auto& expr = program[rhsRef];
+                                output << "select "
+                                       << serializeValue(expr.condition) << ", "
+                                       << serializeValue(expr.trueValue) << ", "
+                                       << serializeValue(expr.falseValue);
+                            } else if constexpr (std::same_as<Rhs,
                                                      PointwiseExpr>) {
                                 const auto& expr = program[rhsRef];
                                 output << "pointwise "
@@ -503,6 +522,21 @@ std::string_view toString(ConversionOp op)
     throw std::runtime_error("unknown conversion operation");
 }
 
+std::string_view toString(PolyAttr attr)
+{
+    switch (attr) {
+    case PolyAttr::base:
+        return "base";
+    case PolyAttr::addr:
+        return "addr";
+    case PolyAttr::l:
+        return "l";
+    case PolyAttr::r:
+        return "r";
+    }
+    throw std::runtime_error("unknown poly attribute");
+}
+
 bool hasReturnType(const FunctionType& type)
 {
     return type.returnType.has_value();
@@ -629,6 +663,20 @@ namespace {
                 }
             },
             [&](Ref<CopyExpr> ref) { visitValue(program[ref].value, visit); },
+            [&](Ref<GetAttrExpr> ref) {
+                visitValue(program[ref].value, visit);
+            },
+            [&](Ref<SetAttrExpr> ref) {
+                auto& expr = program[ref];
+                visitValue(expr.value, visit);
+                visitValue(expr.attrValue, visit);
+            },
+            [&](Ref<SelectExpr> ref) {
+                auto& expr = program[ref];
+                visitValue(expr.condition, visit);
+                visitValue(expr.trueValue, visit);
+                visitValue(expr.falseValue, visit);
+            },
             [&](Ref<PointwiseExpr> ref) {
                 visitPointwiseNodeValues(program, program[ref].root, visit);
             },
@@ -677,6 +725,18 @@ namespace {
                 }
             },
             [&](Ref<CopyExpr> ref) { visit(program[ref].value); },
+            [&](Ref<GetAttrExpr> ref) { visit(program[ref].value); },
+            [&](Ref<SetAttrExpr> ref) {
+                const auto& expr = program[ref];
+                visit(expr.value);
+                visit(expr.attrValue);
+            },
+            [&](Ref<SelectExpr> ref) {
+                const auto& expr = program[ref];
+                visit(expr.condition);
+                visit(expr.trueValue);
+                visit(expr.falseValue);
+            },
             [&](Ref<PointwiseExpr> ref) {
                 visitPointwiseNodeValues(program, program[ref].root, visit);
             },
@@ -908,6 +968,26 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
                     recordValueSite(program[ref].value, useIndex,
                         UseSiteKind::value, nullptr, userDef);
                 },
+                [&](Ref<GetAttrExpr> ref) -> void {
+                    recordValueSite(program[ref].value, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<SetAttrExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.value, useIndex, UseSiteKind::value,
+                        nullptr, userDef);
+                    recordValueSite(expr.attrValue, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
+                [&](Ref<SelectExpr> ref) -> void {
+                    auto& expr = program[ref];
+                    recordValueSite(expr.condition, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                    recordValueSite(expr.trueValue, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                    recordValueSite(expr.falseValue, useIndex,
+                        UseSiteKind::value, nullptr, userDef);
+                },
                 [&](Ref<PointwiseExpr> ref) -> void {
                     visitPointwiseNodeValues(
                         program, program[ref].root, [&](Value& value) -> void {
@@ -1058,7 +1138,57 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
         return currentSpelling.has_value() && *currentSpelling == spelling;
     };
 
+    auto expandGetAttrsThroughSetAttrs = [&]() -> bool {
+        bool changed = false;
+        const auto defs = collectDefs();
+        for (size_t defIndex = firstStatementIndex;
+            defIndex < block.statements.size(); ++defIndex) {
+            const auto* defRef
+                = std::get_if<Ref<SymbolDef>>(&block.statements[defIndex]);
+            if (defRef == nullptr) {
+                continue;
+            }
+            auto& def = program[*defRef];
+            auto* getAttrRef = std::get_if<Ref<GetAttrExpr>>(&def.rhs);
+            if (getAttrRef == nullptr) {
+                continue;
+            }
+            auto& getAttr = program[*getAttrRef];
+            const auto* symbol = std::get_if<Symbol>(&getAttr.value);
+            if (symbol == nullptr) {
+                continue;
+            }
+            const auto setDefIt = defs.find(symbol->spelling);
+            if (setDefIt == defs.end() || setDefIt->second.index >= defIndex) {
+                continue;
+            }
+            const auto& setDef = program[setDefIt->second.def];
+            const auto* setAttrRef = std::get_if<Ref<SetAttrExpr>>(&setDef.rhs);
+            if (setAttrRef == nullptr) {
+                continue;
+            }
+            const auto& setAttr = program[*setAttrRef];
+            if (setAttr.attr == getAttr.attr) {
+                auto copyRef = program.alloc<CopyExpr>(CopyExpr {
+                    .sourcePos = getAttr.sourcePos,
+                    .value = setAttr.attrValue,
+                    .annotations = { },
+                });
+                def.rhs = copyRef;
+            } else {
+                getAttr.value = setAttr.value;
+            }
+            changed = true;
+        }
+        return changed;
+    };
+
     bool changed = true;
+    while (changed) {
+        changed = expandGetAttrsThroughSetAttrs();
+    }
+
+    changed = true;
     while (changed) {
         changed = false;
         auto defs = collectDefs();
@@ -1153,6 +1283,11 @@ void simplifyLocalValues(Program& program, BasicBlock& block,
 
             changed = changed || replaced;
         }
+    }
+
+    changed = true;
+    while (changed) {
+        changed = expandGetAttrsThroughSetAttrs();
     }
 
     if (!eliminateDeadValues) {
@@ -1565,6 +1700,7 @@ void validate(const Program& program)
     std::unordered_map<std::string, ValidationType> functionReturnTypes;
     std::unordered_set<std::string> combineSymbols;
     std::unordered_set<std::string> pointwiseSymbols;
+    std::unordered_set<std::string> setAttrSymbols;
     std::unordered_map<std::string, int32_t> fusionSourceBySymbol;
 
     auto recordTypedValue
@@ -1573,6 +1709,36 @@ void validate(const Program& program)
         if (const auto* pointerRef = std::get_if<Ref<PointerType>>(&type);
             pointerRef != nullptr) {
             pointeeTypes[symbol] = program[*pointerRef].pointeeType;
+        }
+    };
+
+    auto isMintType = [&](const Type& type) -> bool {
+        return std::holds_alternative<MintType>(type);
+    };
+
+    auto attrValueType = [](PolyAttr attr) -> ValidationType {
+        switch (attr) {
+        case PolyAttr::base:
+        case PolyAttr::addr:
+            return ValidationType::pointer;
+        case PolyAttr::l:
+        case PolyAttr::r:
+            return ValidationType::integer;
+        }
+        return ValidationType::unknown;
+    };
+
+    auto requireMintPointerValue
+        = [&](const Value& value, const char* message) -> void {
+        requireValueType(value, ValidationType::pointer, valueTypes, message,
+            sourceOffset(value));
+        const auto* symbol = std::get_if<Symbol>(&value);
+        if (symbol == nullptr) {
+            throw std::runtime_error(message);
+        }
+        const auto pointeeIt = pointeeTypes.find(symbol->spelling);
+        if (pointeeIt == pointeeTypes.end() || !isMintType(pointeeIt->second)) {
+            throw std::runtime_error(message);
         }
     };
 
@@ -1730,6 +1896,56 @@ void validate(const Program& program)
             [&](Ref<CopyExpr> ref) -> ValidationType {
                 const auto& expr = program[ref];
                 return validationTypeOfValue(expr.value, valueTypes);
+            },
+            [&](Ref<GetAttrExpr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                requireValueType(expr.value, ValidationType::poly, valueTypes,
+                    "get_attr expects a poly operand",
+                    sourceOffset(expr.value));
+                if (const auto* symbol = std::get_if<Symbol>(&expr.value);
+                    symbol != nullptr
+                    && setAttrSymbols.contains(symbol->spelling)) {
+                    throw std::runtime_error(
+                        "get_attr input must not be a set_attr result");
+                }
+                return attrValueType(expr.attr);
+            },
+            [&](Ref<SetAttrExpr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                requireValueType(expr.value, ValidationType::poly, valueTypes,
+                    "set_attr expects a poly operand",
+                    sourceOffset(expr.value));
+                if (expr.attr == PolyAttr::base
+                    || expr.attr == PolyAttr::addr) {
+                    requireMintPointerValue(expr.attrValue,
+                        "set_attr base/addr expects mint pointer");
+                } else {
+                    requireValueType(expr.attrValue, ValidationType::integer,
+                        valueTypes, "set_attr l/r expects int",
+                        sourceOffset(expr.attrValue));
+                }
+                return ValidationType::poly;
+            },
+            [&](Ref<SelectExpr> ref) -> ValidationType {
+                const auto& expr = program[ref];
+                requireValueType(expr.condition, ValidationType::integer,
+                    valueTypes, "select condition must be int",
+                    sourceOffset(expr.condition));
+                const auto trueType
+                    = validationTypeOfValue(expr.trueValue, valueTypes);
+                const auto falseType
+                    = validationTypeOfValue(expr.falseValue, valueTypes);
+                if (trueType != falseType) {
+                    throw std::runtime_error(
+                        "select operands must have matching types");
+                }
+                if (trueType == ValidationType::pointer) {
+                    requireMintPointerValue(expr.trueValue,
+                        "select pointer operand must be mint pointer");
+                    requireMintPointerValue(expr.falseValue,
+                        "select pointer operand must be mint pointer");
+                }
+                return trueType;
             },
             [&](Ref<PointwiseExpr> ref) -> ValidationType {
                 std::function<ValidationType(Ref<PointwiseNode>)>
@@ -1904,6 +2120,7 @@ void validate(const Program& program)
                     pointeeTypes = globalPointeeTypes;
                     combineSymbols = globalCombineSymbols;
                     pointwiseSymbols = globalPointwiseSymbols;
+                    setAttrSymbols.clear();
                     fusionSourceBySymbol = globalFusionSourceBySymbol;
                     for (const auto paramRef : function.params) {
                         const auto& param = program[paramRef];
@@ -2018,6 +2235,43 @@ void validate(const Program& program)
                                                     ? Type { I32Type { } }
                                                     : srcIt->second;
                                             }
+                                        } else if (const auto* getAttrRef
+                                            = std::get_if<Ref<GetAttrExpr>>(
+                                                &symbolDef.rhs)) {
+                                            const auto& expr
+                                                = program[*getAttrRef];
+                                            if (expr.attr == PolyAttr::base
+                                                || expr.attr
+                                                    == PolyAttr::addr) {
+                                                pointeeTypes[symbolDef.symbol
+                                                        .spelling]
+                                                    = MintType { };
+                                            }
+                                        } else if (const auto* selectRef
+                                            = std::get_if<Ref<SelectExpr>>(
+                                                &symbolDef.rhs)) {
+                                            const auto& expr
+                                                = program[*selectRef];
+                                            const auto* symbol
+                                                = std::get_if<Symbol>(
+                                                    &expr.trueValue);
+                                            if (symbol != nullptr) {
+                                                const auto pointeeIt
+                                                    = pointeeTypes.find(
+                                                        symbol->spelling);
+                                                if (pointeeIt
+                                                    != pointeeTypes.end()) {
+                                                    pointeeTypes[symbolDef
+                                                            .symbol.spelling]
+                                                        = pointeeIt->second;
+                                                }
+                                            }
+                                        }
+                                        if (std::holds_alternative<
+                                                Ref<SetAttrExpr>>(
+                                                symbolDef.rhs)) {
+                                            setAttrSymbols.insert(
+                                                symbolDef.symbol.spelling);
                                         }
                                     }
                                 },

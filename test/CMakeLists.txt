@@ -94,7 +94,11 @@ target_compile_definitions(koopa_extra_test
   PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-add_executable(koopa_ir_validation_test koopa/koopa_ir_validation_test.cpp)
+add_executable(koopa_ir_validation_test
+  koopa/koopa_ir_validation_test.cpp
+  koopa/koopa_interpreter.cpp
+  poly/poly_runtime.cpp
+)
 target_link_libraries(koopa_ir_validation_test core)
 add_test(NAME koopa_ir_validation_test COMMAND koopa_ir_validation_test)
 

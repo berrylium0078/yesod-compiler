@@ -84,8 +84,16 @@ namespace {
         std::shared_ptr<TypeInfo> pointeeType;
     };
 
+    struct RuntimePoly {
+        Poly coefficients;
+        std::optional<Address> base;
+        std::optional<Address> addr;
+        int32_t activeL = 0;
+        int32_t activeR = 0;
+    };
+
     struct RuntimeValue {
-        std::variant<int32_t, Address, Mint, Poly> value = int32_t { 0 };
+        std::variant<int32_t, Address, Mint, RuntimePoly> value = int32_t { 0 };
     };
 
     struct MemoryObject {
@@ -148,13 +156,37 @@ namespace {
             ExecuteStatus::runtimeError, "expected mint runtime value");
     }
 
-    [[nodiscard]] Poly requirePoly(const RuntimeValue& value)
+    [[nodiscard]] RuntimePoly requireRuntimePoly(const RuntimeValue& value)
     {
-        if (const auto* polyValue = std::get_if<Poly>(&value.value)) {
+        if (const auto* polyValue = std::get_if<RuntimePoly>(&value.value)) {
             return *polyValue;
         }
         throw ExecuteException(
             ExecuteStatus::runtimeError, "expected poly runtime value");
+    }
+
+    [[nodiscard]] Poly requirePoly(const RuntimeValue& value)
+    {
+        const auto runtimePoly = requireRuntimePoly(value);
+        const int32_t length = runtimePoly.coefficients.length();
+        const bool empty = runtimePoly.activeL >= runtimePoly.activeR;
+        if (!empty
+            && (runtimePoly.activeL < 0 || runtimePoly.activeR > length
+                || runtimePoly.activeL > runtimePoly.activeR)) {
+            throw ExecuteException(ExecuteStatus::runtimeError,
+                "poly active interval is not a subrange of [0, len)");
+        }
+        std::vector<Mint> coefficients;
+        coefficients.reserve(static_cast<size_t>(length));
+        for (int32_t index = 0; index < length; ++index) {
+            if (empty || index < runtimePoly.activeL
+                || index >= runtimePoly.activeR) {
+                coefficients.push_back(Mint(0));
+            } else {
+                coefficients.push_back(runtimePoly.coefficients.coeff(index));
+            }
+        }
+        return Poly(std::move(coefficients));
     }
 
     [[nodiscard]] RuntimeValue makeInt(int32_t value)
@@ -173,6 +205,15 @@ namespace {
     }
 
     [[nodiscard]] RuntimeValue makePoly(Poly value)
+    {
+        RuntimePoly poly {
+            .coefficients = std::move(value),
+        };
+        poly.activeR = poly.coefficients.length();
+        return RuntimeValue { .value = std::move(poly) };
+    }
+
+    [[nodiscard]] RuntimeValue makePoly(RuntimePoly value)
     {
         return RuntimeValue { .value = std::move(value) };
     }
@@ -399,6 +440,40 @@ namespace {
                 [&](const koopa_ir::UndefValue&) -> RuntimeValue {
                     return makeInt(0);
                 });
+        }
+
+        [[nodiscard]] Mint polyCoeff(
+            const RuntimePoly& poly, int32_t index) const
+        {
+            const int32_t length = poly.coefficients.length();
+            const bool empty = poly.activeL >= poly.activeR;
+            if (!empty
+                && (poly.activeL < 0 || poly.activeR > length
+                    || poly.activeL > poly.activeR)) {
+                throw ExecuteException(ExecuteStatus::runtimeError,
+                    "poly active interval is not a subrange of [0, len)");
+            }
+            if (empty || index < poly.activeL || index >= poly.activeR) {
+                return Mint(0);
+            }
+            return poly.coefficients.coeff(index);
+        }
+
+        [[nodiscard]] RuntimeValue evalPolyAttr(
+            const RuntimePoly& poly, koopa_ir::PolyAttr attr) const
+        {
+            switch (attr) {
+            case koopa_ir::PolyAttr::base:
+                return makeAddress(poly.base.value_or(Address { }));
+            case koopa_ir::PolyAttr::addr:
+                return makeAddress(poly.addr.value_or(Address { }));
+            case koopa_ir::PolyAttr::l:
+                return makeInt(poly.activeL);
+            case koopa_ir::PolyAttr::r:
+                return makeInt(poly.activeR);
+            }
+            throw ExecuteException(
+                ExecuteStatus::runtimeError, "unknown poly attribute");
         }
 
         [[nodiscard]] RuntimeValue evalStoreValue(
@@ -716,6 +791,51 @@ namespace {
                     frame.types[name] = std::make_shared<TypeInfo>(
                         typeInfoForRuntimeValue(frame.values[name]));
                 },
+                [&](Ref<koopa_ir::GetAttrExpr> getAttrRef) -> void {
+                    const auto& expr = m_program[getAttrRef];
+                    const RuntimePoly poly
+                        = requireRuntimePoly(evalValue(expr.value, frame));
+                    frame.values[name] = evalPolyAttr(poly, expr.attr);
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        typeInfoForRuntimeValue(frame.values[name]));
+                },
+                [&](Ref<koopa_ir::SetAttrExpr> setAttrRef) -> void {
+                    const auto& expr = m_program[setAttrRef];
+                    RuntimePoly poly
+                        = requireRuntimePoly(evalValue(expr.value, frame));
+                    const RuntimeValue attrValue
+                        = evalValue(expr.attrValue, frame);
+                    switch (expr.attr) {
+                    case koopa_ir::PolyAttr::base:
+                        poly.base = requireAddress(attrValue);
+                        break;
+                    case koopa_ir::PolyAttr::addr:
+                        poly.addr = requireAddress(attrValue);
+                        break;
+                    case koopa_ir::PolyAttr::l:
+                        poly.activeL = requireInt(attrValue);
+                        break;
+                    case koopa_ir::PolyAttr::r:
+                        poly.activeR = requireInt(attrValue);
+                        break;
+                    }
+                    frame.values[name] = makePoly(std::move(poly));
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        TypeInfo { .kind = TypeInfo::Kind::poly });
+                },
+                [&](Ref<koopa_ir::SelectExpr> selectRef) -> void {
+                    const auto& expr = m_program[selectRef];
+                    const int32_t condition
+                        = requireInt(evalValue(expr.condition, frame));
+                    const RuntimeValue trueValue
+                        = evalValue(expr.trueValue, frame);
+                    const RuntimeValue falseValue
+                        = evalValue(expr.falseValue, frame);
+                    frame.values[name]
+                        = condition != 0 ? trueValue : falseValue;
+                    frame.types[name] = std::make_shared<TypeInfo>(
+                        typeInfoForRuntimeValue(frame.values[name]));
+                },
                 [&](Ref<koopa_ir::PointwiseExpr> pointwiseRef) -> void {
                     frame.values[name] = makePoly(
                         executePointwise(m_program[pointwiseRef], frame));
@@ -730,9 +850,9 @@ namespace {
                 },
                 [&](Ref<koopa_ir::GetCoeffExpr> getCoeffRef) -> void {
                     const auto& expr = m_program[getCoeffRef];
-                    frame.values[name] = makeMint(
-                        requirePoly(evalValue(expr.value, frame))
-                            .coeff(requireInt(evalValue(expr.index, frame))));
+                    frame.values[name] = makeMint(polyCoeff(
+                        requireRuntimePoly(evalValue(expr.value, frame)),
+                        requireInt(evalValue(expr.index, frame))));
                     frame.types[name] = std::make_shared<TypeInfo>(
                         TypeInfo { .kind = TypeInfo::Kind::mint });
                 },
@@ -835,7 +955,7 @@ namespace {
                 [](const Mint&) -> TypeInfo {
                     return TypeInfo { .kind = TypeInfo::Kind::mint };
                 },
-                [](const Poly&) -> TypeInfo {
+                [](const RuntimePoly&) -> TypeInfo {
                     return TypeInfo { .kind = TypeInfo::Kind::poly };
                 });
         }
