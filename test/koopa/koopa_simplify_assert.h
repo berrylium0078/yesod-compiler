@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 
+#include "koopa/cse.h"
 #include "koopa/ir.h"
 
 namespace yesod::test_support::koopa {
@@ -77,6 +78,7 @@ namespace detail {
             addParam(function, "%p1", koopa_ir::PolyType { });
             addParam(function, "%p2", koopa_ir::PolyType { });
             addParam(function, "%m1", koopa_ir::MintType { });
+            addParam(function, "%i1", koopa_ir::I32Type { });
             return function;
         }
 
@@ -148,6 +150,38 @@ namespace detail {
                 }));
         }
 
+        void addBinary(const std::string& name, koopa_ir::BinaryOp op,
+            koopa_ir::Value lhs, koopa_ir::Value rhs)
+        {
+            addSymbolDef(name,
+                program.alloc<koopa_ir::BinaryExpr>(koopa_ir::BinaryExpr {
+                    .sourcePos = { },
+                    .op = op,
+                    .lhs = std::move(lhs),
+                    .rhs = std::move(rhs),
+                    .annotations = { },
+                }));
+        }
+
+        [[nodiscard]] yesod::Ref<koopa_ir::SymbolDef> makeBinaryDef(
+            const std::string& name, koopa_ir::BinaryOp op, koopa_ir::Value lhs,
+            koopa_ir::Value rhs)
+        {
+            return program.alloc<koopa_ir::SymbolDef>(koopa_ir::SymbolDef {
+                .sourcePos = { },
+                .symbol = symbol(name),
+                .rhs
+                = program.alloc<koopa_ir::BinaryExpr>(koopa_ir::BinaryExpr {
+                    .sourcePos = { },
+                    .op = op,
+                    .lhs = std::move(lhs),
+                    .rhs = std::move(rhs),
+                    .annotations = { },
+                }),
+                .annotations = { },
+            });
+        }
+
         void addPointwise(
             const std::string& name, yesod::Ref<koopa_ir::PointwiseNode> root)
         {
@@ -190,6 +224,31 @@ namespace detail {
                         .shift = std::move(shift),
                         .scale = std::move(scale),
                     } },
+                    .annotations = { },
+                }));
+        }
+
+        void addGetAttr(const std::string& name, koopa_ir::PolyAttr attr,
+            koopa_ir::Value value)
+        {
+            addSymbolDef(name,
+                program.alloc<koopa_ir::GetAttrExpr>(koopa_ir::GetAttrExpr {
+                    .sourcePos = { },
+                    .attr = attr,
+                    .value = std::move(value),
+                    .annotations = { },
+                }));
+        }
+
+        void addSetAttr(const std::string& name, koopa_ir::PolyAttr attr,
+            koopa_ir::Value value, koopa_ir::Value attrValue)
+        {
+            addSymbolDef(name,
+                program.alloc<koopa_ir::SetAttrExpr>(koopa_ir::SetAttrExpr {
+                    .sourcePos = { },
+                    .attr = attr,
+                    .value = std::move(value),
+                    .attrValue = std::move(attrValue),
                     .annotations = { },
                 }));
         }
@@ -579,6 +638,200 @@ namespace detail {
             "unreachable block should be removed");
     }
 
+    inline void assertCommonSubexpressionElimination()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addBinary(
+            "%first", koopa_ir::BinaryOp::add, symbol("%i1"), integer(2));
+        builder.addBinary(
+            "%second", koopa_ir::BinaryOp::add, integer(2), symbol("%i1"));
+        builder.addCallStatement("@use", { symbol("%second") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(builder.hasDef("%first"),
+            "the first common expression should remain as the representative");
+        requireSimplifyAssert(!builder.hasDef("%second"),
+            "the duplicate common expression should be removed");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(builder.program[callRef].args.size() == 1,
+            "call using the duplicate expression should keep one argument");
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(builder.program[callRef].args.front())
+                    .spelling
+                == "%first",
+            "uses of the duplicate expression should point at the "
+            "representative");
+    }
+
+    inline void assertCommonSubexpressionRequiresDominance()
+    {
+        SimplifyProgramBuilder builder;
+        auto leftRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%left"),
+                .params = { },
+                .statements = { builder.makeBinaryDef("%leftValue",
+                    koopa_ir::BinaryOp::add, symbol("%i1"), integer(3)) },
+                .terminator = builder.program.alloc<koopa_ir::JumpTerminator>(
+                    koopa_ir::JumpTerminator {
+                        .sourcePos = { },
+                        .target = symbol("%merge"),
+                        .args = { symbol("%leftValue") },
+                        .annotations = { },
+                    }),
+                .annotations = { },
+            });
+        auto rightRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%right"),
+                .params = { },
+                .statements = { builder.makeBinaryDef("%rightValue",
+                    koopa_ir::BinaryOp::add, symbol("%i1"), integer(3)) },
+                .terminator = builder.program.alloc<koopa_ir::JumpTerminator>(
+                    koopa_ir::JumpTerminator {
+                        .sourcePos = { },
+                        .target = symbol("%merge"),
+                        .args = { symbol("%rightValue") },
+                        .annotations = { },
+                    }),
+                .annotations = { },
+            });
+        auto mergeParamRef = builder.program.alloc<koopa_ir::BlockParameter>(
+            koopa_ir::BlockParameter {
+                .sourcePos = { },
+                .symbol = symbol("%merged"),
+                .type = koopa_ir::I32Type { },
+                .annotations = { },
+            });
+        auto mergeRef
+            = builder.program.alloc<koopa_ir::BasicBlock>(koopa_ir::BasicBlock {
+                .sourcePos = { },
+                .label = symbol("%merge"),
+                .params = { mergeParamRef },
+                .statements = { },
+                .terminator = builder.program.alloc<koopa_ir::ReturnTerminator>(
+                    koopa_ir::ReturnTerminator {
+                        .sourcePos = { },
+                        .value = symbol("%merged"),
+                        .annotations = { },
+                    }),
+                .annotations = { },
+            });
+        builder.program[builder.entryRef.ref()].terminator
+            = builder.program.alloc<koopa_ir::BranchTerminator>(
+                koopa_ir::BranchTerminator {
+                    .sourcePos = { },
+                    .condition = symbol("%i1"),
+                    .trueTarget = symbol("%left"),
+                    .trueArgs = { },
+                    .falseTarget = symbol("%right"),
+                    .falseArgs = { },
+                    .annotations = { },
+                });
+        auto& function = builder.program[builder.functionRef.ref()];
+        function.returnType = koopa_ir::I32Type { };
+        function.blocks.push_back(leftRef);
+        function.blocks.push_back(rightRef);
+        function.blocks.push_back(mergeRef);
+
+        koopa_ir::eliminateCommonSubexpressions(builder.program, function);
+
+        requireSimplifyAssert(builder.program[leftRef].statements.size() == 1,
+            "left branch expression should remain");
+        requireSimplifyAssert(builder.program[rightRef].statements.size() == 1,
+            "right branch expression must not be replaced by a non-dominating "
+            "definition");
+        const auto rightJumpRef
+            = std::get<yesod::Ref<koopa_ir::JumpTerminator>>(
+                builder.program[rightRef].terminator);
+        requireSimplifyAssert(std::get<koopa_ir::Symbol>(
+                                  builder.program[rightJumpRef].args.front())
+                                  .spelling
+                == "%rightValue",
+            "right branch should still pass its own value to merge");
+    }
+
+    inline void assertConstantFoldFeedsCopyPropagation()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addBinary(
+            "%ge", koopa_ir::BinaryOp::ge, integer(4), integer(3));
+        builder.addBinary(
+            "%use", koopa_ir::BinaryOp::add, symbol("%ge"), integer(0));
+        builder.addCallStatement("@use", { symbol("%use") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(!builder.hasDef("%ge"),
+            "constant folded ge should be propagated and removed");
+        requireSimplifyAssert(!builder.hasDef("%use"),
+            "expression simplified after propagation should also be removed");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(builder.program[callRef].args.size() == 1,
+            "call should keep the propagated argument");
+        requireSimplifyAssert(std::get<koopa_ir::IntegerLiteral>(
+                                  builder.program[callRef].args.front())
+                                  .value
+                == 1,
+            "ge constant folding should feed the later copy propagation");
+    }
+
+    inline void assertCopyRhsFeedsExpressionSimplification()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addCopy("%alias", symbol("%i1"));
+        builder.addBinary(
+            "%use", koopa_ir::BinaryOp::add, symbol("%alias"), integer(0));
+        builder.addCallStatement("@use", { symbol("%use") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(!builder.hasDef("%alias"),
+            "copy RHS should be propagated by the CSE pass");
+        requireSimplifyAssert(!builder.hasDef("%use"),
+            "expression exposed by copy propagation should be simplified");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(builder.program[callRef].args.front())
+                    .spelling
+                == "%i1",
+            "copy propagation should expose the original value");
+    }
+
+    inline void assertGetAttrRecursesThroughSetAttr()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addSetAttr(
+            "%with_l", koopa_ir::PolyAttr::l, symbol("%p1"), integer(4));
+        builder.addSetAttr(
+            "%with_r", koopa_ir::PolyAttr::r, symbol("%with_l"), integer(8));
+        builder.addGetAttr("%left", koopa_ir::PolyAttr::l, symbol("%with_r"));
+        builder.addCallStatement("@use", { symbol("%left") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(!builder.hasDef("%left"),
+            "get_attr should recurse through set_attr and expose the stored "
+            "attribute value");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(std::get<koopa_ir::IntegerLiteral>(
+                                  builder.program[callRef].args.front())
+                                  .value
+                == 4,
+            "get_attr l should resolve through set_attr r to set_attr l");
+    }
+
 } // namespace detail
 
 inline void assertPolySimplificationPassApplied()
@@ -590,6 +843,11 @@ inline void assertPolySimplificationPassApplied()
     detail::assertCopyForwardingToJumpBlockArgument();
     detail::assertDeadBlockParamElimination();
     detail::assertEmptyBlockForwardingAndPruning();
+    detail::assertCommonSubexpressionElimination();
+    detail::assertCommonSubexpressionRequiresDominance();
+    detail::assertConstantFoldFeedsCopyPropagation();
+    detail::assertCopyRhsFeedsExpressionSimplification();
+    detail::assertGetAttrRecursesThroughSetAttr();
 }
 
 } // namespace yesod::test_support::koopa

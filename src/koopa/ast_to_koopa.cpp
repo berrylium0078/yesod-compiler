@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "koopa/cse.h"
+
 namespace yesod::koopa {
 
 using namespace frontend;
@@ -2617,6 +2619,7 @@ namespace {
         pruneUnreachableBlocks(program, functionRef, entryBlockRef);
         koopa_ir::eliminateDeadValues(program, program[functionRef]);
         koopa_ir::eliminateEmptyBasicBlocks(program, program[functionRef]);
+        koopa_ir::eliminateCommonSubexpressions(program, program[functionRef]);
     }
 
     std::unique_ptr<koopa_ir::Program> generateIrProgram(const AST& ast,
