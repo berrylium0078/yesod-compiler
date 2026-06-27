@@ -289,9 +289,47 @@ namespace {
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<Ref<PolyConstructExpr>>
+    findPolyConstructDefinition(
+        const Program& program, const DefMap& defBySymbol, const Value& value)
+    {
+        const auto* symbol = std::get_if<Symbol>(&value);
+        if (symbol == nullptr) {
+            return std::nullopt;
+        }
+        const auto defIt = defBySymbol.find(symbol->spelling);
+        if (defIt == defBySymbol.end()) {
+            return std::nullopt;
+        }
+        if (const auto* polyConstructRef = std::get_if<Ref<PolyConstructExpr>>(
+                &program[defIt->second].rhs)) {
+            return *polyConstructRef;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<SymbolRhs> simplifyGetAttr(
         Program& program, const DefMap& defBySymbol, PolyAttr attr, Value value)
     {
+        if (attr == PolyAttr::l || attr == PolyAttr::r) {
+            const auto polyConstructRef
+                = findPolyConstructDefinition(program, defBySymbol, value);
+            if (polyConstructRef.has_value()) {
+                const auto result = attr == PolyAttr::l
+                    ? 0
+                    : static_cast<int32_t>(
+                          program[*polyConstructRef].elements.size());
+                return program.alloc<CopyExpr>(CopyExpr {
+                    .sourcePos = program[*polyConstructRef].sourcePos,
+                    .value = IntegerLiteral {
+                        .sourcePos = { },
+                        .value = result,
+                    },
+                    .annotations = { },
+                });
+            }
+        }
+
         std::unordered_set<std::string> visited;
         while (true) {
             const auto* symbol = std::get_if<Symbol>(&value);
@@ -314,6 +352,24 @@ namespace {
             }
 
             value = setAttr.value;
+            if (attr == PolyAttr::l || attr == PolyAttr::r) {
+                const auto polyConstructRef
+                    = findPolyConstructDefinition(program, defBySymbol, value);
+                if (polyConstructRef.has_value()) {
+                    const auto result = attr == PolyAttr::l
+                        ? 0
+                        : static_cast<int32_t>(
+                              program[*polyConstructRef].elements.size());
+                    return program.alloc<CopyExpr>(CopyExpr {
+                        .sourcePos = program[*polyConstructRef].sourcePos,
+                        .value = IntegerLiteral {
+                            .sourcePos = { },
+                            .value = result,
+                        },
+                        .annotations = { },
+                    });
+                }
+            }
             if (!findSetAttrDefinition(program, defBySymbol, value)
                     .has_value()) {
                 return program.alloc<GetAttrExpr>(GetAttrExpr {
@@ -402,6 +458,13 @@ namespace {
             },
             [&](Ref<SelectExpr> ref) -> std::optional<SymbolRhs> {
                 const auto& expr = program[ref];
+                if (valueKey(expr.trueValue) == valueKey(expr.falseValue)) {
+                    return program.alloc<CopyExpr>(CopyExpr {
+                        .sourcePos = expr.sourcePos,
+                        .value = expr.trueValue,
+                        .annotations = { },
+                    });
+                }
                 const auto condition = integerLiteralValue(expr.condition);
                 if (!condition.has_value()) {
                     return std::nullopt;

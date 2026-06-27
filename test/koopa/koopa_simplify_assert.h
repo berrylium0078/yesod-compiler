@@ -163,6 +163,19 @@ namespace detail {
                 }));
         }
 
+        void addSelect(const std::string& name, koopa_ir::Value condition,
+            koopa_ir::Value trueValue, koopa_ir::Value falseValue)
+        {
+            addSymbolDef(name,
+                program.alloc<koopa_ir::SelectExpr>(koopa_ir::SelectExpr {
+                    .sourcePos = { },
+                    .condition = std::move(condition),
+                    .trueValue = std::move(trueValue),
+                    .falseValue = std::move(falseValue),
+                    .annotations = { },
+                }));
+        }
+
         [[nodiscard]] yesod::Ref<koopa_ir::SymbolDef> makeBinaryDef(
             const std::string& name, koopa_ir::BinaryOp op, koopa_ir::Value lhs,
             koopa_ir::Value rhs)
@@ -251,6 +264,18 @@ namespace detail {
                     .attrValue = std::move(attrValue),
                     .annotations = { },
                 }));
+        }
+
+        void addPolyConstruct(
+            const std::string& name, std::vector<koopa_ir::Value> elements)
+        {
+            addSymbolDef(name,
+                program.alloc<koopa_ir::PolyConstructExpr>(
+                    koopa_ir::PolyConstructExpr {
+                        .sourcePos = { },
+                        .elements = std::move(elements),
+                        .annotations = { },
+                    }));
         }
 
         [[nodiscard]] bool hasDef(const std::string& name) const
@@ -832,6 +857,62 @@ namespace detail {
             "get_attr l should resolve through set_attr r to set_attr l");
     }
 
+    inline void assertGetAttrOfPolyConstructBounds()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addPolyConstruct(
+            "%poly", { integer(7), symbol("%m1"), integer(9) });
+        builder.addGetAttr("%left", koopa_ir::PolyAttr::l, symbol("%poly"));
+        builder.addGetAttr("%right", koopa_ir::PolyAttr::r, symbol("%poly"));
+        builder.addCallStatement("@use", { symbol("%left"), symbol("%right") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(!builder.hasDef("%left"),
+            "get_attr l of poly_construct should fold to zero");
+        requireSimplifyAssert(!builder.hasDef("%right"),
+            "get_attr r of poly_construct should fold to element count");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(builder.program[callRef].args.size() == 2,
+            "call should keep both folded attribute values");
+        requireSimplifyAssert(
+            std::get<koopa_ir::IntegerLiteral>(builder.program[callRef].args[0])
+                    .value
+                == 0,
+            "left bound should be zero");
+        requireSimplifyAssert(
+            std::get<koopa_ir::IntegerLiteral>(builder.program[callRef].args[1])
+                    .value
+                == 3,
+            "right bound should be the poly_construct element count");
+    }
+
+    inline void assertSelectSameBranchFeedsCopyPropagation()
+    {
+        SimplifyProgramBuilder builder;
+        builder.addSelect(
+            "%selected", symbol("%i1"), symbol("%m1"), symbol("%m1"));
+        builder.addCopy("%use", symbol("%selected"));
+        builder.addCallStatement("@use", { symbol("%use") });
+
+        koopa_ir::eliminateCommonSubexpressions(
+            builder.program, builder.program[builder.functionRef.ref()]);
+
+        requireSimplifyAssert(!builder.hasDef("%selected"),
+            "select with equal branches should be replaced by that branch");
+        requireSimplifyAssert(!builder.hasDef("%use"),
+            "copy exposed by select simplification should be propagated");
+        const auto callRef = std::get<yesod::Ref<koopa_ir::CallExpr>>(
+            builder.program[builder.entryRef.ref()].statements.back());
+        requireSimplifyAssert(
+            std::get<koopa_ir::Symbol>(builder.program[callRef].args.front())
+                    .spelling
+                == "%m1",
+            "uses of same-branch select should point at the common value");
+    }
+
 } // namespace detail
 
 inline void assertPolySimplificationPassApplied()
@@ -848,6 +929,8 @@ inline void assertPolySimplificationPassApplied()
     detail::assertConstantFoldFeedsCopyPropagation();
     detail::assertCopyRhsFeedsExpressionSimplification();
     detail::assertGetAttrRecursesThroughSetAttr();
+    detail::assertGetAttrOfPolyConstructBounds();
+    detail::assertSelectSameBranchFeedsCopyPropagation();
 }
 
 } // namespace yesod::test_support::koopa
