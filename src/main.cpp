@@ -275,7 +275,7 @@ bool buildMintRuntimeLlvmPrelude(std::string& prelude)
         return false;
     }
     if (!runCommand("clang -S -emit-llvm -O0 -target "
-                    "riscv32-unknown-linux-elf -march=rv32im -mabi=ilp32 "
+                    "x86_64-pc-linux-gnu "
             + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
         return false;
     }
