@@ -151,3 +151,10 @@ foreach(LLVM_LEVEL IN ITEMS lv1 lv3 lv4 lv5 lv6 lv7 lv8 lv9)
       --timeout-seconds 10
   )
 endforeach()
+
+add_test(
+  NAME compiler_llvm_poly_test
+  COMMAND compiler_llvm_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/testsuit-collection/poly"
+    --timeout-seconds 60
+)

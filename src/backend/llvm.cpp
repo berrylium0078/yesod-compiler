@@ -4,12 +4,15 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace yesod::backend {
@@ -17,6 +20,10 @@ namespace yesod::backend {
 namespace koopa_ir = yesod::koopa::ir;
 
 namespace {
+
+    constexpr std::string_view POLY_TYPE = "%struct.YesodPoly";
+    constexpr std::string_view PV_TYPE = "%struct.YesodPointValues";
+    constexpr int32_t INF_END = 2147483647;
 
     // ─── Name helpers ─────────────────────────────────────────────────────
 
@@ -42,8 +49,7 @@ namespace {
             [](const koopa_ir::I32Type&) -> std::string { return "i32"; },
             [](const koopa_ir::MintType&) -> std::string { return "i32"; },
             [](const koopa_ir::PolyType&) -> std::string {
-                throw std::runtime_error(
-                    "LLVM backend does not support poly yet");
+                return std::string(POLY_TYPE);
             },
             [&](const yesod::Ref<koopa_ir::ArrayType> arrayRef) -> std::string {
                 const auto& arr = program[arrayRef];
@@ -341,13 +347,55 @@ namespace {
         PointeeMap pointees;
         PointeeMap loadedPointees;
         ValueTypeMap valueTypes;
+        ValueTypeMap logicalTypes;
+        ValueTypeMap logicalPointees;
+        int32_t helperTempId = 0;
+
+        auto nextHelperName = [&](const std::string& stem) -> std::string {
+            return "%" + stem + "_" + std::to_string(helperTempId++);
+        };
+
+        auto valueTypeOf = [&](const koopa_ir::Value& value) -> std::string {
+            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+                const auto typeIt = valueTypes.find(symbol->spelling);
+                return typeIt == valueTypes.end() ? "i32" : typeIt->second;
+            }
+            return "i32";
+        };
+
+        auto logicalTypeOfIrType
+            = [&](const koopa_ir::Type& type) -> std::string {
+            if (std::holds_alternative<koopa_ir::MintType>(type)) {
+                return "mint";
+            }
+            if (std::holds_alternative<koopa_ir::PolyType>(type)) {
+                return "poly";
+            }
+            if (std::holds_alternative<koopa_ir::I32Type>(type)) {
+                return "int";
+            }
+            if (std::holds_alternative<yesod::Ref<koopa_ir::PointerType>>(
+                    type)) {
+                return "ptr";
+            }
+            return emitType(type, program);
+        };
+
+        auto logicalTypeOf = [&](const koopa_ir::Value& value) -> std::string {
+            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+                const auto typeIt = logicalTypes.find(symbol->spelling);
+                return typeIt == logicalTypes.end() ? "int" : typeIt->second;
+            }
+            return "int";
+        };
 
         auto recordPointer
             = [&](const std::string& sym, const koopa_ir::Type& type) {
-                  valueTypes[sym] = "ptr";
                   const std::string pt = pointeeTypeString(type, program);
                   if (!pt.empty()) {
+                      valueTypes[sym] = "ptr";
                       pointees[sym] = pt;
+                      logicalTypes[sym] = "ptr";
                   }
               };
 
@@ -363,6 +411,9 @@ namespace {
                         valueTypes[g.name.spelling] = "ptr";
                         pointees[g.name.spelling]
                             = emitType(g.allocType, program);
+                        logicalTypes[g.name.spelling] = "ptr";
+                        logicalPointees[g.name.spelling]
+                            = logicalTypeOfIrType(g.allocType);
                     }
                 },
                 item);
@@ -373,6 +424,8 @@ namespace {
             const auto& param = program[pref];
             const std::string ps = emitType(param.type, program);
             valueTypes[param.symbol.spelling] = ps;
+            logicalTypes[param.symbol.spelling]
+                = logicalTypeOfIrType(param.type);
             if (const auto* prefType
                 = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&param.type)) {
                 pointees[param.symbol.spelling]
@@ -388,6 +441,7 @@ namespace {
                 const auto& bp = program[ppref];
                 const std::string ps = emitType(bp.type, program);
                 valueTypes[bp.symbol.spelling] = ps;
+                logicalTypes[bp.symbol.spelling] = logicalTypeOfIrType(bp.type);
                 recordPointer(bp.symbol.spelling, bp.type);
             }
 
@@ -407,8 +461,11 @@ namespace {
                                     koopa_ir::MemoryDeclaration>& memRef) {
                                     const auto& mem = program[memRef];
                                     valueTypes[sname] = "ptr";
+                                    logicalTypes[sname] = "ptr";
                                     pointees[sname]
                                         = emitType(mem.allocType, program);
+                                    logicalPointees[sname]
+                                        = logicalTypeOfIrType(mem.allocType);
                                     const std::string loadedPointee
                                         = loadedPointerPointeeTypeString(
                                             mem.allocType, program);
@@ -424,6 +481,12 @@ namespace {
                                     valueTypes[sname] = (it != pointees.end())
                                         ? it->second
                                         : "i32";
+                                    const auto logicalIt = logicalPointees.find(
+                                        ld.source.spelling);
+                                    logicalTypes[sname]
+                                        = logicalIt == logicalPointees.end()
+                                        ? "int"
+                                        : logicalIt->second;
                                     if (valueTypes[sname] == "ptr") {
                                         const auto loadedPointeeIt
                                             = loadedPointees.find(
@@ -444,6 +507,7 @@ namespace {
                                         = (vtIt != valueTypes.end())
                                         ? vtIt->second
                                         : "ptr";
+                                    logicalTypes[sname] = "ptr";
                                     const auto ptIt
                                         = pointees.find(gp.source.spelling);
                                     if (ptIt != pointees.end()) {
@@ -455,6 +519,7 @@ namespace {
                                         gelemRef) {
                                     const auto& ge = program[gelemRef];
                                     valueTypes[sname] = "ptr";
+                                    logicalTypes[sname] = "ptr";
                                     const auto ptIt
                                         = pointees.find(ge.source.spelling);
                                     if (ptIt != pointees.end()) {
@@ -474,8 +539,35 @@ namespace {
                                         }
                                     }
                                 },
-                                [&](const yesod::Ref<koopa_ir::BinaryExpr>&) {
+                                [&](const yesod::Ref<koopa_ir::BinaryExpr>&
+                                        binRef) {
+                                    const auto& bin = program[binRef];
                                     valueTypes[sname] = "i32";
+                                    switch (bin.op) {
+                                    case koopa_ir::BinaryOp::eq:
+                                    case koopa_ir::BinaryOp::ne:
+                                    case koopa_ir::BinaryOp::gt:
+                                    case koopa_ir::BinaryOp::lt:
+                                    case koopa_ir::BinaryOp::ge:
+                                    case koopa_ir::BinaryOp::le:
+                                    case koopa_ir::BinaryOp::mod:
+                                    case koopa_ir::BinaryOp::bitAnd:
+                                    case koopa_ir::BinaryOp::bitOr:
+                                    case koopa_ir::BinaryOp::bitXor:
+                                    case koopa_ir::BinaryOp::shl:
+                                    case koopa_ir::BinaryOp::shr:
+                                    case koopa_ir::BinaryOp::sar:
+                                        logicalTypes[sname] = "int";
+                                        break;
+                                    default:
+                                        logicalTypes[sname]
+                                            = logicalTypeOf(bin.lhs) == "mint"
+                                                || logicalTypeOf(bin.rhs)
+                                                    == "mint"
+                                            ? "mint"
+                                            : "int";
+                                        break;
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::CallExpr>&
                                         callRef) {
@@ -486,29 +578,78 @@ namespace {
                                         && sigIt->second.retType != "void") {
                                         valueTypes[sname]
                                             = sigIt->second.retType;
+                                        logicalTypes[sname] = "int";
                                     } else {
                                         valueTypes[sname] = "i32";
+                                        logicalTypes[sname] = "int";
                                     }
                                 },
                                 [&](const yesod::Ref<koopa_ir::CopyExpr>&
                                         copyRef) {
                                     const auto& copy = program[copyRef];
-                                    if (const auto* sym
-                                        = std::get_if<koopa_ir::Symbol>(
-                                            &copy.value)) {
-                                        const auto typeIt
-                                            = valueTypes.find(sym->spelling);
-                                        valueTypes[sname]
-                                            = typeIt == valueTypes.end()
-                                            ? "i32"
-                                            : typeIt->second;
-                                    } else {
-                                        valueTypes[sname] = "i32";
-                                    }
+                                    valueTypes[sname] = valueTypeOf(copy.value);
+                                    logicalTypes[sname]
+                                        = logicalTypeOf(copy.value);
+                                },
+                                [&](const yesod::Ref<koopa_ir::GetAttrExpr>&
+                                        getAttrRef) {
+                                    const auto& getAttr = program[getAttrRef];
+                                    valueTypes[sname]
+                                        = (getAttr.attr
+                                                  == koopa_ir::PolyAttr::base
+                                              || getAttr.attr
+                                                  == koopa_ir::PolyAttr::addr)
+                                        ? "ptr"
+                                        : "i32";
+                                    logicalTypes[sname]
+                                        = valueTypes[sname] == "ptr" ? "ptr"
+                                                                     : "int";
+                                },
+                                [&](const yesod::Ref<koopa_ir::SetAttrExpr>&) {
+                                    valueTypes[sname] = std::string(POLY_TYPE);
+                                    logicalTypes[sname] = "poly";
+                                },
+                                [&](const yesod::Ref<koopa_ir::SelectExpr>&
+                                        selectRef) {
+                                    const auto& select = program[selectRef];
+                                    valueTypes[sname]
+                                        = valueTypeOf(select.trueValue);
+                                    logicalTypes[sname]
+                                        = logicalTypeOf(select.trueValue);
+                                },
+                                [&](const yesod::Ref<koopa_ir::NextPow2Expr>&) {
+                                    valueTypes[sname] = "i32";
+                                    logicalTypes[sname] = "int";
+                                },
+                                [&](const yesod::Ref<koopa_ir::NttExpr>&) {
+                                    valueTypes[sname] = std::string(PV_TYPE);
+                                    logicalTypes[sname] = "pv";
                                 },
                                 [&](const yesod::Ref<
-                                    koopa_ir::ConversionExpr>&) {
+                                    koopa_ir::PointwiseExpr>&) {
+                                    valueTypes[sname] = std::string(POLY_TYPE);
+                                    logicalTypes[sname] = "poly";
+                                },
+                                [&](const yesod::Ref<koopa_ir::CombineExpr>&) {
+                                    valueTypes[sname] = std::string(POLY_TYPE);
+                                    logicalTypes[sname] = "poly";
+                                },
+                                [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&) {
                                     valueTypes[sname] = "i32";
+                                    logicalTypes[sname] = "mint";
+                                },
+                                [&](const yesod::Ref<
+                                    koopa_ir::PolyConstructExpr>&) {
+                                    valueTypes[sname] = std::string(POLY_TYPE);
+                                    logicalTypes[sname] = "poly";
+                                },
+                                [&](const yesod::Ref<koopa_ir::ConversionExpr>&
+                                        convRef) {
+                                    valueTypes[sname] = "i32";
+                                    logicalTypes[sname] = program[convRef].op
+                                            == koopa_ir::ConversionOp::int2mint
+                                        ? "mint"
+                                        : "int";
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
@@ -520,6 +661,11 @@ namespace {
                     stmt);
             }
         }
+
+        const bool enableFieldHelpers
+            = std::ranges::any_of(valueTypes, [](const auto& item) -> bool {
+                  return item.second == POLY_TYPE || item.second == PV_TYPE;
+              });
 
         // ── Collect phi edges ──────────────────────────────────────────
         IncomingMap incoming;
@@ -538,25 +684,165 @@ namespace {
                 output << ", ";
             }
             const auto& param = program[function.params[i]];
-            output << emitType(param.type, program) << " "
-                   << llvmValueName(param.symbol.spelling);
+            const std::string paramType = emitType(param.type, program);
+            output << paramType << " ";
+            if (paramType == POLY_TYPE) {
+                output << llvmValueName(param.symbol.spelling) << "_param";
+            } else {
+                output << llvmValueName(param.symbol.spelling);
+            }
         }
         output << ") {\n";
 
+        auto emitStackValue
+            = [&](const std::string& type, const std::string& value,
+                  const std::string& stem) -> std::string {
+            const std::string slot = nextHelperName(stem + "_slot");
+            output << "  " << slot << " = alloca " << type << "\n";
+            output << "  store " << type << " " << value << ", ptr " << slot
+                   << "\n";
+            return slot;
+        };
+
+        auto emitAggregateLoad
+            = [&](const std::string& result, const std::string& type,
+                  const std::string& slot) -> void {
+            output << "  " << result << " = load " << type << ", ptr " << slot
+                   << "\n";
+        };
+
+        auto emitPolyCloneTo
+            = [&](const std::string& result, const std::string& value) -> void {
+            const std::string input
+                = emitStackValue(std::string(POLY_TYPE), value, "poly_in");
+            const std::string outputSlot = nextHelperName("poly_out");
+            output << "  " << outputSlot << " = alloca " << POLY_TYPE << "\n";
+            output << "  call void @__yesod_poly_clone(ptr " << outputSlot
+                   << ", ptr " << input << ")\n";
+            emitAggregateLoad(result, std::string(POLY_TYPE), outputSlot);
+        };
+
+        auto emitPolyCloneValue = [&](const std::string& value) -> std::string {
+            const std::string result = nextHelperName("poly_clone");
+            emitPolyCloneTo(result, value);
+            return result;
+        };
+
+        auto emitPolyZeroTo = [&](const std::string& result) -> void {
+            const std::string s0 = nextHelperName("poly_zero");
+            const std::string s1 = nextHelperName("poly_zero");
+            const std::string s2 = nextHelperName("poly_zero");
+            output << "  " << s0 << " = insertvalue " << POLY_TYPE
+                   << " undef, ptr null, 0\n";
+            output << "  " << s1 << " = insertvalue " << POLY_TYPE << " " << s0
+                   << ", i32 0, 1\n";
+            output << "  " << s2 << " = insertvalue " << POLY_TYPE << " " << s1
+                   << ", i32 0, 2\n";
+            output << "  " << result << " = insertvalue " << POLY_TYPE << " "
+                   << s2 << ", i32 0, 3\n";
+        };
+
+        auto emitPolyHelperTo
+            = [&](const std::string& result, const std::string& callee,
+                  const std::string& args) -> void {
+            const std::string outputSlot = nextHelperName("poly_out");
+            output << "  " << outputSlot << " = alloca " << POLY_TYPE << "\n";
+            output << "  call void @" << callee << "(ptr " << outputSlot;
+            if (!args.empty()) {
+                output << ", " << args;
+            }
+            output << ")\n";
+            emitAggregateLoad(result, std::string(POLY_TYPE), outputSlot);
+        };
+
+        auto emitPvHelperTo
+            = [&](const std::string& result, const std::string& callee,
+                  const std::string& args) -> void {
+            const std::string outputSlot = nextHelperName("pv_out");
+            output << "  " << outputSlot << " = alloca " << PV_TYPE << "\n";
+            output << "  call void @" << callee << "(ptr " << outputSlot;
+            if (!args.empty()) {
+                output << ", " << args;
+            }
+            output << ")\n";
+            emitAggregateLoad(result, std::string(PV_TYPE), outputSlot);
+        };
+
+        auto emitPolyPtr = [&](const std::string& value) -> std::string {
+            return emitStackValue(std::string(POLY_TYPE), value, "poly_arg");
+        };
+
+        auto emitPvPtr = [&](const std::string& value) -> std::string {
+            return emitStackValue(std::string(PV_TYPE), value, "pv_arg");
+        };
+
+        auto cloneCallArgument = [&](const koopa_ir::Value& value,
+                                     const std::string& type) -> std::string {
+            const std::string operand = emitValueOperand(value, program);
+            if (type == POLY_TYPE) {
+                return emitPolyCloneValue(operand);
+            }
+            return operand;
+        };
+
+        std::function<std::pair<std::string, std::string>(
+            yesod::Ref<koopa_ir::PointwiseNode>)>
+            emitPointwiseNode = [&](yesod::Ref<koopa_ir::PointwiseNode> nodeRef)
+            -> std::pair<std::string, std::string> {
+            const auto& node = program[nodeRef];
+            return MATCH(node.kind) WITH(
+                [&](const koopa_ir::PointwiseLeaf& leaf)
+                    -> std::pair<std::string, std::string> {
+                    if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
+                        return { "i32", emitValueOperand(leaf.value, program) };
+                    }
+                    return { std::string(PV_TYPE),
+                        emitValueOperand(leaf.value, program) };
+                },
+                [&](const koopa_ir::PointwiseBinary& binary)
+                    -> std::pair<std::string, std::string> {
+                    const auto lhs = emitPointwiseNode(binary.lhs);
+                    const auto rhs = emitPointwiseNode(binary.rhs);
+                    const std::string result = nextHelperName("pv");
+                    const std::string lhsPtr = emitPvPtr(lhs.second);
+                    if (binary.op == koopa_ir::PvBinaryOp::times) {
+                        emitPvHelperTo(result, "__yesod_pv_times",
+                            "ptr " + lhsPtr + ", i32 " + rhs.second);
+                        return { std::string(PV_TYPE), result };
+                    }
+                    const std::string rhsPtr = emitPvPtr(rhs.second);
+                    const char* callee = "__yesod_pv_add";
+                    if (binary.op == koopa_ir::PvBinaryOp::sub) {
+                        callee = "__yesod_pv_sub";
+                    } else if (binary.op == koopa_ir::PvBinaryOp::mul) {
+                        callee = "__yesod_pv_mul";
+                    }
+                    emitPvHelperTo(
+                        result, callee, "ptr " + lhsPtr + ", ptr " + rhsPtr);
+                    return { std::string(PV_TYPE), result };
+                });
+        };
+
         // ── Emit blocks ────────────────────────────────────────────────
-        for (const auto& blockRef : function.blocks) {
+        for (size_t blockIndex = 0; blockIndex < function.blocks.size();
+            ++blockIndex) {
+            const auto& blockRef = function.blocks[blockIndex];
             const auto& block = program[blockRef];
             const std::string llvmLabel = blockLabels[block.label.spelling];
             output << llvmLabel << ":\n";
 
             // Phi nodes from block parameters
             const auto& slots = incoming[block.label.spelling];
+            std::vector<std::pair<std::string, std::string>> phiClones;
             for (size_t pi = 0; pi < block.params.size(); ++pi) {
                 const auto& bp = program[block.params[pi]];
                 const std::string paramType = emitType(bp.type, program);
                 const std::string paramName = llvmValueName(bp.symbol.spelling);
+                const bool clonePhi = paramType == POLY_TYPE;
+                const std::string phiName
+                    = clonePhi ? paramName + "_phi" : paramName;
 
-                output << "  " << paramName << " = phi " << paramType;
+                output << "  " << phiName << " = phi " << paramType;
                 for (size_t ei = 0; ei < slots[pi].size(); ++ei) {
                     const auto& edge = slots[pi][ei];
                     if (ei != 0) {
@@ -566,6 +852,21 @@ namespace {
                            << ", %" << edge.predLabel << " ]";
                 }
                 output << "\n";
+                if (clonePhi) {
+                    phiClones.emplace_back(paramName, phiName);
+                }
+            }
+            for (const auto& clone : phiClones) {
+                emitPolyCloneTo(clone.first, clone.second);
+            }
+            if (blockIndex == 0) {
+                for (const auto& paramRef : function.params) {
+                    const auto& param = program[paramRef];
+                    if (emitType(param.type, program) == POLY_TYPE) {
+                        emitPolyCloneTo(llvmValueName(param.symbol.spelling),
+                            llvmValueName(param.symbol.spelling) + "_param");
+                    }
+                }
             }
 
             // Statements
@@ -598,10 +899,23 @@ namespace {
                                         = (ptIt != pointees.end())
                                         ? ptIt->second
                                         : "i32";
-                                    output << "  " << llvmValueName(sname)
-                                           << " = load " << elemTy << ", ptr "
-                                           << llvmValueName(ld.source.spelling)
-                                           << "\n";
+                                    if (elemTy == POLY_TYPE) {
+                                        const std::string rawName
+                                            = llvmValueName(sname) + "_raw";
+                                        output
+                                            << "  " << rawName << " = load "
+                                            << elemTy << ", ptr "
+                                            << llvmValueName(ld.source.spelling)
+                                            << "\n";
+                                        emitPolyCloneTo(
+                                            llvmValueName(sname), rawName);
+                                    } else {
+                                        output
+                                            << "  " << llvmValueName(sname)
+                                            << " = load " << elemTy << ", ptr "
+                                            << llvmValueName(ld.source.spelling)
+                                            << "\n";
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::GetPointerExpr>&
                                         getptrRef) {
@@ -650,24 +964,80 @@ namespace {
                                     using BOp = koopa_ir::BinaryOp;
                                     switch (bin.op) {
                                     case BOp::add:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = add " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
+                                        if (enableFieldHelpers
+                                            && (logicalTypeOf(bin.lhs) == "mint"
+                                                || logicalTypeOf(bin.rhs)
+                                                    == "mint")) {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = call i32 "
+                                                      "@__yesod_field_add("
+                                                   << lhs_typed << ", i32 "
+                                                   << rhs_bare << ")\n";
+                                        } else {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = add " << lhs_typed
+                                                   << ", " << rhs_bare << "\n";
+                                        }
                                         break;
                                     case BOp::sub:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = sub " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
+                                        if (enableFieldHelpers
+                                            && (logicalTypeOf(bin.lhs) == "mint"
+                                                || logicalTypeOf(bin.rhs)
+                                                    == "mint")) {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = call i32 "
+                                                      "@__yesod_field_sub("
+                                                   << lhs_typed << ", i32 "
+                                                   << rhs_bare << ")\n";
+                                        } else {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = sub " << lhs_typed
+                                                   << ", " << rhs_bare << "\n";
+                                        }
                                         break;
                                     case BOp::mul:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = mul " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
+                                        if (enableFieldHelpers
+                                            && (logicalTypeOf(bin.lhs) == "mint"
+                                                || logicalTypeOf(bin.rhs)
+                                                    == "mint")) {
+                                            output << "  " << sname
+                                                   << "_raw_mint_mul = mul "
+                                                   << lhs_typed << ", "
+                                                   << rhs_bare << "\n";
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = call i32 "
+                                                      "@__yesod_field_mul("
+                                                   << lhs_typed << ", i32 "
+                                                   << rhs_bare << ")\n";
+                                        } else {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = mul " << lhs_typed
+                                                   << ", " << rhs_bare << "\n";
+                                        }
                                         break;
                                     case BOp::div:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = sdiv " << lhs_typed
-                                               << ", " << rhs_bare << "\n";
+                                        if (enableFieldHelpers
+                                            && (logicalTypeOf(bin.lhs) == "mint"
+                                                || logicalTypeOf(bin.rhs)
+                                                    == "mint")) {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = call i32 "
+                                                      "@__yesod_field_div("
+                                                   << lhs_typed << ", i32 "
+                                                   << rhs_bare << ")\n";
+                                        } else {
+                                            output << "  "
+                                                   << llvmValueName(sname)
+                                                   << " = sdiv " << lhs_typed
+                                                   << ", " << rhs_bare << "\n";
+                                        }
                                         break;
                                     case BOp::mod:
                                         output << "  " << llvmValueName(sname)
@@ -800,23 +1170,32 @@ namespace {
                                     if (callRetTy != "void") {
                                         valueTypes[sname] = callRetTy;
                                     }
-                                    output << "  " << llvmValueName(sname)
-                                           << " = call " << callRetTy << " @"
-                                           << callee << "(";
+                                    std::vector<
+                                        std::pair<std::string, std::string>>
+                                        args;
+                                    args.reserve(call.args.size());
                                     for (size_t ai = 0; ai < call.args.size();
                                         ++ai) {
-                                        if (ai != 0) {
-                                            output << ", ";
-                                        }
                                         const std::string argType
                                             = (sigIt != sigs.end()
                                                   && ai < sigIt->second
                                                           .paramTypes.size())
                                             ? sigIt->second.paramTypes[ai]
                                             : "i32";
-                                        output << argType << " "
-                                               << emitValueOperand(
-                                                      call.args[ai], program);
+                                        args.emplace_back(argType,
+                                            cloneCallArgument(
+                                                call.args[ai], argType));
+                                    }
+                                    output << "  " << llvmValueName(sname)
+                                           << " = call " << callRetTy << " @"
+                                           << callee << "(";
+                                    for (size_t ai = 0; ai < args.size();
+                                        ++ai) {
+                                        if (ai != 0) {
+                                            output << ", ";
+                                        }
+                                        output << args[ai].first << " "
+                                               << args[ai].second;
                                     }
                                     output << ")\n";
                                 },
@@ -832,11 +1211,220 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::CopyExpr>&
                                         copyRef) {
                                     const auto& copy = program[copyRef];
-                                    output
-                                        << "  " << llvmValueName(sname)
-                                        << " = add i32 "
-                                        << emitValueOperand(copy.value, program)
-                                        << ", 0\n";
+                                    const std::string valueType
+                                        = valueTypeOf(copy.value);
+                                    if (valueType == POLY_TYPE) {
+                                        emitPolyCloneTo(llvmValueName(sname),
+                                            emitValueOperand(
+                                                copy.value, program));
+                                    } else {
+                                        output << "  " << llvmValueName(sname)
+                                               << " = add i32 "
+                                               << emitValueOperand(
+                                                      copy.value, program)
+                                               << ", 0\n";
+                                    }
+                                },
+                                [&](const yesod::Ref<koopa_ir::GetAttrExpr>&
+                                        getAttrRef) {
+                                    const auto& getAttr = program[getAttrRef];
+                                    const int32_t index
+                                        = (getAttr.attr
+                                                  == koopa_ir::PolyAttr::base
+                                              || getAttr.attr
+                                                  == koopa_ir::PolyAttr::addr)
+                                        ? 0
+                                        : (getAttr.attr == koopa_ir::PolyAttr::l
+                                                  ? 2
+                                                  : 3);
+                                    output << "  " << llvmValueName(sname)
+                                           << " = extractvalue " << POLY_TYPE
+                                           << " "
+                                           << emitValueOperand(
+                                                  getAttr.value, program)
+                                           << ", " << index << "\n";
+                                },
+                                [&](const yesod::Ref<koopa_ir::SetAttrExpr>&
+                                        setAttrRef) {
+                                    const auto& setAttr = program[setAttrRef];
+                                    const std::string input
+                                        = emitPolyPtr(emitValueOperand(
+                                            setAttr.value, program));
+                                    const std::string value = emitValueOperand(
+                                        setAttr.attrValue, program);
+                                    if (setAttr.attr == koopa_ir::PolyAttr::l) {
+                                        emitPolyHelperTo(llvmValueName(sname),
+                                            "__yesod_poly_set_l",
+                                            "ptr " + input + ", i32 " + value);
+                                    } else if (setAttr.attr
+                                        == koopa_ir::PolyAttr::r) {
+                                        emitPolyHelperTo(llvmValueName(sname),
+                                            "__yesod_poly_set_r",
+                                            "ptr " + input + ", i32 " + value);
+                                    } else {
+                                        emitPolyHelperTo(llvmValueName(sname),
+                                            "__yesod_poly_set_ptr",
+                                            "ptr " + input + ", ptr " + value);
+                                    }
+                                },
+                                [&](const yesod::Ref<koopa_ir::SelectExpr>&
+                                        selectRef) {
+                                    const auto& select = program[selectRef];
+                                    const std::string resultType
+                                        = valueTypeOf(select.trueValue);
+                                    const std::string cond
+                                        = nextHelperName("select_cond");
+                                    output << "  " << cond << " = icmp ne i32 "
+                                           << emitValueOperand(
+                                                  select.condition, program)
+                                           << ", 0\n";
+                                    const std::string raw
+                                        = resultType == POLY_TYPE
+                                        ? nextHelperName("select_poly")
+                                        : llvmValueName(sname);
+                                    output << "  " << raw << " = select i1 "
+                                           << cond << ", " << resultType << " "
+                                           << emitValueOperand(
+                                                  select.trueValue, program)
+                                           << ", " << resultType << " "
+                                           << emitValueOperand(
+                                                  select.falseValue, program)
+                                           << "\n";
+                                    if (resultType == POLY_TYPE) {
+                                        emitPolyCloneTo(
+                                            llvmValueName(sname), raw);
+                                    }
+                                },
+                                [&](const yesod::Ref<koopa_ir::NextPow2Expr>&
+                                        nextPow2Ref) {
+                                    const auto& nextPow2 = program[nextPow2Ref];
+                                    output << "  " << llvmValueName(sname)
+                                           << " = call i32 @__yesod_next_pow2("
+                                           << "i32 "
+                                           << emitValueOperand(
+                                                  nextPow2.value, program)
+                                           << ")\n";
+                                },
+                                [&](const yesod::Ref<koopa_ir::NttExpr>&
+                                        nttRef) {
+                                    const auto& ntt = program[nttRef];
+                                    const std::string input = emitPolyPtr(
+                                        emitValueOperand(ntt.value, program));
+                                    emitPvHelperTo(llvmValueName(sname),
+                                        "__yesod_poly_ntt",
+                                        "ptr " + input + ", i32 "
+                                            + emitValueOperand(
+                                                ntt.length, program));
+                                },
+                                [&](const yesod::Ref<koopa_ir::PointwiseExpr>&
+                                        pointwiseRef) {
+                                    const auto& pointwise
+                                        = program[pointwiseRef];
+                                    const auto pv
+                                        = emitPointwiseNode(pointwise.root);
+                                    const std::string pvPtr
+                                        = emitPvPtr(pv.second);
+                                    emitPolyHelperTo(llvmValueName(sname),
+                                        "__yesod_poly_from_pointwise",
+                                        "ptr " + pvPtr + ", i32 "
+                                            + emitValueOperand(
+                                                pointwise.activeL, program)
+                                            + ", i32 "
+                                            + emitValueOperand(
+                                                pointwise.activeR, program));
+                                },
+                                [&](const yesod::Ref<koopa_ir::CombineExpr>&
+                                        combineRef) {
+                                    const auto& combine = program[combineRef];
+                                    std::string acc
+                                        = nextHelperName("poly_acc");
+                                    emitPolyZeroTo(acc);
+                                    for (const auto& term : combine.terms) {
+                                        const std::string result
+                                            = nextHelperName("poly_acc");
+                                        const std::string accPtr
+                                            = emitPolyPtr(acc);
+                                        const std::string srcPtr
+                                            = emitPolyPtr(emitValueOperand(
+                                                term.value, program));
+                                        const std::string endValue
+                                            = term.end.has_value()
+                                            ? emitValueOperand(
+                                                  *term.end, program)
+                                            : std::to_string(INF_END);
+                                        emitPolyHelperTo(result,
+                                            "__yesod_poly_combine_term",
+                                            "ptr " + accPtr + ", ptr " + srcPtr
+                                                + ", i32 "
+                                                + emitValueOperand(
+                                                    term.start, program)
+                                                + ", i32 " + endValue + ", i32 "
+                                                + emitValueOperand(
+                                                    term.shift, program)
+                                                + ", i32 "
+                                                + emitValueOperand(
+                                                    term.scale, program));
+                                        acc = result;
+                                    }
+                                    emitPolyCloneTo(llvmValueName(sname), acc);
+                                },
+                                [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&
+                                        getCoeffRef) {
+                                    const auto& getCoeff = program[getCoeffRef];
+                                    const std::string input
+                                        = emitPolyPtr(emitValueOperand(
+                                            getCoeff.value, program));
+                                    output << "  " << llvmValueName(sname)
+                                           << " = call i32 "
+                                              "@__yesod_poly_getcoeff(ptr "
+                                           << input << ", i32 "
+                                           << emitValueOperand(
+                                                  getCoeff.index, program)
+                                           << ")\n";
+                                },
+                                [&](const yesod::Ref<
+                                    koopa_ir::PolyConstructExpr>&
+                                        constructRef) {
+                                    const auto& construct
+                                        = program[constructRef];
+                                    const std::string arrayType = "["
+                                        + std::to_string(
+                                            construct.elements.size())
+                                        + " x i32]";
+                                    const std::string slot
+                                        = nextHelperName("poly_construct");
+                                    output << "  " << slot << " = alloca "
+                                           << arrayType << "\n";
+                                    for (size_t i = 0;
+                                        i < construct.elements.size(); ++i) {
+                                        const std::string elementPtr
+                                            = nextHelperName("poly_coeff_ptr");
+                                        output << "  " << elementPtr
+                                               << " = getelementptr "
+                                               << arrayType << ", ptr " << slot
+                                               << ", i32 0, i32 " << i << "\n";
+                                        output << "  store i32 "
+                                               << emitValueOperand(
+                                                      construct.elements[i],
+                                                      program)
+                                               << ", ptr " << elementPtr
+                                               << "\n";
+                                    }
+                                    const std::string dataPtr
+                                        = construct.elements.empty()
+                                        ? "null"
+                                        : nextHelperName("poly_data");
+                                    if (!construct.elements.empty()) {
+                                        output << "  " << dataPtr
+                                               << " = getelementptr "
+                                               << arrayType << ", ptr " << slot
+                                               << ", i32 0, i32 0\n";
+                                    }
+                                    emitPolyHelperTo(llvmValueName(sname),
+                                        "__yesod_poly_construct",
+                                        "ptr " + dataPtr + ", i32 "
+                                            + std::to_string(
+                                                construct.elements.size()));
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
@@ -851,26 +1439,30 @@ namespace {
                             const std::string elemTy = (ptIt != pointees.end())
                                 ? ptIt->second
                                 : "i32";
-                            output << "  store " << elemTy << " ";
+                            std::string storeValue;
                             MATCH(store.value)
                             WITH(
                                 [&](const koopa_ir::Symbol& sv) {
-                                    output << llvmValueName(sv.spelling);
+                                    storeValue = llvmValueName(sv.spelling);
                                 },
                                 [&](const koopa_ir::IntegerLiteral& sv) {
-                                    output << sv.value;
+                                    storeValue = std::to_string(sv.value);
                                 },
                                 [&](const koopa_ir::UndefValue&) {
-                                    output << "undef";
+                                    storeValue = "undef";
                                 },
                                 [&](const koopa_ir::ZeroInit&) {
-                                    output << "zeroinitializer";
+                                    storeValue = "zeroinitializer";
                                 },
                                 [&](const yesod::Ref<
                                     koopa_ir::AggregateInitializer>&) {
-                                    output << "zeroinitializer";
+                                    storeValue = "zeroinitializer";
                                 });
-                            output << ", ptr "
+                            if (elemTy == POLY_TYPE) {
+                                storeValue = emitPolyCloneValue(storeValue);
+                            }
+                            output << "  store " << elemTy << " " << storeValue
+                                   << ", ptr "
                                    << llvmValueName(store.destination.spelling)
                                    << "\n";
                         } else if constexpr (std::same_as<StmtNode,
@@ -882,21 +1474,27 @@ namespace {
                             const std::string callRetTy = (sigIt != sigs.end())
                                 ? sigIt->second.retType
                                 : "void";
-                            output << "  call " << callRetTy << " @" << callee
-                                   << "(";
+                            std::vector<std::pair<std::string, std::string>>
+                                args;
+                            args.reserve(call.args.size());
                             for (size_t ai = 0; ai < call.args.size(); ++ai) {
-                                if (ai != 0) {
-                                    output << ", ";
-                                }
                                 const std::string argType
                                     = (sigIt != sigs.end()
                                           && ai
                                               < sigIt->second.paramTypes.size())
                                     ? sigIt->second.paramTypes[ai]
                                     : "i32";
-                                output
-                                    << argType << " "
-                                    << emitValueOperand(call.args[ai], program);
+                                args.emplace_back(argType,
+                                    cloneCallArgument(call.args[ai], argType));
+                            }
+                            output << "  call " << callRetTy << " @" << callee
+                                   << "(";
+                            for (size_t ai = 0; ai < args.size(); ++ai) {
+                                if (ai != 0) {
+                                    output << ", ";
+                                }
+                                output << args[ai].first << " "
+                                       << args[ai].second;
                             }
                             output << ")\n";
                         }
@@ -942,7 +1540,8 @@ namespace {
                 [&](const yesod::Ref<koopa_ir::ReturnTerminator>& retRef) {
                     const auto& ret = program[retRef];
                     if (ret.value.has_value()) {
-                        output << "  ret i32 "
+                        const std::string valueType = valueTypeOf(*ret.value);
+                        output << "  ret " << valueType << " "
                                << emitValueOperand(*ret.value, program) << "\n";
                     } else {
                         output << "  ret void\n";

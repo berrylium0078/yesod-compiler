@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "backend/llvm.h"
+#include "backend/llvm_poly_runtime.h"
 #include "frontend/parser.h"
 #include "frontend/semantic.h"
 #include "koopa/ast_to_koopa.h"
@@ -232,6 +233,25 @@ std::string extractLlvmFunctionDefinitions(const std::string& llvmModule)
     return output.str();
 }
 
+std::string extractLlvmPreludeRecords(const std::string& llvmModule)
+{
+    std::istringstream input(llvmModule);
+    std::ostringstream output;
+    std::string line;
+
+    while (std::getline(input, line)) {
+        if (line.rfind("; ModuleID =", 0) == 0
+            || line.rfind("source_filename =", 0) == 0
+            || line.rfind("target datalayout =", 0) == 0
+            || line.rfind("target triple =", 0) == 0) {
+            continue;
+        }
+        output << line << '\n';
+    }
+
+    return output.str();
+}
+
 std::string insertLlvmPrelude(
     const std::string& llvmModule, const std::string& prelude)
 {
@@ -281,6 +301,101 @@ bool buildMintRuntimeLlvmPrelude(std::string& prelude)
     }
     prelude = extractLlvmFunctionDefinitions(readTextFile(runtimeLlvm.path()));
     return !prelude.empty();
+}
+
+bool buildPolyRuntimeLlvmPrelude(std::string& prelude)
+{
+    TempFile runtimeSource(".c");
+    TempFile runtimeLlvm(".ll");
+    if (!writeTextFile(runtimeSource.path(),
+            std::string(yesod::backend::LLVM_POLY_RUNTIME_SOURCE))) {
+        return false;
+    }
+    if (!runCommand("clang -S -emit-llvm -O0 -target "
+                    "x86_64-pc-linux-gnu "
+            + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
+        return false;
+    }
+    prelude = extractLlvmPreludeRecords(readTextFile(runtimeLlvm.path()));
+    return !prelude.empty();
+}
+
+bool typeUsesPoly(const koopa_ir::Type& type, const koopa_ir::Program& program)
+{
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using Node = std::remove_cvref_t<decltype(node)>;
+            if constexpr (std::same_as<Node, koopa_ir::PolyType>) {
+                return true;
+            } else if constexpr (std::same_as<Node,
+                                     yesod::Ref<koopa_ir::ArrayType>>) {
+                return typeUsesPoly(program[node].elementType, program);
+            } else if constexpr (std::same_as<Node,
+                                     yesod::Ref<koopa_ir::PointerType>>) {
+                return typeUsesPoly(program[node].pointeeType, program);
+            } else if constexpr (std::same_as<Node,
+                                     yesod::Ref<koopa_ir::FunctionType>>) {
+                const auto& functionType = program[node];
+                if (functionType.returnType.has_value()
+                    && typeUsesPoly(*functionType.returnType, program)) {
+                    return true;
+                }
+                for (const auto& paramType : functionType.paramTypes) {
+                    if (typeUsesPoly(paramType, program)) {
+                        return true;
+                    }
+                }
+                return false;
+            } else {
+                return false;
+            }
+        },
+        type);
+}
+
+bool programUsesPolyRuntime(const koopa_ir::Program& program)
+{
+    for (const auto& item : program.items) {
+        bool usesPoly = false;
+        std::visit(
+            [&](auto itemRef) {
+                using Item = std::remove_cvref_t<decltype(program[itemRef])>;
+                if constexpr (std::same_as<Item, koopa_ir::GlobalMemoryDef>) {
+                    usesPoly
+                        = typeUsesPoly(program[itemRef].allocType, program);
+                } else if constexpr (std::same_as<Item,
+                                         koopa_ir::FunctionDecl>) {
+                    const auto& function = program[itemRef];
+                    usesPoly = function.returnType.has_value()
+                        && typeUsesPoly(*function.returnType, program);
+                    for (const auto& paramType : function.paramTypes) {
+                        usesPoly = usesPoly || typeUsesPoly(paramType, program);
+                    }
+                } else if constexpr (std::same_as<Item,
+                                         koopa_ir::FunctionDef>) {
+                    const auto& function = program[itemRef];
+                    usesPoly = function.returnType.has_value()
+                        && typeUsesPoly(*function.returnType, program);
+                    for (const auto& paramRef : function.params) {
+                        usesPoly = usesPoly
+                            || typeUsesPoly(program[paramRef].type, program);
+                    }
+                    for (const auto& blockRef : function.blocks) {
+                        const auto& block = program[blockRef];
+                        for (const auto& paramRef : block.params) {
+                            usesPoly = usesPoly
+                                || typeUsesPoly(
+                                    program[paramRef].type, program);
+                        }
+                    }
+                }
+            },
+            item);
+        if (usesPoly) {
+            return true;
+        }
+    }
+    return false;
 }
 
 struct DiagInfo {
@@ -378,6 +493,13 @@ bool writeLlvmProgramToFile(
         }
         llvmModule = insertLlvmPrelude(
             stripMintHelperDeclarations(llvmModule), runtimePrelude);
+    }
+    if (programUsesPolyRuntime(program)) {
+        std::string runtimePrelude;
+        if (!buildPolyRuntimeLlvmPrelude(runtimePrelude)) {
+            return false;
+        }
+        llvmModule = insertLlvmPrelude(llvmModule, runtimePrelude);
     }
     return writeTextFile(path, llvmModule);
 }
