@@ -941,6 +941,18 @@ namespace {
             return "int";
         };
 
+        auto emitMintOperand
+            = [&](const koopa_ir::Value& value) -> std::string {
+            if (logicalTypeOf(value) == "mint") {
+                return emitValueOperand(value, program);
+            }
+            if (const auto* literal
+                = std::get_if<koopa_ir::IntegerLiteral>(&value)) {
+                return std::to_string(intToMontgomeryConst(literal->value));
+            }
+            return emitIntToMint(emitValueOperand(value, program));
+        };
+
         auto recordPointer
             = [&](const std::string& sym, const koopa_ir::Type& type) {
                   const std::string pt = pointeeTypeString(type, program);
@@ -1591,11 +1603,7 @@ namespace {
             return MATCH(node.kind) WITH(
                 [&](const koopa_ir::PointwiseLeaf& leaf) -> std::string {
                     if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
-                        const std::string value
-                            = emitValueOperand(leaf.value, program);
-                        return logicalTypeOf(leaf.value) == "mint"
-                            ? value
-                            : emitIntToMint(value);
+                        return emitMintOperand(leaf.value);
                     }
                     const std::string pv
                         = emitValueOperand(leaf.value, program);
@@ -2249,54 +2257,288 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::CombineExpr>&
                                         combineRef) {
                                     const auto& combine = program[combineRef];
-                                    std::string acc
-                                        = nextHelperName("poly_acc");
-                                    emitPolyZeroTo(acc);
-                                    bool accOwned = false;
+                                    struct CombineTermState {
+                                        std::string srcCoeffs;
+                                        std::string lower;
+                                        std::string upper;
+                                        std::string shift;
+                                        std::string scale;
+                                    };
+                                    std::vector<CombineTermState> termStates;
+                                    termStates.reserve(combine.terms.size());
+                                    std::string resultL = "0";
+                                    std::string resultR = "0";
+                                    std::string hasAny = "false";
                                     for (const auto& term : combine.terms) {
-                                        const std::string result
-                                            = nextHelperName("poly_acc");
-                                        const std::string accPtr
-                                            = emitPolyPtr(acc);
-                                        const std::string srcPtr
-                                            = emitPolyPtr(emitValueOperand(
-                                                term.value, program));
+                                        if (const auto* scaleLiteral
+                                            = std::get_if<
+                                                koopa_ir::IntegerLiteral>(
+                                                &term.scale);
+                                            scaleLiteral != nullptr
+                                            && scaleLiteral->value == 0) {
+                                            continue;
+                                        }
+                                        const std::string src
+                                            = emitValueOperand(
+                                                term.value, program);
+                                        const std::string srcCoeffs
+                                            = nextHelperName(
+                                                "combine_src_coeffs");
+                                        output << "  " << srcCoeffs
+                                               << " = extractvalue "
+                                               << POLY_TYPE << " " << src
+                                               << ", 0\n";
+                                        const std::string srcL
+                                            = nextHelperName("combine_src_l");
+                                        output << "  " << srcL
+                                               << " = extractvalue "
+                                               << POLY_TYPE << " " << src
+                                               << ", 3\n";
+                                        const std::string srcR
+                                            = nextHelperName("combine_src_r");
+                                        output << "  " << srcR
+                                               << " = extractvalue "
+                                               << POLY_TYPE << " " << src
+                                               << ", 4\n";
+                                        const std::string start
+                                            = emitValueOperand(
+                                                term.start, program);
                                         const std::string endValue
                                             = term.end.has_value()
                                             ? emitValueOperand(
                                                   *term.end, program)
                                             : std::to_string(INF_END);
-                                        const std::string rawScale
+                                        const std::string endBeforeSrcR
+                                            = nextHelperName(
+                                                "combine_end_before_src_r");
+                                        output << "  " << endBeforeSrcR
+                                               << " = icmp slt i32 " << endValue
+                                               << ", " << srcR << "\n";
+                                        const std::string upper
+                                            = nextHelperName("combine_upper");
+                                        output << "  " << upper
+                                               << " = select i1 "
+                                               << endBeforeSrcR << ", i32 "
+                                               << endValue << ", i32 " << srcR
+                                               << "\n";
+                                        const std::string startAfterSrcL
+                                            = nextHelperName(
+                                                "combine_start_after_src_l");
+                                        output << "  " << startAfterSrcL
+                                               << " = icmp sgt i32 " << start
+                                               << ", " << srcL << "\n";
+                                        const std::string lower
+                                            = nextHelperName("combine_lower");
+                                        output << "  " << lower
+                                               << " = select i1 "
+                                               << startAfterSrcL << ", i32 "
+                                               << start << ", i32 " << srcL
+                                               << "\n";
+                                        const std::string hasTerm
+                                            = nextHelperName(
+                                                "combine_has_term");
+                                        output << "  " << hasTerm
+                                               << " = icmp slt i32 " << lower
+                                               << ", " << upper << "\n";
+                                        const std::string shift
                                             = emitValueOperand(
-                                                term.scale, program);
-                                        const std::string scaleValue
-                                            = logicalTypeOf(term.scale)
-                                                == "mint"
-                                            ? rawScale
-                                            : emitIntToMint(rawScale);
-                                        emitPolyHelperTo(result,
-                                            "__yesod_poly_combine_term",
-                                            "ptr " + accPtr + ", ptr " + srcPtr
-                                                + ", i32 "
-                                                + emitValueOperand(
-                                                    term.start, program)
-                                                + ", i32 " + endValue + ", i32 "
-                                                + emitValueOperand(
-                                                    term.shift, program)
-                                                + ", i32 " + scaleValue);
-                                        if (accOwned) {
-                                            emitOwnedPtrDrop(
-                                                std::string(POLY_TYPE), accPtr);
-                                        }
-                                        acc = result;
-                                        accOwned = true;
+                                                term.shift, program);
+                                        const std::string termL
+                                            = nextHelperName("combine_term_l");
+                                        output << "  " << termL << " = sub i32 "
+                                               << lower << ", " << shift
+                                               << "\n";
+                                        const std::string termR
+                                            = nextHelperName("combine_term_r");
+                                        output << "  " << termR << " = sub i32 "
+                                               << upper << ", " << shift
+                                               << "\n";
+                                        const std::string isSmallerL
+                                            = nextHelperName(
+                                                "combine_l_smaller");
+                                        output << "  " << isSmallerL
+                                               << " = icmp slt i32 " << termL
+                                               << ", " << resultL << "\n";
+                                        const std::string minL
+                                            = nextHelperName("combine_min_l");
+                                        output << "  " << minL
+                                               << " = select i1 " << isSmallerL
+                                               << ", i32 " << termL << ", i32 "
+                                               << resultL << "\n";
+                                        const std::string isLargerR
+                                            = nextHelperName(
+                                                "combine_r_larger");
+                                        output << "  " << isLargerR
+                                               << " = icmp sgt i32 " << termR
+                                               << ", " << resultR << "\n";
+                                        const std::string maxR
+                                            = nextHelperName("combine_max_r");
+                                        output << "  " << maxR
+                                               << " = select i1 " << isLargerR
+                                               << ", i32 " << termR << ", i32 "
+                                               << resultR << "\n";
+                                        const std::string mergedL
+                                            = nextHelperName(
+                                                "combine_merged_l");
+                                        output << "  " << mergedL
+                                               << " = select i1 " << hasAny
+                                               << ", i32 " << minL << ", i32 "
+                                               << termL << "\n";
+                                        const std::string mergedR
+                                            = nextHelperName(
+                                                "combine_merged_r");
+                                        output << "  " << mergedR
+                                               << " = select i1 " << hasAny
+                                               << ", i32 " << maxR << ", i32 "
+                                               << termR << "\n";
+                                        const std::string nextResultL
+                                            = nextHelperName(
+                                                "combine_result_l");
+                                        output << "  " << nextResultL
+                                               << " = select i1 " << hasTerm
+                                               << ", i32 " << mergedL
+                                               << ", i32 " << resultL << "\n";
+                                        const std::string nextResultR
+                                            = nextHelperName(
+                                                "combine_result_r");
+                                        output << "  " << nextResultR
+                                               << " = select i1 " << hasTerm
+                                               << ", i32 " << mergedR
+                                               << ", i32 " << resultR << "\n";
+                                        const std::string nextHasAny
+                                            = nextHelperName("combine_any");
+                                        output << "  " << nextHasAny
+                                               << " = or i1 " << hasAny << ", "
+                                               << hasTerm << "\n";
+                                        resultL = nextResultL;
+                                        resultR = nextResultR;
+                                        hasAny = nextHasAny;
+                                        termStates.push_back(CombineTermState {
+                                            .srcCoeffs = srcCoeffs,
+                                            .lower = termL,
+                                            .upper = termR,
+                                            .shift = shift,
+                                            .scale
+                                            = emitMintOperand(term.scale),
+                                        });
                                     }
-                                    emitPolyCloneTo(llvmValueName(sname), acc);
-                                    if (accOwned) {
-                                        const std::string accPtr
-                                            = emitPolyPtr(acc);
-                                        emitOwnedPtrDrop(
-                                            std::string(POLY_TYPE), accPtr);
+                                    if (termStates.empty()) {
+                                        emitPolyZeroTo(llvmValueName(sname));
+                                        return;
+                                    }
+                                    emitPolyHelperTo(llvmValueName(sname),
+                                        "__yesod_poly_alloc_zero",
+                                        "i32 " + resultL + ", i32 " + resultR);
+                                    const std::string resultCoeffs
+                                        = nextHelperName(
+                                            "combine_result_coeffs");
+                                    output << "  " << resultCoeffs
+                                           << " = extractvalue " << POLY_TYPE
+                                           << " " << llvmValueName(sname)
+                                           << ", 0\n";
+                                    const std::string montOne = std::to_string(
+                                        intToMontgomeryConst(1));
+                                    const std::string montMinusOne
+                                        = std::to_string(
+                                            intToMontgomeryConst(-1));
+                                    for (const auto& term : termStates) {
+                                        const std::string loopStartIsNegative
+                                            = nextHelperName(
+                                                "combine_start_neg");
+                                        output << "  " << loopStartIsNegative
+                                               << " = icmp slt i32 "
+                                               << term.lower << ", 0\n";
+                                        const std::string loopStart
+                                            = nextHelperName(
+                                                "combine_loop_start");
+                                        output << "  " << loopStart
+                                               << " = select i1 "
+                                               << loopStartIsNegative
+                                               << ", i32 0, i32 " << term.lower
+                                               << "\n";
+                                        const std::string preheaderLabel
+                                            = nextLabelName(
+                                                "combine_preheader");
+                                        const std::string condLabel
+                                            = nextLabelName("combine_cond");
+                                        const std::string bodyLabel
+                                            = nextLabelName("combine_body");
+                                        const std::string endLabel
+                                            = nextLabelName("combine_end");
+                                        output << "  br label %"
+                                               << preheaderLabel << "\n";
+                                        output << preheaderLabel << ":\n";
+                                        output << "  br label %" << condLabel
+                                               << "\n";
+                                        output << condLabel << ":\n";
+                                        const std::string index
+                                            = nextHelperName("combine_i");
+                                        const std::string next
+                                            = nextHelperName("combine_next");
+                                        output << "  " << index
+                                               << " = phi i32 [ " << loopStart
+                                               << ", %" << preheaderLabel
+                                               << " ], [ " << next << ", %"
+                                               << bodyLabel << " ]\n";
+                                        const std::string keep
+                                            = nextHelperName("combine_keep");
+                                        output << "  " << keep
+                                               << " = icmp slt i32 " << index
+                                               << ", " << term.upper << "\n";
+                                        output << "  br i1 " << keep
+                                               << ", label %" << bodyLabel
+                                               << ", label %" << endLabel
+                                               << "\n";
+                                        output << bodyLabel << ":\n";
+                                        const std::string dstPtr
+                                            = nextHelperName("combine_dst");
+                                        output << "  " << dstPtr
+                                               << " = getelementptr i32, ptr "
+                                               << resultCoeffs << ", i32 "
+                                               << index << "\n";
+                                        const std::string oldValue
+                                            = nextHelperName("combine_old");
+                                        output << "  " << oldValue
+                                               << " = load i32, ptr " << dstPtr
+                                               << "\n";
+                                        const std::string srcIndex
+                                            = nextHelperName(
+                                                "combine_src_index");
+                                        output << "  " << srcIndex
+                                               << " = add i32 " << index << ", "
+                                               << term.shift << "\n";
+                                        const std::string srcPtr
+                                            = nextHelperName("combine_src");
+                                        output << "  " << srcPtr
+                                               << " = getelementptr i32, ptr "
+                                               << term.srcCoeffs << ", i32 "
+                                               << srcIndex << "\n";
+                                        const std::string srcValue
+                                            = nextHelperName("combine_src_val");
+                                        output << "  " << srcValue
+                                               << " = load i32, ptr " << srcPtr
+                                               << "\n";
+                                        std::string combined;
+                                        if (term.scale == montOne) {
+                                            combined = emitMintAddSub(
+                                                oldValue, srcValue, false);
+                                        } else if (term.scale == montMinusOne) {
+                                            combined = emitMintAddSub(
+                                                oldValue, srcValue, true);
+                                        } else {
+                                            const std::string scaled
+                                                = emitMintMul(
+                                                    srcValue, term.scale);
+                                            combined = emitMintAddSub(
+                                                oldValue, scaled, false);
+                                        }
+                                        output << "  store i32 " << combined
+                                               << ", ptr " << dstPtr << "\n";
+                                        output << "  " << next << " = add i32 "
+                                               << index << ", 1\n";
+                                        output << "  br label %" << condLabel
+                                               << "\n";
+                                        output << endLabel << ":\n";
                                     }
                                 },
                                 [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&

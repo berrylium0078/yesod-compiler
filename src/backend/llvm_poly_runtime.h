@@ -212,58 +212,18 @@ int __yesod_next_pow2(int value) {
     return __yesod_rt_next_pow2(value);
 }
 
-void __yesod_poly_combine_term(YesodPoly *out, const YesodPoly *acc,
-    const YesodPoly *src, int start, int end, int shift, int scale) {
-    int srcEnd = src->r;
-    if (end < srcEnd) {
-        srcEnd = end;
-    }
-    int lower = __yesod_rt_max_int(start, src->l);
-    int upper = srcEnd;
-    int hasAcc = acc->l < acc->r;
-    int hasTerm = lower < upper;
-    if (hasAcc == 0 && hasTerm == 0) {
+void __yesod_poly_alloc_zero(YesodPoly *out, int l, int r) {
+    if (l >= r) {
         __yesod_rt_poly_zero(out);
         return;
     }
-    int resultL = 0;
-    int resultR = 0;
-    if (hasAcc != 0) {
-        resultL = acc->l;
-        resultR = acc->r;
-    }
-    if (hasTerm != 0) {
-        int termL = lower - shift;
-        int termR = upper - shift;
-        if (hasAcc != 0) {
-            resultL = __yesod_rt_min_int(resultL, termL);
-            resultR = __yesod_rt_max_int(resultR, termR);
-        } else {
-            resultL = termL;
-            resultR = termR;
-        }
-    }
-    out->n = __yesod_rt_next_pow2(resultR - resultL);
+    out->l = l;
+    out->r = r;
+    out->n = __yesod_rt_next_pow2(r - l);
     out->addr = __yesod_rt_alloc_ints(out->n);
-    out->coeffs = out->addr - resultL;
-    out->l = resultL;
-    out->r = resultR;
+    out->coeffs = out->addr - l;
     for (int i = 0; i < out->n; ++i) {
         out->addr[i] = 0;
-    }
-    for (int i = acc->l; i < acc->r; ++i) {
-        out->coeffs[i] = __yesod_rt_poly_coeff_raw(acc, i);
-    }
-    if (hasTerm == 0) {
-        return;
-    }
-    for (int j = lower; j < upper; ++j) {
-        int dst = j - shift;
-        if (dst >= 0 && dst >= resultL && dst < resultR) {
-            out->coeffs[dst]
-                = __yesod_rt_mint_add(out->coeffs[dst],
-                    __yesod_rt_mint_mul(__yesod_rt_poly_coeff_raw(src, j), scale));
-        }
     }
 }
 
