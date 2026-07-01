@@ -25,6 +25,21 @@ namespace {
     constexpr std::string_view POLY_TYPE = "%struct.YesodPoly";
     constexpr std::string_view PV_TYPE = "%struct.YesodPointValues";
     constexpr int32_t INF_END = 2147483647;
+    constexpr int32_t MINT_MOD = 998244353;
+    constexpr int32_t MONT_U = 998244351;
+    constexpr int32_t MONT_R2 = 932051910;
+
+    int32_t montgomeryReduceConst(int64_t value)
+    {
+        const int32_t q = static_cast<int32_t>(value) * MONT_U;
+        return static_cast<int32_t>(
+            (value + static_cast<int64_t>(MINT_MOD) * q) >> 32);
+    }
+
+    int32_t intToMontgomeryConst(int32_t value)
+    {
+        return montgomeryReduceConst(static_cast<int64_t>(value) * MONT_R2);
+    }
 
     // ─── Name helpers ─────────────────────────────────────────────────────
 
@@ -106,7 +121,14 @@ namespace {
             output << emitType(type, program) << " ";
         }
         MATCH(initializer)
-        WITH([&](const koopa_ir::IntegerLiteral& lit) { output << lit.value; },
+        WITH(
+            [&](const koopa_ir::IntegerLiteral& lit) {
+                if (std::holds_alternative<koopa_ir::MintType>(type)) {
+                    output << intToMontgomeryConst(lit.value);
+                } else {
+                    output << lit.value;
+                }
+            },
             [&](const koopa_ir::UndefValue&) { output << "undef"; },
             [&](const koopa_ir::ZeroInit&) { output << "zeroinitializer"; },
             [&](const yesod::Ref<koopa_ir::AggregateInitializer>& aggRef) {
@@ -779,6 +801,112 @@ namespace {
             return "%" + stem + "_" + std::to_string(helperTempId++);
         };
 
+        auto emitMontgomeryReduce
+            = [&](const std::string& value) -> std::string {
+            const std::string truncated = nextHelperName("mont_trunc");
+            output << "  " << truncated << " = trunc i64 " << value
+                   << " to i32\n";
+            const std::string q = nextHelperName("mont_q");
+            output << "  " << q << " = mul i32 " << truncated << ", " << MONT_U
+                   << "\n";
+            const std::string q64 = nextHelperName("mont_q64");
+            output << "  " << q64 << " = sext i32 " << q << " to i64\n";
+            const std::string mq = nextHelperName("mont_mq");
+            output << "  " << mq << " = mul i64 " << MINT_MOD << ", " << q64
+                   << "\n";
+            const std::string sum = nextHelperName("mont_sum");
+            output << "  " << sum << " = add i64 " << value << ", " << mq
+                   << "\n";
+            const std::string shifted = nextHelperName("mont_shift");
+            output << "  " << shifted << " = ashr i64 " << sum << ", 32\n";
+            const std::string result = nextHelperName("mont_reduce");
+            output << "  " << result << " = trunc i64 " << shifted
+                   << " to i32\n";
+            return result;
+        };
+
+        auto emitIntToMint = [&](const std::string& value) -> std::string {
+            const std::string wide = nextHelperName("mint_i64");
+            output << "  " << wide << " = sext i32 " << value << " to i64\n";
+            const std::string scaled = nextHelperName("mint_r2");
+            output << "  " << scaled << " = mul i64 " << wide << ", " << MONT_R2
+                   << "\n";
+            return emitMontgomeryReduce(scaled);
+        };
+
+        auto emitMintToInt = [&](const std::string& value) -> std::string {
+            const std::string wide = nextHelperName("mint_to_i64");
+            output << "  " << wide << " = sext i32 " << value << " to i64\n";
+            const std::string reduced = emitMontgomeryReduce(wide);
+            const std::string isNegative = nextHelperName("mint_neg");
+            output << "  " << isNegative << " = icmp slt i32 " << reduced
+                   << ", 0\n";
+            const std::string adjusted = nextHelperName("mint_adjusted");
+            output << "  " << adjusted << " = add i32 " << reduced << ", "
+                   << MINT_MOD << "\n";
+            const std::string result = nextHelperName("mint_int");
+            output << "  " << result << " = select i1 " << isNegative
+                   << ", i32 " << adjusted << ", i32 " << reduced << "\n";
+            return result;
+        };
+
+        auto emitMintAddSub
+            = [&](const std::string& lhs, const std::string& rhs,
+                  bool isSub) -> std::string {
+            const std::string raw
+                = nextHelperName(isSub ? "mint_sub" : "mint_add");
+            output << "  " << raw << " = " << (isSub ? "sub" : "add") << " i32 "
+                   << lhs << ", " << rhs << "\n";
+            const std::string isNegative = nextHelperName("mint_fold_neg");
+            output << "  " << isNegative << " = icmp slt i32 " << raw
+                   << ", 0\n";
+            const std::string plus2m = nextHelperName("mint_plus_2m");
+            output << "  " << plus2m << " = add i32 " << raw << ", "
+                   << (2 * MINT_MOD) << "\n";
+            const std::string nonNegative = nextHelperName("mint_nonneg");
+            output << "  " << nonNegative << " = select i1 " << isNegative
+                   << ", i32 " << plus2m << ", i32 " << raw << "\n";
+            const std::string atLeastMod = nextHelperName("mint_ge_mod");
+            output << "  " << atLeastMod << " = icmp sge i32 " << nonNegative
+                   << ", " << MINT_MOD << "\n";
+            const std::string minusMod = nextHelperName("mint_minus_mod");
+            output << "  " << minusMod << " = sub i32 " << nonNegative << ", "
+                   << MINT_MOD << "\n";
+            const std::string result = nextHelperName("mint_folded");
+            output << "  " << result << " = select i1 " << atLeastMod
+                   << ", i32 " << minusMod << ", i32 " << nonNegative << "\n";
+            return result;
+        };
+
+        auto emitMintMul = [&](const std::string& lhs,
+                               const std::string& rhs) -> std::string {
+            const std::string lhs64 = nextHelperName("mint_lhs64");
+            output << "  " << lhs64 << " = sext i32 " << lhs << " to i64\n";
+            const std::string rhs64 = nextHelperName("mint_rhs64");
+            output << "  " << rhs64 << " = sext i32 " << rhs << " to i64\n";
+            const std::string product = nextHelperName("mint_product");
+            output << "  " << product << " = mul i64 " << lhs64 << ", " << rhs64
+                   << "\n";
+            return emitMontgomeryReduce(product);
+        };
+
+        auto emitMintPowConst
+            = [&](const std::string& base, int32_t exponent) -> std::string {
+            std::string result = std::to_string(301989884);
+            std::string power = base;
+            int32_t exp = exponent;
+            while (exp > 0) {
+                if ((exp & 1) != 0) {
+                    result = emitMintMul(result, power);
+                }
+                exp >>= 1;
+                if (exp > 0) {
+                    power = emitMintMul(power, power);
+                }
+            }
+            return result;
+        };
+
         auto valueTypeOf = [&](const koopa_ir::Value& value) -> std::string {
             if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
                 const auto typeIt = valueTypes.find(symbol->spelling);
@@ -858,6 +986,8 @@ namespace {
                 = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&param.type)) {
                 pointees[param.symbol.spelling]
                     = emitType(program[*prefType].pointeeType, program);
+                logicalPointees[param.symbol.spelling]
+                    = logicalTypeOfIrType(program[*prefType].pointeeType);
             }
         }
 
@@ -946,6 +1076,13 @@ namespace {
                                     if (ptIt != pointees.end()) {
                                         pointees[sname] = ptIt->second;
                                     }
+                                    const auto logicalPtIt
+                                        = logicalPointees.find(
+                                            gp.source.spelling);
+                                    if (logicalPtIt != logicalPointees.end()) {
+                                        logicalPointees[sname]
+                                            = logicalPtIt->second;
+                                    }
                                 },
                                 [&](const yesod::Ref<
                                     koopa_ir::GetElementPointerExpr>&
@@ -969,6 +1106,26 @@ namespace {
                                             pointees[sname] = elemTy;
                                         } else {
                                             pointees[sname] = ptIt->second;
+                                        }
+                                    }
+                                    const auto logicalPtIt
+                                        = logicalPointees.find(
+                                            ge.source.spelling);
+                                    if (logicalPtIt != logicalPointees.end()) {
+                                        const std::string& arrType
+                                            = logicalPtIt->second;
+                                        auto xpos = arrType.find(" x ");
+                                        if (xpos != std::string::npos) {
+                                            std::string elemTy
+                                                = arrType.substr(xpos + 3);
+                                            if (!elemTy.empty()
+                                                && elemTy.back() == ']') {
+                                                elemTy.pop_back();
+                                            }
+                                            logicalPointees[sname] = elemTy;
+                                        } else {
+                                            logicalPointees[sname]
+                                                = logicalPtIt->second;
                                         }
                                     }
                                 },
@@ -1094,11 +1251,6 @@ namespace {
                     stmt);
             }
         }
-
-        const bool enableFieldHelpers
-            = std::ranges::any_of(valueTypes, [](const auto& item) -> bool {
-                  return item.second == POLY_TYPE || item.second == PV_TYPE;
-              });
 
         // ── Collect phi edges ──────────────────────────────────────────
         IncomingMap incoming;
@@ -1430,15 +1582,6 @@ namespace {
             return stripPrefix(nextHelperName(stem));
         };
 
-        auto emitMintHelperCall
-            = [&](const std::string& callee, const std::string& lhs,
-                  const std::string& rhs) -> std::string {
-            const std::string result = nextHelperName("mint");
-            output << "  " << result << " = call i32 @" << callee << "(i32 "
-                   << lhs << ", i32 " << rhs << ")\n";
-            return result;
-        };
-
         std::function<std::string(
             yesod::Ref<koopa_ir::PointwiseNode>, const std::string&)>
             emitPointwiseScalar
@@ -1448,7 +1591,11 @@ namespace {
             return MATCH(node.kind) WITH(
                 [&](const koopa_ir::PointwiseLeaf& leaf) -> std::string {
                     if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
-                        return emitValueOperand(leaf.value, program);
+                        const std::string value
+                            = emitValueOperand(leaf.value, program);
+                        return logicalTypeOf(leaf.value) == "mint"
+                            ? value
+                            : emitIntToMint(value);
                     }
                     const std::string pv
                         = emitValueOperand(leaf.value, program);
@@ -1469,18 +1616,15 @@ namespace {
                     const std::string rhs
                         = emitPointwiseScalar(binary.rhs, index);
                     if (binary.op == koopa_ir::PvBinaryOp::times) {
-                        return emitMintHelperCall(
-                            "__yesod_field_mul", lhs, rhs);
+                        return emitMintMul(lhs, rhs);
                     }
-                    const char* callee = "__yesod_field_add";
                     if (binary.op == koopa_ir::PvBinaryOp::sub) {
-                        callee = "__yesod_field_sub";
-                    } else if (binary.op == koopa_ir::PvBinaryOp::mul) {
-                        callee = "__yesod_field_mul";
-                    } else {
-                        callee = "__yesod_field_add";
+                        return emitMintAddSub(lhs, rhs, true);
                     }
-                    return emitMintHelperCall(callee, lhs, rhs);
+                    if (binary.op == koopa_ir::PvBinaryOp::mul) {
+                        return emitMintMul(lhs, rhs);
+                    }
+                    return emitMintAddSub(lhs, rhs, false);
                 });
         };
 
@@ -1643,21 +1787,35 @@ namespace {
                                     const auto& bin = program[binRef];
                                     const std::string lhs_typed = "i32 "
                                         + emitValueOperand(bin.lhs, program);
+                                    const std::string lhs_bare
+                                        = emitValueOperand(bin.lhs, program);
                                     const std::string rhs_bare
                                         = emitValueOperand(bin.rhs, program);
+                                    const bool lhsIsMint
+                                        = logicalTypeOf(bin.lhs) == "mint";
+                                    const bool rhsIsMint
+                                        = logicalTypeOf(bin.rhs) == "mint";
+                                    const bool isMintBinary
+                                        = lhsIsMint || rhsIsMint;
+                                    const std::string lhs_mint
+                                        = !isMintBinary || lhsIsMint
+                                        ? lhs_bare
+                                        : emitIntToMint(lhs_bare);
+                                    const std::string rhs_mint
+                                        = !isMintBinary || rhsIsMint
+                                        ? rhs_bare
+                                        : emitIntToMint(rhs_bare);
                                     using BOp = koopa_ir::BinaryOp;
                                     switch (bin.op) {
                                     case BOp::add:
-                                        if (enableFieldHelpers
-                                            && (logicalTypeOf(bin.lhs) == "mint"
-                                                || logicalTypeOf(bin.rhs)
-                                                    == "mint")) {
+                                        if (isMintBinary) {
+                                            const std::string result
+                                                = emitMintAddSub(
+                                                    lhs_mint, rhs_mint, false);
                                             output << "  "
                                                    << llvmValueName(sname)
-                                                   << " = call i32 "
-                                                      "@__yesod_field_add("
-                                                   << lhs_typed << ", i32 "
-                                                   << rhs_bare << ")\n";
+                                                   << " = add i32 " << result
+                                                   << ", 0\n";
                                         } else {
                                             output << "  "
                                                    << llvmValueName(sname)
@@ -1666,16 +1824,14 @@ namespace {
                                         }
                                         break;
                                     case BOp::sub:
-                                        if (enableFieldHelpers
-                                            && (logicalTypeOf(bin.lhs) == "mint"
-                                                || logicalTypeOf(bin.rhs)
-                                                    == "mint")) {
+                                        if (isMintBinary) {
+                                            const std::string result
+                                                = emitMintAddSub(
+                                                    lhs_mint, rhs_mint, true);
                                             output << "  "
                                                    << llvmValueName(sname)
-                                                   << " = call i32 "
-                                                      "@__yesod_field_sub("
-                                                   << lhs_typed << ", i32 "
-                                                   << rhs_bare << ")\n";
+                                                   << " = add i32 " << result
+                                                   << ", 0\n";
                                         } else {
                                             output << "  "
                                                    << llvmValueName(sname)
@@ -1684,20 +1840,14 @@ namespace {
                                         }
                                         break;
                                     case BOp::mul:
-                                        if (enableFieldHelpers
-                                            && (logicalTypeOf(bin.lhs) == "mint"
-                                                || logicalTypeOf(bin.rhs)
-                                                    == "mint")) {
-                                            output << "  " << sname
-                                                   << "_raw_mint_mul = mul "
-                                                   << lhs_typed << ", "
-                                                   << rhs_bare << "\n";
+                                        if (isMintBinary) {
+                                            const std::string result
+                                                = emitMintMul(
+                                                    lhs_mint, rhs_mint);
                                             output << "  "
                                                    << llvmValueName(sname)
-                                                   << " = call i32 "
-                                                      "@__yesod_field_mul("
-                                                   << lhs_typed << ", i32 "
-                                                   << rhs_bare << ")\n";
+                                                   << " = add i32 " << result
+                                                   << ", 0\n";
                                         } else {
                                             output << "  "
                                                    << llvmValueName(sname)
@@ -1706,16 +1856,17 @@ namespace {
                                         }
                                         break;
                                     case BOp::div:
-                                        if (enableFieldHelpers
-                                            && (logicalTypeOf(bin.lhs) == "mint"
-                                                || logicalTypeOf(bin.rhs)
-                                                    == "mint")) {
+                                        if (isMintBinary) {
+                                            const std::string inverse
+                                                = emitMintPowConst(
+                                                    rhs_mint, MINT_MOD - 2);
+                                            const std::string result
+                                                = emitMintMul(
+                                                    lhs_mint, inverse);
                                             output << "  "
                                                    << llvmValueName(sname)
-                                                   << " = call i32 "
-                                                      "@__yesod_field_div("
-                                                   << lhs_typed << ", i32 "
-                                                   << rhs_bare << ")\n";
+                                                   << " = add i32 " << result
+                                                   << ", 0\n";
                                         } else {
                                             output << "  "
                                                    << llvmValueName(sname)
@@ -1891,11 +2042,15 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::ConversionExpr>&
                                         convRef) {
                                     const auto& conv = program[convRef];
-                                    output
-                                        << "  " << llvmValueName(sname)
-                                        << " = add i32 "
-                                        << emitValueOperand(conv.value, program)
-                                        << ", 0\n";
+                                    const std::string input
+                                        = emitValueOperand(conv.value, program);
+                                    const std::string converted = conv.op
+                                            == koopa_ir::ConversionOp::int2mint
+                                        ? emitIntToMint(input)
+                                        : emitMintToInt(input);
+                                    output << "  " << llvmValueName(sname)
+                                           << " = add i32 " << converted
+                                           << ", 0\n";
                                 },
                                 [&](const yesod::Ref<koopa_ir::CopyExpr>&
                                         copyRef) {
@@ -2111,6 +2266,14 @@ namespace {
                                             ? emitValueOperand(
                                                   *term.end, program)
                                             : std::to_string(INF_END);
+                                        const std::string rawScale
+                                            = emitValueOperand(
+                                                term.scale, program);
+                                        const std::string scaleValue
+                                            = logicalTypeOf(term.scale)
+                                                == "mint"
+                                            ? rawScale
+                                            : emitIntToMint(rawScale);
                                         emitPolyHelperTo(result,
                                             "__yesod_poly_combine_term",
                                             "ptr " + accPtr + ", ptr " + srcPtr
@@ -2120,9 +2283,7 @@ namespace {
                                                 + ", i32 " + endValue + ", i32 "
                                                 + emitValueOperand(
                                                     term.shift, program)
-                                                + ", i32 "
-                                                + emitValueOperand(
-                                                    term.scale, program));
+                                                + ", i32 " + scaleValue);
                                         if (accOwned) {
                                             emitOwnedPtrDrop(
                                                 std::string(POLY_TYPE), accPtr);
@@ -2173,10 +2334,16 @@ namespace {
                                                << " = getelementptr "
                                                << arrayType << ", ptr " << slot
                                                << ", i32 0, i32 " << i << "\n";
-                                        output << "  store i32 "
-                                               << emitValueOperand(
-                                                      construct.elements[i],
-                                                      program)
+                                        const std::string rawElement
+                                            = emitValueOperand(
+                                                construct.elements[i], program);
+                                        const std::string element
+                                            = logicalTypeOf(
+                                                  construct.elements[i])
+                                                == "mint"
+                                            ? rawElement
+                                            : emitIntToMint(rawElement);
+                                        output << "  store i32 " << element
                                                << ", ptr " << elementPtr
                                                << "\n";
                                     }
@@ -2210,10 +2377,17 @@ namespace {
                                 ? ptIt->second
                                 : "i32";
                             std::string storeValue;
+                            std::string storeLogicalType = "int";
                             MATCH(store.value)
                             WITH(
                                 [&](const koopa_ir::Symbol& sv) {
                                     storeValue = llvmValueName(sv.spelling);
+                                    const auto logicalIt
+                                        = logicalTypes.find(sv.spelling);
+                                    storeLogicalType
+                                        = logicalIt == logicalTypes.end()
+                                        ? "int"
+                                        : logicalIt->second;
                                 },
                                 [&](const koopa_ir::IntegerLiteral& sv) {
                                     storeValue = std::to_string(sv.value);
@@ -2232,6 +2406,20 @@ namespace {
                                 emitOwnedPtrDrop(std::string(POLY_TYPE),
                                     llvmValueName(store.destination.spelling));
                                 storeValue = emitPolyCloneValue(storeValue);
+                            } else {
+                                const auto logicalPtIt = logicalPointees.find(
+                                    store.destination.spelling);
+                                const std::string logicalElemTy
+                                    = logicalPtIt == logicalPointees.end()
+                                    ? "int"
+                                    : logicalPtIt->second;
+                                if (elemTy == "i32" && logicalElemTy == "mint"
+                                    && storeLogicalType != "mint") {
+                                    if (storeValue != "undef"
+                                        && storeValue != "zeroinitializer") {
+                                        storeValue = emitIntToMint(storeValue);
+                                    }
+                                }
                             }
                             output << "  store " << elemTy << " " << storeValue
                                    << ", ptr "

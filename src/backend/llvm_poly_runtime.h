@@ -27,21 +27,48 @@ typedef struct YesodPointValues {
 } YesodPointValues;
 
 static const int MOD = 998244353;
+static const int MONT_R = 301989884;
+static const int MONT_R2 = 932051910;
+static const int MONT_U = 998244351;
 
-static int __yesod_rt_mint_norm(i64 value) {
-    value %= MOD;
-    if (value < 0) {
-        value += MOD;
-    }
-    return (int)value;
+static int __yesod_rt_mont_reduce(i64 value) {
+    int q = (int)value * MONT_U;
+    return (int)((value + (i64)MOD * q) >> 32);
 }
 
-static int __yesod_rt_mint_add(int a, int b) { return __yesod_rt_mint_norm((i64)a + b); }
-static int __yesod_rt_mint_sub(int a, int b) { return __yesod_rt_mint_norm((i64)a - b); }
-static int __yesod_rt_mint_mul(int a, int b) { return __yesod_rt_mint_norm((i64)a * b); }
+static int __yesod_rt_mint_from_int(int value) {
+    return __yesod_rt_mont_reduce((i64)value * MONT_R2);
+}
+
+static int __yesod_rt_mint_to_int(int value) {
+    int result = __yesod_rt_mont_reduce(value);
+    return result < 0 ? result + MOD : result;
+}
+
+static int __yesod_rt_mint_fold(int value) {
+    if (value < 0) {
+        value += MOD * 2;
+    }
+    if (value >= MOD) {
+        value -= MOD;
+    }
+    return value;
+}
+
+static int __yesod_rt_mint_add(int a, int b) {
+    return __yesod_rt_mint_fold(a + b);
+}
+
+static int __yesod_rt_mint_sub(int a, int b) {
+    return __yesod_rt_mint_fold(a - b);
+}
+
+static int __yesod_rt_mint_mul(int a, int b) {
+    return __yesod_rt_mont_reduce((i64)a * b);
+}
 
 static int __yesod_rt_mint_pow(int base, int exp) {
-    int result = 1;
+    int result = MONT_R;
     while (exp > 0) {
         if ((exp & 1) != 0) {
             result = __yesod_rt_mint_mul(result, base);
@@ -157,7 +184,7 @@ void __yesod_poly_construct(YesodPoly *out, int *coeffs, int count) {
         out->addr[i] = 0;
     }
     for (int i = 0; i < count; ++i) {
-        out->coeffs[i] = __yesod_rt_mint_norm(coeffs[i]);
+        out->coeffs[i] = coeffs[i];
     }
 }
 
@@ -244,12 +271,12 @@ static void __yesod_rt_transform(int *out, const int *in, int length, int invers
     if (length <= 0) {
         return;
     }
-    int root = __yesod_rt_mint_pow(3, (MOD - 1) / length);
+    int root = __yesod_rt_mint_pow(__yesod_rt_mint_from_int(3), (MOD - 1) / length);
     if (inverse != 0) {
         root = __yesod_rt_mint_inv(root);
     }
     for (int j = 0; j < length; ++j) {
-        int power = 1;
+        int power = MONT_R;
         int step = __yesod_rt_mint_pow(root, j);
         int sum = 0;
         for (int k = 0; k < length; ++k) {
@@ -259,7 +286,7 @@ static void __yesod_rt_transform(int *out, const int *in, int length, int invers
         out[j] = sum;
     }
     if (inverse != 0) {
-        int invLength = __yesod_rt_mint_inv(length);
+        int invLength = __yesod_rt_mint_inv(__yesod_rt_mint_from_int(length));
         for (int i = 0; i < length; ++i) {
             out[i] = __yesod_rt_mint_mul(out[i], invLength);
         }
