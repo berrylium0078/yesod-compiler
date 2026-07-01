@@ -1166,14 +1166,17 @@ namespace {
             const std::string s0 = nextHelperName("poly_zero");
             const std::string s1 = nextHelperName("poly_zero");
             const std::string s2 = nextHelperName("poly_zero");
+            const std::string s3 = nextHelperName("poly_zero");
             output << "  " << s0 << " = insertvalue " << POLY_TYPE
                    << " undef, ptr null, 0\n";
             output << "  " << s1 << " = insertvalue " << POLY_TYPE << " " << s0
-                   << ", i32 0, 1\n";
+                   << ", ptr null, 1\n";
             output << "  " << s2 << " = insertvalue " << POLY_TYPE << " " << s1
                    << ", i32 0, 2\n";
+            output << "  " << s3 << " = insertvalue " << POLY_TYPE << " " << s2
+                   << ", i32 0, 3\n";
             output << "  " << result << " = insertvalue " << POLY_TYPE << " "
-                   << s2 << ", i32 0, 3\n";
+                   << s3 << ", i32 0, 4\n";
         };
 
         auto emitPolyHelperTo
@@ -1897,15 +1900,15 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::GetAttrExpr>&
                                         getAttrRef) {
                                     const auto& getAttr = program[getAttrRef];
-                                    const int32_t index
-                                        = (getAttr.attr
-                                                  == koopa_ir::PolyAttr::base
-                                              || getAttr.attr
-                                                  == koopa_ir::PolyAttr::addr)
+                                    const int32_t index = getAttr.attr
+                                            == koopa_ir::PolyAttr::base
                                         ? 0
-                                        : (getAttr.attr == koopa_ir::PolyAttr::l
-                                                  ? 2
-                                                  : 3);
+                                        : getAttr.attr
+                                            == koopa_ir::PolyAttr::addr
+                                        ? 1
+                                        : getAttr.attr == koopa_ir::PolyAttr::l
+                                        ? 3
+                                        : 4;
                                     output << "  " << llvmValueName(sname)
                                            << " = extractvalue " << POLY_TYPE
                                            << " "
@@ -1916,25 +1919,37 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::SetAttrExpr>&
                                         setAttrRef) {
                                     const auto& setAttr = program[setAttrRef];
-                                    const std::string input
-                                        = emitPolyPtr(emitValueOperand(
-                                            setAttr.value, program));
+                                    if (const auto* symbol
+                                        = std::get_if<koopa_ir::Symbol>(
+                                            &setAttr.value)) {
+                                        movedValuesInStatement.insert(
+                                            symbol->spelling);
+                                    }
+                                    const std::string input = emitValueOperand(
+                                        setAttr.value, program);
                                     const std::string value = emitValueOperand(
                                         setAttr.attrValue, program);
-                                    if (setAttr.attr == koopa_ir::PolyAttr::l) {
-                                        emitPolyHelperTo(llvmValueName(sname),
-                                            "__yesod_poly_set_l",
-                                            "ptr " + input + ", i32 " + value);
-                                    } else if (setAttr.attr
-                                        == koopa_ir::PolyAttr::r) {
-                                        emitPolyHelperTo(llvmValueName(sname),
-                                            "__yesod_poly_set_r",
-                                            "ptr " + input + ", i32 " + value);
-                                    } else {
-                                        emitPolyHelperTo(llvmValueName(sname),
-                                            "__yesod_poly_set_ptr",
-                                            "ptr " + input + ", ptr " + value);
-                                    }
+                                    const int32_t index = setAttr.attr
+                                            == koopa_ir::PolyAttr::base
+                                        ? 0
+                                        : setAttr.attr
+                                            == koopa_ir::PolyAttr::addr
+                                        ? 1
+                                        : setAttr.attr == koopa_ir::PolyAttr::l
+                                        ? 3
+                                        : 4;
+                                    const std::string valueType
+                                        = (setAttr.attr
+                                                  == koopa_ir::PolyAttr::base
+                                              || setAttr.attr
+                                                  == koopa_ir::PolyAttr::addr)
+                                        ? "ptr"
+                                        : "i32";
+                                    output << "  " << llvmValueName(sname)
+                                           << " = insertvalue " << POLY_TYPE
+                                           << " " << input << ", " << valueType
+                                           << " " << value << ", " << index
+                                           << "\n";
                                 },
                                 [&](const yesod::Ref<koopa_ir::SelectExpr>&
                                         selectRef) {
