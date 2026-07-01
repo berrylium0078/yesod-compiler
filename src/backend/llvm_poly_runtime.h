@@ -30,6 +30,17 @@ static const int MOD = 998244353;
 static const int MONT_R = 301989884;
 static const int MONT_R2 = 932051910;
 static const int MONT_U = 998244351;
+static const int YESOD_MAX_LOGN = 23;
+static const int YESOD_NTT_ROOTS[24] = { 301989884, -301989884, -306948983,
+    -109640866, 54518517, -429836493, 232329203, 34051923, 5152499, -252999103,
+    -173318384, -181472998, -224654934, 272471756, -326751991, 269053879,
+    50676799, 280400066, -343413670, 441361737, 219694500, 173964571,
+    260083352, -216872702 };
+static const int YESOD_NTT_IROOTS[24] = { 301989884, -301989884, 306948983,
+    307583142, -49870511, -83114827, 188046825, 307336038, -336865748,
+    -138951703, 446928399, 99752712, -405289730, 154089990, -249951332,
+    -137071299, 266982935, -150170224, -312576529, 255387832, 323328994,
+    -335667732, -447228759, -41915020 };
 
 static int __yesod_rt_mont_reduce(i64 value) {
     int q = (int)value * MONT_U;
@@ -93,6 +104,12 @@ static int *__yesod_rt_alloc_ints(int count) {
     return (int *)malloc((usize)count * sizeof(int));
 }
 
+void __yesod_rt_free_ints(int *ptr) {
+    if (ptr != (int *)0) {
+        free(ptr);
+    }
+}
+
 static int __yesod_rt_next_pow2(int value) {
     if (value <= 1) {
         return 1;
@@ -112,84 +129,25 @@ static int __yesod_rt_mod_index(int value, int length) {
     return index;
 }
 
-static int __yesod_rt_poly_coeff_raw(const YesodPoly *poly, int index) {
-    if (!(index >= poly->l && index < poly->r)) {
+int __yesod_poly_getcoeff_data(int *coeffs, int l, int r, int index) {
+    if (!(index >= l && index < r)) {
         return 0;
     }
-    return poly->coeffs[index];
-}
-
-static void __yesod_rt_poly_zero(YesodPoly *out) {
-    out->coeffs = (int *)0;
-    out->addr = (int *)0;
-    out->n = 0;
-    out->l = 0;
-    out->r = 0;
-}
-
-void __yesod_poly_drop(YesodPoly *poly) {
-    if (poly->addr != (int *)0) {
-        free(poly->addr);
-    }
-    __yesod_rt_poly_zero(poly);
-}
-
-void __yesod_pv_drop(YesodPointValues *pv) {
-    if (pv->values != (int *)0) {
-        free(pv->values);
-    }
-    pv->values = (int *)0;
-    pv->len = 0;
-}
-
-void __yesod_pv_alloc(YesodPointValues *out, int length) {
-    out->len = length;
-    out->values = __yesod_rt_alloc_ints(length);
+    return coeffs[index];
 }
 
 static int __yesod_rt_max_int(int a, int b) { return a > b ? a : b; }
 static int __yesod_rt_min_int(int a, int b) { return a < b ? a : b; }
 
-void __yesod_poly_clone(YesodPoly *out, const YesodPoly *input) {
-    out->l = input->l;
-    out->r = input->r;
-    out->n = input->n;
-    if (input->addr == (int *)0 || input->n <= 0) {
-        out->coeffs = (int *)0;
-        out->addr = (int *)0;
-        out->n = 0;
-        return;
+int *__yesod_poly_clone_data(int *addr, int n) {
+    if (addr == (int *)0 || n <= 0) {
+        return (int *)0;
     }
-    i64 offset = input->coeffs - input->addr;
-    out->addr = __yesod_rt_alloc_ints(input->n);
-    out->coeffs = out->addr + offset;
-    for (int i = 0; i < input->n; ++i) {
-        out->addr[i] = input->addr[i];
+    int *out = __yesod_rt_alloc_ints(n);
+    for (int i = 0; i < n; ++i) {
+        out[i] = addr[i];
     }
-}
-
-void __yesod_poly_construct(YesodPoly *out, int *coeffs, int count) {
-    out->l = 0;
-    out->r = count;
-    if (count <= 0) {
-        out->coeffs = (int *)0;
-        out->addr = (int *)0;
-        out->n = 0;
-        return;
-    }
-    out->n = __yesod_rt_next_pow2(count);
-    out->addr = __yesod_rt_alloc_ints(out->n);
-    out->coeffs = out->addr;
-    for (int i = 0; i < out->n; ++i) {
-        out->addr[i] = 0;
-    }
-    for (int i = 0; i < count; ++i) {
-        out->coeffs[i] = coeffs[i];
-    }
-}
-
-int __yesod_poly_getcoeff(const YesodPoly *poly, int index) {
-    return __yesod_rt_poly_coeff_raw(poly, index);
+    return out;
 }
 
 int __yesod_field_add(int lhs, int rhs) {
@@ -212,128 +170,131 @@ int __yesod_next_pow2(int value) {
     return __yesod_rt_next_pow2(value);
 }
 
-void __yesod_poly_alloc_zero(YesodPoly *out, int l, int r) {
+int *__yesod_poly_alloc_zero_data(int l, int r) {
     if (l >= r) {
-        __yesod_rt_poly_zero(out);
-        return;
+        return (int *)0;
     }
-    out->l = l;
-    out->r = r;
-    out->n = __yesod_rt_next_pow2(r - l);
-    out->addr = __yesod_rt_alloc_ints(out->n);
-    out->coeffs = out->addr - l;
-    for (int i = 0; i < out->n; ++i) {
-        out->addr[i] = 0;
+    int n = __yesod_rt_next_pow2(r - l);
+    int *addr = __yesod_rt_alloc_ints(n);
+    for (int i = 0; i < n; ++i) {
+        addr[i] = 0;
     }
+    return addr;
 }
 
 static void __yesod_rt_transform(int *out, const int *in, int length, int inverse) {
     if (length <= 0) {
         return;
     }
-    int root = __yesod_rt_mint_pow(__yesod_rt_mint_from_int(3), (MOD - 1) / length);
-    if (inverse != 0) {
-        root = __yesod_rt_mint_inv(root);
+    for (int i = 0; i < length; ++i) {
+        out[i] = in[i];
     }
-    for (int j = 0; j < length; ++j) {
-        int power = MONT_R;
-        int step = __yesod_rt_mint_pow(root, j);
-        int sum = 0;
-        for (int k = 0; k < length; ++k) {
-            sum = __yesod_rt_mint_add(sum, __yesod_rt_mint_mul(in[k], power));
-            power = __yesod_rt_mint_mul(power, step);
-        }
-        out[j] = sum;
+
+    int logn = 0;
+    int power = 1;
+    while (power < length && logn < YESOD_MAX_LOGN) {
+        ++logn;
+        power <<= 1;
     }
-    if (inverse != 0) {
-        int invLength = __yesod_rt_mint_inv(__yesod_rt_mint_from_int(length));
-        for (int i = 0; i < length; ++i) {
-            out[i] = __yesod_rt_mint_mul(out[i], invLength);
+    if (power != length) {
+        return;
+    }
+
+    if (inverse == 0) {
+        int k = logn;
+        int len = length;
+        int half = length / 2;
+        while (k >= 1) {
+            int wlen = YESOD_NTT_ROOTS[k];
+            int i = 0;
+            while (i < length) {
+                int w = MONT_R;
+                int j = 0;
+                while (j < half) {
+                    int u = out[i + j];
+                    int v = out[i + j + half];
+                    out[i + j] = __yesod_rt_mint_add(u, v);
+                    out[i + j + half]
+                        = __yesod_rt_mint_mul(__yesod_rt_mint_sub(u, v), w);
+                    w = __yesod_rt_mint_mul(w, wlen);
+                    ++j;
+                }
+                i += len;
+            }
+            len = half;
+            half /= 2;
+            --k;
         }
+        return;
+    }
+
+    int k = 1;
+    int len = 2;
+    int half = 1;
+    while (k <= logn) {
+        int wlen = YESOD_NTT_IROOTS[k];
+        int i = 0;
+        while (i < length) {
+            int w = MONT_R;
+            int j = 0;
+            while (j < half) {
+                int u = out[i + j];
+                int v = __yesod_rt_mint_mul(out[i + j + half], w);
+                out[i + j] = __yesod_rt_mint_add(u, v);
+                out[i + j + half] = __yesod_rt_mint_sub(u, v);
+                w = __yesod_rt_mint_mul(w, wlen);
+                ++j;
+            }
+            i += len;
+        }
+        ++k;
+        half = len;
+        len += len;
+    }
+
+    int invLength = __yesod_rt_mint_inv(__yesod_rt_mint_from_int(length));
+    for (int i = 0; i < length; ++i) {
+        out[i] = __yesod_rt_mint_mul(out[i], invLength);
     }
 }
 
-void __yesod_poly_ntt(
-    YesodPointValues *out, const YesodPoly *poly, int length) {
-    out->len = length;
-    out->values = __yesod_rt_alloc_ints(length);
+int *__yesod_poly_ntt_data(int *coeffs, int l, int r, int length) {
+    int *values = __yesod_rt_alloc_ints(length);
     if (length <= 0) {
-        return;
+        return values;
     }
     int *folded = __yesod_rt_alloc_ints(length);
     for (int i = 0; i < length; ++i) {
         folded[i] = 0;
     }
-    for (int i = poly->l; i < poly->r; ++i) {
+    for (int i = l; i < r; ++i) {
         int foldedIndex = __yesod_rt_mod_index(i, length);
         folded[foldedIndex] = __yesod_rt_mint_add(
-            folded[foldedIndex], __yesod_rt_poly_coeff_raw(poly, i));
+            folded[foldedIndex], __yesod_poly_getcoeff_data(coeffs, l, r, i));
     }
-    __yesod_rt_transform(out->values, folded, length, 0);
+    __yesod_rt_transform(values, folded, length, 0);
     free(folded);
+    return values;
 }
 
-void __yesod_poly_from_pointwise(
-    YesodPoly *out, const YesodPointValues *pv, int activeL, int activeR) {
+int *__yesod_poly_from_pointwise_data(
+    int *values, int len, int activeL, int activeR) {
     if (activeL >= activeR) {
-        __yesod_rt_poly_zero(out);
-        return;
+        return (int *)0;
     }
-    int *coeffs = __yesod_rt_alloc_ints(pv->len);
-    __yesod_rt_transform(coeffs, pv->values, pv->len, 1);
-    out->l = activeL;
-    out->r = activeR;
-    out->n = __yesod_rt_next_pow2(activeR - activeL);
-    out->addr = __yesod_rt_alloc_ints(out->n);
-    out->coeffs = out->addr - activeL;
-    for (int i = 0; i < out->n; ++i) {
-        out->addr[i] = 0;
+    int *coeffs = __yesod_rt_alloc_ints(len);
+    __yesod_rt_transform(coeffs, values, len, 1);
+    int n = __yesod_rt_next_pow2(activeR - activeL);
+    int *addr = __yesod_rt_alloc_ints(n);
+    int *outCoeffs = addr - activeL;
+    for (int i = 0; i < n; ++i) {
+        addr[i] = 0;
     }
     for (int i = activeL; i < activeR; ++i) {
-        out->coeffs[i] = coeffs[__yesod_rt_mod_index(i, pv->len)];
+        outCoeffs[i] = coeffs[__yesod_rt_mod_index(i, len)];
     }
     free(coeffs);
-}
-
-void __yesod_poly_take_pointwise(
-    YesodPoly *out, YesodPointValues *pv, int activeL, int activeR) {
-    if (activeL >= activeR) {
-        __yesod_rt_poly_zero(out);
-        __yesod_pv_drop(pv);
-        return;
-    }
-    int *input = __yesod_rt_alloc_ints(pv->len);
-    for (int i = 0; i < pv->len; ++i) {
-        input[i] = pv->values[i];
-    }
-    __yesod_rt_transform(pv->values, input, pv->len, 1);
-    free(input);
-
-    int activeLen = activeR - activeL;
-    int start = __yesod_rt_mod_index(activeL, pv->len);
-    if (start + activeLen <= pv->len && activeLen * 4 >= pv->len) {
-        out->l = activeL;
-        out->r = activeR;
-        out->n = pv->len;
-        out->addr = pv->values;
-        out->coeffs = pv->values + start - activeL;
-        pv->values = (int *)0;
-        pv->len = 0;
-        return;
-    }
-
-    out->l = activeL;
-    out->r = activeR;
-    out->n = __yesod_rt_next_pow2(activeLen);
-    out->addr = __yesod_rt_alloc_ints(out->n);
-    out->coeffs = out->addr - activeL;
-    for (int i = 0; i < out->n; ++i) {
-        out->addr[i] = 0;
-    }
-    for (int i = activeL; i < activeR; ++i) {
-        out->coeffs[i] = pv->values[__yesod_rt_mod_index(i, pv->len)];
-    }
-    __yesod_pv_drop(pv);
+    return addr;
 }
 )";
 

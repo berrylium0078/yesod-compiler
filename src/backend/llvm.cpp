@@ -746,6 +746,8 @@ namespace {
         output << "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:"
                   "64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
         output << "target triple = \"x86_64-pc-linux-gnu\"\n\n";
+        output << "%struct.YesodPoly = type { ptr, ptr, i32, i32, i32 }\n";
+        output << "%struct.YesodPointValues = type { ptr, i32 }\n\n";
     }
 
     void emitGlobalDecl(const koopa_ir::GlobalMemoryDef& global,
@@ -1292,32 +1294,122 @@ namespace {
         }
         output << ") {\n";
 
-        auto emitStackValue
-            = [&](const std::string& type, const std::string& value,
-                  const std::string& stem) -> std::string {
-            const std::string slot = nextHelperName(stem + "_slot");
-            output << "  " << slot << " = alloca " << type << "\n";
-            output << "  store " << type << " " << value << ", ptr " << slot
-                   << "\n";
-            return slot;
+        struct PolyFields {
+            std::string coeffs;
+            std::string addr;
+            std::string n;
+            std::string l;
+            std::string r;
         };
 
-        auto emitAggregateLoad
-            = [&](const std::string& result, const std::string& type,
-                  const std::string& slot) -> void {
-            output << "  " << result << " = load " << type << ", ptr " << slot
-                   << "\n";
+        struct PvFields {
+            std::string values;
+            std::string len;
+        };
+
+        auto emitPolyFromFields
+            = [&](const std::string& result, const PolyFields& fields) -> void {
+            const std::string s0 = nextHelperName("poly_make");
+            const std::string s1 = nextHelperName("poly_make");
+            const std::string s2 = nextHelperName("poly_make");
+            const std::string s3 = nextHelperName("poly_make");
+            output << "  " << s0 << " = insertvalue " << POLY_TYPE
+                   << " undef, ptr " << fields.coeffs << ", 0\n";
+            output << "  " << s1 << " = insertvalue " << POLY_TYPE << " " << s0
+                   << ", ptr " << fields.addr << ", 1\n";
+            output << "  " << s2 << " = insertvalue " << POLY_TYPE << " " << s1
+                   << ", i32 " << fields.n << ", 2\n";
+            output << "  " << s3 << " = insertvalue " << POLY_TYPE << " " << s2
+                   << ", i32 " << fields.l << ", 3\n";
+            output << "  " << result << " = insertvalue " << POLY_TYPE << " "
+                   << s3 << ", i32 " << fields.r << ", 4\n";
+        };
+
+        auto emitPvFromFields
+            = [&](const std::string& result, const PvFields& fields) -> void {
+            const std::string s0 = nextHelperName("pv_make");
+            output << "  " << s0 << " = insertvalue " << PV_TYPE
+                   << " undef, ptr " << fields.values << ", 0\n";
+            output << "  " << result << " = insertvalue " << PV_TYPE << " "
+                   << s0 << ", i32 " << fields.len << ", 1\n";
+        };
+
+        auto emitPolyFields = [&](const std::string& value) -> PolyFields {
+            PolyFields fields {
+                .coeffs = nextHelperName("poly_coeffs"),
+                .addr = nextHelperName("poly_addr"),
+                .n = nextHelperName("poly_n"),
+                .l = nextHelperName("poly_l"),
+                .r = nextHelperName("poly_r"),
+            };
+            output << "  " << fields.coeffs << " = extractvalue " << POLY_TYPE
+                   << " " << value << ", 0\n";
+            output << "  " << fields.addr << " = extractvalue " << POLY_TYPE
+                   << " " << value << ", 1\n";
+            output << "  " << fields.n << " = extractvalue " << POLY_TYPE << " "
+                   << value << ", 2\n";
+            output << "  " << fields.l << " = extractvalue " << POLY_TYPE << " "
+                   << value << ", 3\n";
+            output << "  " << fields.r << " = extractvalue " << POLY_TYPE << " "
+                   << value << ", 4\n";
+            return fields;
+        };
+
+        auto emitPvFields = [&](const std::string& value) -> PvFields {
+            PvFields fields {
+                .values = nextHelperName("pv_values"),
+                .len = nextHelperName("pv_len"),
+            };
+            output << "  " << fields.values << " = extractvalue " << PV_TYPE
+                   << " " << value << ", 0\n";
+            output << "  " << fields.len << " = extractvalue " << PV_TYPE << " "
+                   << value << ", 1\n";
+            return fields;
+        };
+
+        auto emitPolyCoeffPtrForAddr
+            = [&](const std::string& addr, const std::string& l,
+                  const std::string& isEmpty) -> std::string {
+            const std::string negL = nextHelperName("poly_neg_l");
+            output << "  " << negL << " = sub i32 0, " << l << "\n";
+            const std::string raw = nextHelperName("poly_coeffs_from_addr");
+            output << "  " << raw << " = getelementptr i32, ptr " << addr
+                   << ", i32 " << negL << "\n";
+            const std::string coeffs = nextHelperName("poly_coeffs_select");
+            output << "  " << coeffs << " = select i1 " << isEmpty
+                   << ", ptr null, ptr " << raw << "\n";
+            return coeffs;
         };
 
         auto emitPolyCloneTo
             = [&](const std::string& result, const std::string& value) -> void {
-            const std::string input
-                = emitStackValue(std::string(POLY_TYPE), value, "poly_in");
-            const std::string outputSlot = nextHelperName("poly_out");
-            output << "  " << outputSlot << " = alloca " << POLY_TYPE << "\n";
-            output << "  call void @__yesod_poly_clone(ptr " << outputSlot
-                   << ", ptr " << input << ")\n";
-            emitAggregateLoad(result, std::string(POLY_TYPE), outputSlot);
+            const PolyFields input = emitPolyFields(value);
+            const std::string clonedAddr = nextHelperName("poly_clone_addr");
+            output << "  " << clonedAddr
+                   << " = call ptr @__yesod_poly_clone_data(ptr " << input.addr
+                   << ", i32 " << input.n << ")\n";
+            const std::string inputCoeffsInt = nextHelperName("poly_coeff_i");
+            const std::string inputAddrInt = nextHelperName("poly_addr_i");
+            const std::string byteOffset = nextHelperName("poly_byte_offset");
+            const std::string elemOffset = nextHelperName("poly_elem_offset");
+            const std::string clonedCoeffs
+                = nextHelperName("poly_clone_coeffs");
+            output << "  " << inputCoeffsInt << " = ptrtoint ptr "
+                   << input.coeffs << " to i64\n";
+            output << "  " << inputAddrInt << " = ptrtoint ptr " << input.addr
+                   << " to i64\n";
+            output << "  " << byteOffset << " = sub i64 " << inputCoeffsInt
+                   << ", " << inputAddrInt << "\n";
+            output << "  " << elemOffset << " = sdiv i64 " << byteOffset
+                   << ", 4\n";
+            output << "  " << clonedCoeffs << " = getelementptr i32, ptr "
+                   << clonedAddr << ", i64 " << elemOffset << "\n";
+            emitPolyFromFields(result,
+                PolyFields { .coeffs = clonedCoeffs,
+                    .addr = clonedAddr,
+                    .n = input.n,
+                    .l = input.l,
+                    .r = input.r });
         };
 
         auto emitPolyCloneValue = [&](const std::string& value) -> std::string {
@@ -1343,46 +1435,16 @@ namespace {
                    << s3 << ", i32 0, 4\n";
         };
 
-        auto emitPolyHelperTo
-            = [&](const std::string& result, const std::string& callee,
-                  const std::string& args) -> void {
-            const std::string outputSlot = nextHelperName("poly_out");
-            output << "  " << outputSlot << " = alloca " << POLY_TYPE << "\n";
-            output << "  call void @" << callee << "(ptr " << outputSlot;
-            if (!args.empty()) {
-                output << ", " << args;
-            }
-            output << ")\n";
-            emitAggregateLoad(result, std::string(POLY_TYPE), outputSlot);
-        };
-
-        auto emitPvHelperTo
-            = [&](const std::string& result, const std::string& callee,
-                  const std::string& args) -> void {
-            const std::string outputSlot = nextHelperName("pv_out");
-            output << "  " << outputSlot << " = alloca " << PV_TYPE << "\n";
-            output << "  call void @" << callee << "(ptr " << outputSlot;
-            if (!args.empty()) {
-                output << ", " << args;
-            }
-            output << ")\n";
-            emitAggregateLoad(result, std::string(PV_TYPE), outputSlot);
-        };
-
-        auto emitPolyPtr = [&](const std::string& value) -> std::string {
-            return emitStackValue(std::string(POLY_TYPE), value, "poly_arg");
-        };
-
-        auto emitPvPtr = [&](const std::string& value) -> std::string {
-            return emitStackValue(std::string(PV_TYPE), value, "pv_arg");
-        };
-
-        auto emitOwnedPtrDrop
-            = [&](const std::string& type, const std::string& ptr) -> void {
+        auto emitOwnedValueDropByType
+            = [&](const std::string& type, const std::string& value) -> void {
             if (type == POLY_TYPE) {
-                output << "  call void @__yesod_poly_drop(ptr " << ptr << ")\n";
+                const PolyFields fields = emitPolyFields(value);
+                output << "  call void @__yesod_rt_free_ints(ptr "
+                       << fields.addr << ")\n";
             } else if (type == PV_TYPE) {
-                output << "  call void @__yesod_pv_drop(ptr " << ptr << ")\n";
+                const PvFields fields = emitPvFields(value);
+                output << "  call void @__yesod_rt_free_ints(ptr "
+                       << fields.values << ")\n";
             }
         };
 
@@ -1392,9 +1454,7 @@ namespace {
                 || !isOwnedTypeString(typeIt->second)) {
                 return;
             }
-            const std::string slot = emitStackValue(
-                typeIt->second, llvmValueName(symbolName), "drop");
-            emitOwnedPtrDrop(typeIt->second, slot);
+            emitOwnedValueDropByType(typeIt->second, llvmValueName(symbolName));
         };
 
         auto emitOwnedValueDrops = [&](const SymbolSet& values) -> void {
@@ -1409,7 +1469,10 @@ namespace {
             MATCH(type)
             WITH(
                 [&](const koopa_ir::PolyType&) -> void {
-                    emitOwnedPtrDrop(std::string(POLY_TYPE), ptr);
+                    const std::string value = nextHelperName("poly_storage");
+                    output << "  " << value << " = load " << POLY_TYPE
+                           << ", ptr " << ptr << "\n";
+                    emitOwnedValueDropByType(std::string(POLY_TYPE), value);
                 },
                 [](const koopa_ir::I32Type&) -> void { },
                 [](const koopa_ir::MintType&) -> void { },
@@ -2172,13 +2235,21 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::NttExpr>&
                                         nttRef) {
                                     const auto& ntt = program[nttRef];
-                                    const std::string input = emitPolyPtr(
+                                    const PolyFields input = emitPolyFields(
                                         emitValueOperand(ntt.value, program));
-                                    emitPvHelperTo(llvmValueName(sname),
-                                        "__yesod_poly_ntt",
-                                        "ptr " + input + ", i32 "
-                                            + emitValueOperand(
-                                                ntt.length, program));
+                                    const std::string length
+                                        = emitValueOperand(ntt.length, program);
+                                    const std::string values
+                                        = nextHelperName("pv_ntt_values");
+                                    output << "  " << values
+                                           << " = call ptr "
+                                              "@__yesod_poly_ntt_data(ptr "
+                                           << input.coeffs << ", i32 "
+                                           << input.l << ", i32 " << input.r
+                                           << ", i32 " << length << ")\n";
+                                    emitPvFromFields(llvmValueName(sname),
+                                        PvFields {
+                                            .values = values, .len = length });
                                 },
                                 [&](const yesod::Ref<koopa_ir::PointwiseExpr>&
                                         pointwiseRef) {
@@ -2188,13 +2259,15 @@ namespace {
                                         pointwise.length, program);
                                     const std::string outputPv
                                         = nextHelperName("pv_fused");
-                                    emitPvHelperTo(outputPv, "__yesod_pv_alloc",
-                                        "i32 " + length);
                                     const std::string outputValues
                                         = nextHelperName("pv_values");
                                     output << "  " << outputValues
-                                           << " = extractvalue " << PV_TYPE
-                                           << " " << outputPv << ", 0\n";
+                                           << " = call ptr "
+                                              "@__yesod_rt_alloc_ints(i32 "
+                                           << length << ")\n";
+                                    emitPvFromFields(outputPv,
+                                        PvFields { .values = outputValues,
+                                            .len = length });
                                     const std::string preheaderLabel
                                         = nextLabelName("pointwise_preheader");
                                     const std::string condLabel
@@ -2241,18 +2314,56 @@ namespace {
                                     output << "  br label %" << condLabel
                                            << "\n";
                                     output << endLabel << ":\n";
-                                    const std::string pvPtr
-                                        = emitPvPtr(outputPv);
-                                    emitPolyHelperTo(llvmValueName(sname),
-                                        "__yesod_poly_take_pointwise",
-                                        "ptr " + pvPtr + ", i32 "
-                                            + emitValueOperand(
-                                                pointwise.activeL, program)
-                                            + ", i32 "
-                                            + emitValueOperand(
-                                                pointwise.activeR, program));
-                                    emitOwnedPtrDrop(
-                                        std::string(PV_TYPE), pvPtr);
+                                    const std::string activeL
+                                        = emitValueOperand(
+                                            pointwise.activeL, program);
+                                    const std::string activeR
+                                        = emitValueOperand(
+                                            pointwise.activeR, program);
+                                    const std::string resultAddr
+                                        = nextHelperName("poly_from_pv_addr");
+                                    output
+                                        << "  " << resultAddr
+                                        << " = call ptr "
+                                           "@__yesod_poly_from_pointwise_data"
+                                           "(ptr "
+                                        << outputValues << ", i32 " << length
+                                        << ", i32 " << activeL << ", i32 "
+                                        << activeR << ")\n";
+                                    const std::string activeLen
+                                        = nextHelperName("poly_from_pv_len");
+                                    output << "  " << activeLen << " = sub i32 "
+                                           << activeR << ", " << activeL
+                                           << "\n";
+                                    const std::string isEmpty
+                                        = nextHelperName("poly_from_pv_empty");
+                                    output << "  " << isEmpty
+                                           << " = icmp sge i32 " << activeL
+                                           << ", " << activeR << "\n";
+                                    const std::string rawN
+                                        = nextHelperName("poly_from_pv_n_raw");
+                                    output << "  " << rawN
+                                           << " = call i32 @__yesod_next_pow2("
+                                              "i32 "
+                                           << activeLen << ")\n";
+                                    const std::string resultN
+                                        = nextHelperName("poly_from_pv_n");
+                                    output << "  " << resultN << " = select i1 "
+                                           << isEmpty << ", i32 0, i32 " << rawN
+                                           << "\n";
+                                    const std::string resultCoeffs
+                                        = emitPolyCoeffPtrForAddr(
+                                            resultAddr, activeL, isEmpty);
+                                    emitPolyFromFields(llvmValueName(sname),
+                                        PolyFields { .coeffs = resultCoeffs,
+                                            .addr = resultAddr,
+                                            .n = resultN,
+                                            .l = activeL,
+                                            .r = activeR });
+                                    output
+                                        << "  call void @__yesod_rt_free_ints"
+                                           "(ptr "
+                                        << outputValues << ")\n";
                                 },
                                 [&](const yesod::Ref<koopa_ir::CombineExpr>&
                                         combineRef) {
@@ -2426,9 +2537,46 @@ namespace {
                                         emitPolyZeroTo(llvmValueName(sname));
                                         return;
                                     }
-                                    emitPolyHelperTo(llvmValueName(sname),
-                                        "__yesod_poly_alloc_zero",
-                                        "i32 " + resultL + ", i32 " + resultR);
+                                    const std::string resultAddr
+                                        = nextHelperName("combine_result_addr");
+                                    output << "  " << resultAddr
+                                           << " = call ptr "
+                                              "@__yesod_poly_alloc_zero_data("
+                                              "i32 "
+                                           << resultL << ", i32 " << resultR
+                                           << ")\n";
+                                    const std::string resultLen
+                                        = nextHelperName("combine_result_len");
+                                    output << "  " << resultLen << " = sub i32 "
+                                           << resultR << ", " << resultL
+                                           << "\n";
+                                    const std::string resultEmpty
+                                        = nextHelperName(
+                                            "combine_result_empty");
+                                    output << "  " << resultEmpty
+                                           << " = icmp sge i32 " << resultL
+                                           << ", " << resultR << "\n";
+                                    const std::string resultRawN
+                                        = nextHelperName(
+                                            "combine_result_n_raw");
+                                    output << "  " << resultRawN
+                                           << " = call i32 @__yesod_next_pow2("
+                                              "i32 "
+                                           << resultLen << ")\n";
+                                    const std::string resultN
+                                        = nextHelperName("combine_result_n");
+                                    output << "  " << resultN << " = select i1 "
+                                           << resultEmpty << ", i32 0, i32 "
+                                           << resultRawN << "\n";
+                                    const std::string resultPolyCoeffs
+                                        = emitPolyCoeffPtrForAddr(
+                                            resultAddr, resultL, resultEmpty);
+                                    emitPolyFromFields(llvmValueName(sname),
+                                        PolyFields { .coeffs = resultPolyCoeffs,
+                                            .addr = resultAddr,
+                                            .n = resultN,
+                                            .l = resultL,
+                                            .r = resultR });
                                     const std::string resultCoeffs
                                         = nextHelperName(
                                             "combine_result_coeffs");
@@ -2544,13 +2692,15 @@ namespace {
                                 [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&
                                         getCoeffRef) {
                                     const auto& getCoeff = program[getCoeffRef];
-                                    const std::string input
-                                        = emitPolyPtr(emitValueOperand(
+                                    const PolyFields input
+                                        = emitPolyFields(emitValueOperand(
                                             getCoeff.value, program));
                                     output << "  " << llvmValueName(sname)
                                            << " = call i32 "
-                                              "@__yesod_poly_getcoeff(ptr "
-                                           << input << ", i32 "
+                                              "@__yesod_poly_getcoeff_data(ptr "
+                                           << input.coeffs << ", i32 "
+                                           << input.l << ", i32 " << input.r
+                                           << ", i32 "
                                            << emitValueOperand(
                                                   getCoeff.index, program)
                                            << ")\n";
@@ -2560,50 +2710,44 @@ namespace {
                                         constructRef) {
                                     const auto& construct
                                         = program[constructRef];
-                                    const std::string arrayType = "["
-                                        + std::to_string(
-                                            construct.elements.size())
-                                        + " x i32]";
-                                    const std::string slot
-                                        = nextHelperName("poly_construct");
-                                    output << "  " << slot << " = alloca "
-                                           << arrayType << "\n";
+                                    if (construct.elements.empty()) {
+                                        emitPolyZeroTo(llvmValueName(sname));
+                                        return;
+                                    }
+                                    const std::string count = std::to_string(
+                                        construct.elements.size());
+                                    const std::string addr
+                                        = nextHelperName("poly_construct_addr");
+                                    output << "  " << addr
+                                           << " = call ptr "
+                                              "@__yesod_poly_alloc_zero_data("
+                                              "i32 0, i32 "
+                                           << count << ")\n";
                                     for (size_t i = 0;
                                         i < construct.elements.size(); ++i) {
                                         const std::string elementPtr
                                             = nextHelperName("poly_coeff_ptr");
                                         output << "  " << elementPtr
-                                               << " = getelementptr "
-                                               << arrayType << ", ptr " << slot
-                                               << ", i32 0, i32 " << i << "\n";
-                                        const std::string rawElement
-                                            = emitValueOperand(
-                                                construct.elements[i], program);
+                                               << " = getelementptr i32, ptr "
+                                               << addr << ", i32 " << i << "\n";
                                         const std::string element
-                                            = logicalTypeOf(
-                                                  construct.elements[i])
-                                                == "mint"
-                                            ? rawElement
-                                            : emitIntToMint(rawElement);
+                                            = emitMintOperand(
+                                                construct.elements[i]);
                                         output << "  store i32 " << element
                                                << ", ptr " << elementPtr
                                                << "\n";
                                     }
-                                    const std::string dataPtr
-                                        = construct.elements.empty()
-                                        ? "null"
-                                        : nextHelperName("poly_data");
-                                    if (!construct.elements.empty()) {
-                                        output << "  " << dataPtr
-                                               << " = getelementptr "
-                                               << arrayType << ", ptr " << slot
-                                               << ", i32 0, i32 0\n";
+                                    size_t constructN = 1;
+                                    while (constructN
+                                        < construct.elements.size()) {
+                                        constructN <<= 1;
                                     }
-                                    emitPolyHelperTo(llvmValueName(sname),
-                                        "__yesod_poly_construct",
-                                        "ptr " + dataPtr + ", i32 "
-                                            + std::to_string(
-                                                construct.elements.size()));
+                                    emitPolyFromFields(llvmValueName(sname),
+                                        PolyFields { .coeffs = addr,
+                                            .addr = addr,
+                                            .n = std::to_string(constructN),
+                                            .l = "0",
+                                            .r = count });
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
@@ -2645,8 +2789,15 @@ namespace {
                                     storeValue = "zeroinitializer";
                                 });
                             if (elemTy == POLY_TYPE) {
-                                emitOwnedPtrDrop(std::string(POLY_TYPE),
-                                    llvmValueName(store.destination.spelling));
+                                const std::string oldValue
+                                    = nextHelperName("poly_store_old");
+                                output
+                                    << "  " << oldValue << " = load "
+                                    << POLY_TYPE << ", ptr "
+                                    << llvmValueName(store.destination.spelling)
+                                    << "\n";
+                                emitOwnedValueDropByType(
+                                    std::string(POLY_TYPE), oldValue);
                                 storeValue = emitPolyCloneValue(storeValue);
                             } else {
                                 const auto logicalPtIt = logicalPointees.find(
