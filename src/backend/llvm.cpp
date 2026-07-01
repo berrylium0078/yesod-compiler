@@ -1286,11 +1286,7 @@ namespace {
             const auto& param = program[function.params[i]];
             const std::string paramType = emitType(param.type, program);
             output << paramType << " ";
-            if (paramType == POLY_TYPE) {
-                output << llvmValueName(param.symbol.spelling) << "_param";
-            } else {
-                output << llvmValueName(param.symbol.spelling);
-            }
+            output << llvmValueName(param.symbol.spelling);
         }
         output << ") {\n";
 
@@ -1724,15 +1720,6 @@ namespace {
                            << ", %" << edge.predLabel << " ]";
                 }
                 output << "\n";
-            }
-            if (blockIndex == 0) {
-                for (const auto& paramRef : function.params) {
-                    const auto& param = program[paramRef];
-                    if (emitType(param.type, program) == POLY_TYPE) {
-                        emitPolyCloneTo(llvmValueName(param.symbol.spelling),
-                            llvmValueName(param.symbol.spelling) + "_param");
-                    }
-                }
             }
             for (const auto& paramRef : block.params) {
                 const auto& param = program[paramRef];
