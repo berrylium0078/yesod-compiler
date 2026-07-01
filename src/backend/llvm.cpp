@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -200,6 +201,24 @@ namespace {
         return { };
     }
 
+    bool typeContainsPoly(
+        const koopa_ir::Type& type, const koopa_ir::Program& program)
+    {
+        return MATCH(type) WITH(
+            [](const koopa_ir::PolyType&) -> bool { return true; },
+            [](const koopa_ir::I32Type&) -> bool { return false; },
+            [](const koopa_ir::MintType&) -> bool { return false; },
+            [&](const yesod::Ref<koopa_ir::ArrayType> arrayRef) -> bool {
+                return typeContainsPoly(program[arrayRef].elementType, program);
+            },
+            [&](const yesod::Ref<koopa_ir::PointerType> ptrRef) -> bool {
+                return typeContainsPoly(program[ptrRef].pointeeType, program);
+            },
+            [](const yesod::Ref<koopa_ir::FunctionType>&) -> bool {
+                return false;
+            });
+    }
+
     // ─── Phi-edge collection ──────────────────────────────────────────────
 
     struct IncomingEdge {
@@ -245,10 +264,13 @@ namespace {
                     const auto& jump = program[jumpRef];
                     const std::string targetLabel = jump.target.spelling;
                     auto& slots = incoming[targetLabel];
+                    const std::string edgeLabel = jump.args.empty()
+                        ? predLabel
+                        : edgeBlockLabel(predLabel, "jump");
                     for (size_t i = 0; i < jump.args.size() && i < slots.size();
                         ++i) {
                         slots[i].push_back(
-                            IncomingEdge { predLabel, jump.args[i] });
+                            IncomingEdge { edgeLabel, jump.args[i] });
                     }
                 },
                 [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef) {
@@ -277,8 +299,10 @@ namespace {
                         auto& tslots = incoming[tlabel];
                         for (size_t i = 0;
                             i < br.trueArgs.size() && i < tslots.size(); ++i) {
-                            tslots[i].push_back(
-                                IncomingEdge { predLabel, br.trueArgs[i] });
+                            tslots[i].push_back(IncomingEdge {
+                                edgeBlockLabel(predLabel, "true"),
+                                br.trueArgs[i],
+                            });
                         }
                     }
                     {
@@ -286,13 +310,409 @@ namespace {
                         auto& fslots = incoming[flabel];
                         for (size_t i = 0;
                             i < br.falseArgs.size() && i < fslots.size(); ++i) {
-                            fslots[i].push_back(
-                                IncomingEdge { predLabel, br.falseArgs[i] });
+                            fslots[i].push_back(IncomingEdge {
+                                edgeBlockLabel(predLabel, "false"),
+                                br.falseArgs[i],
+                            });
                         }
                     }
                 },
                 [](const yesod::Ref<koopa_ir::ReturnTerminator>&) { });
         }
+    }
+
+    using SymbolSet = std::set<std::string>;
+
+    struct EdgeInfo {
+        size_t targetIndex = 0;
+        std::vector<koopa_ir::Value> args;
+        std::string suffix;
+    };
+
+    struct OwnershipAnalysis {
+        std::vector<SymbolSet> liveIn;
+        std::vector<SymbolSet> liveOut;
+        std::vector<std::vector<SymbolSet>> liveAfterStmt;
+        std::vector<std::vector<EdgeInfo>> edges;
+        std::unordered_map<std::string, size_t> blockIndexByLabel;
+    };
+
+    struct ArgumentPlan {
+        std::vector<std::string> operands;
+        std::vector<std::pair<std::string, std::string>> clones;
+        SymbolSet movedValues;
+    };
+
+    struct EdgeEmissionPlan {
+        ArgumentPlan args;
+        SymbolSet releases;
+        std::string label;
+        std::string targetLabel;
+    };
+
+    using EdgePlanMap
+        = std::map<std::pair<size_t, std::string>, EdgeEmissionPlan>;
+
+    bool isOwnedTypeString(const std::string& type)
+    {
+        return type == POLY_TYPE || type == PV_TYPE;
+    }
+
+    void addOwnedValueUse(const koopa_ir::Value& value,
+        const ValueTypeMap& valueTypes, SymbolSet& uses)
+    {
+        if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+            const auto typeIt = valueTypes.find(symbol->spelling);
+            if (typeIt != valueTypes.end()
+                && isOwnedTypeString(typeIt->second)) {
+                uses.insert(symbol->spelling);
+            }
+        }
+    }
+
+    void addPointwiseUses(yesod::Ref<koopa_ir::PointwiseNode> nodeRef,
+        const koopa_ir::Program& program, const ValueTypeMap& valueTypes,
+        SymbolSet& uses)
+    {
+        const auto& node = program[nodeRef];
+        MATCH(node.kind)
+        WITH(
+            [&](const koopa_ir::PointwiseLeaf& leaf) -> void {
+                addOwnedValueUse(leaf.value, valueTypes, uses);
+            },
+            [&](const koopa_ir::PointwiseBinary& binary) -> void {
+                addPointwiseUses(binary.lhs, program, valueTypes, uses);
+                addPointwiseUses(binary.rhs, program, valueTypes, uses);
+            });
+    }
+
+    SymbolSet symbolDefUses(const koopa_ir::SymbolDef& def,
+        const koopa_ir::Program& program, const FuncSigMap& sigs,
+        const ValueTypeMap& valueTypes)
+    {
+        SymbolSet uses;
+        MATCH(def.rhs)
+        WITH([](const yesod::Ref<koopa_ir::MemoryDeclaration>&) -> void { },
+            [&](const yesod::Ref<koopa_ir::LoadExpr>&) -> void { },
+            [&](const yesod::Ref<koopa_ir::GetPointerExpr>& gpRef) -> void {
+                addOwnedValueUse(program[gpRef].index, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::GetElementPointerExpr>& geRef)
+                -> void {
+                addOwnedValueUse(program[geRef].index, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::BinaryExpr>& binRef) -> void {
+                const auto& bin = program[binRef];
+                addOwnedValueUse(bin.lhs, valueTypes, uses);
+                addOwnedValueUse(bin.rhs, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::CallExpr>& callRef) -> void {
+                const auto& call = program[callRef];
+                const auto sigIt = sigs.find(call.callee.spelling);
+                for (size_t i = 0; i < call.args.size(); ++i) {
+                    const std::string argType
+                        = (sigIt != sigs.end()
+                              && i < sigIt->second.paramTypes.size())
+                        ? sigIt->second.paramTypes[i]
+                        : "i32";
+                    if (isOwnedTypeString(argType)) {
+                        addOwnedValueUse(call.args[i], valueTypes, uses);
+                    }
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::CopyExpr>& copyRef) -> void {
+                addOwnedValueUse(program[copyRef].value, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::GetAttrExpr>& getAttrRef) -> void {
+                addOwnedValueUse(program[getAttrRef].value, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::SetAttrExpr>& setAttrRef) -> void {
+                const auto& setAttr = program[setAttrRef];
+                addOwnedValueUse(setAttr.value, valueTypes, uses);
+                addOwnedValueUse(setAttr.attrValue, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::SelectExpr>& selectRef) -> void {
+                const auto& select = program[selectRef];
+                addOwnedValueUse(select.condition, valueTypes, uses);
+                addOwnedValueUse(select.trueValue, valueTypes, uses);
+                addOwnedValueUse(select.falseValue, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::NextPow2Expr>& nextPow2Ref) -> void {
+                addOwnedValueUse(program[nextPow2Ref].value, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::NttExpr>& nttRef) -> void {
+                const auto& ntt = program[nttRef];
+                addOwnedValueUse(ntt.value, valueTypes, uses);
+                addOwnedValueUse(ntt.length, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::PointwiseExpr>& pointwiseRef)
+                -> void {
+                const auto& pointwise = program[pointwiseRef];
+                addOwnedValueUse(pointwise.length, valueTypes, uses);
+                addOwnedValueUse(pointwise.activeL, valueTypes, uses);
+                addOwnedValueUse(pointwise.activeR, valueTypes, uses);
+                addPointwiseUses(pointwise.root, program, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::CombineExpr>& combineRef) -> void {
+                for (const auto& term : program[combineRef].terms) {
+                    addOwnedValueUse(term.value, valueTypes, uses);
+                    addOwnedValueUse(term.start, valueTypes, uses);
+                    if (term.end.has_value()) {
+                        addOwnedValueUse(*term.end, valueTypes, uses);
+                    }
+                    addOwnedValueUse(term.shift, valueTypes, uses);
+                    addOwnedValueUse(term.scale, valueTypes, uses);
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::GetCoeffExpr>& getCoeffRef) -> void {
+                const auto& getCoeff = program[getCoeffRef];
+                addOwnedValueUse(getCoeff.value, valueTypes, uses);
+                addOwnedValueUse(getCoeff.index, valueTypes, uses);
+            },
+            [&](const yesod::Ref<koopa_ir::PolyConstructExpr>& constructRef)
+                -> void {
+                for (const auto& element : program[constructRef].elements) {
+                    addOwnedValueUse(element, valueTypes, uses);
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::ConversionExpr>& convRef) -> void {
+                addOwnedValueUse(program[convRef].value, valueTypes, uses);
+            });
+        return uses;
+    }
+
+    SymbolSet storeUses(const koopa_ir::StoreStmt& store,
+        const PointeeMap& pointees, const ValueTypeMap& valueTypes)
+    {
+        SymbolSet uses;
+        const auto ptIt = pointees.find(store.destination.spelling);
+        const std::string elemTy
+            = (ptIt != pointees.end()) ? ptIt->second : "i32";
+        if (elemTy == POLY_TYPE) {
+            if (const auto* symbol
+                = std::get_if<koopa_ir::Symbol>(&store.value)) {
+                addOwnedValueUse(*symbol, valueTypes, uses);
+            }
+        }
+        return uses;
+    }
+
+    SymbolSet callStmtUses(const koopa_ir::CallExpr& call,
+        const FuncSigMap& sigs, const ValueTypeMap& valueTypes)
+    {
+        SymbolSet uses;
+        const auto sigIt = sigs.find(call.callee.spelling);
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            const std::string argType
+                = (sigIt != sigs.end() && i < sigIt->second.paramTypes.size())
+                ? sigIt->second.paramTypes[i]
+                : "i32";
+            if (isOwnedTypeString(argType)) {
+                addOwnedValueUse(call.args[i], valueTypes, uses);
+            }
+        }
+        return uses;
+    }
+
+    SymbolSet statementUses(const koopa_ir::Statement& statement,
+        const koopa_ir::Program& program, const FuncSigMap& sigs,
+        const PointeeMap& pointees, const ValueTypeMap& valueTypes)
+    {
+        return std::visit(
+            [&](auto stmtRef) -> SymbolSet {
+                using StmtNode
+                    = std::remove_cvref_t<decltype(program[stmtRef])>;
+                if constexpr (std::same_as<StmtNode, koopa_ir::SymbolDef>) {
+                    return symbolDefUses(
+                        program[stmtRef], program, sigs, valueTypes);
+                } else if constexpr (std::same_as<StmtNode,
+                                         koopa_ir::StoreStmt>) {
+                    return storeUses(program[stmtRef], pointees, valueTypes);
+                } else {
+                    return callStmtUses(program[stmtRef], sigs, valueTypes);
+                }
+            },
+            statement);
+    }
+
+    std::optional<std::string> statementDef(
+        const koopa_ir::Statement& statement, const koopa_ir::Program& program,
+        const ValueTypeMap& valueTypes)
+    {
+        if (const auto* defRef
+            = std::get_if<yesod::Ref<koopa_ir::SymbolDef>>(&statement)) {
+            const auto& def = program[*defRef];
+            const auto typeIt = valueTypes.find(def.symbol.spelling);
+            if (typeIt != valueTypes.end()
+                && isOwnedTypeString(typeIt->second)) {
+                return def.symbol.spelling;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::vector<std::string> blockParamSymbols(
+        const koopa_ir::BasicBlock& block, const koopa_ir::Program& program,
+        const ValueTypeMap& valueTypes)
+    {
+        std::vector<std::string> result;
+        result.reserve(block.params.size());
+        for (const auto& paramRef : block.params) {
+            const auto& param = program[paramRef];
+            const auto typeIt = valueTypes.find(param.symbol.spelling);
+            if (typeIt != valueTypes.end()
+                && isOwnedTypeString(typeIt->second)) {
+                result.push_back(param.symbol.spelling);
+            } else {
+                result.push_back({ });
+            }
+        }
+        return result;
+    }
+
+    void addOwnedEdgeArgs(const std::vector<koopa_ir::Value>& args,
+        const koopa_ir::BasicBlock& targetBlock,
+        const koopa_ir::Program& program, const ValueTypeMap& valueTypes,
+        SymbolSet& live)
+    {
+        for (size_t i = 0; i < args.size() && i < targetBlock.params.size();
+            ++i) {
+            const auto& param = program[targetBlock.params[i]];
+            const auto typeIt = valueTypes.find(param.symbol.spelling);
+            if (typeIt != valueTypes.end()
+                && isOwnedTypeString(typeIt->second)) {
+                addOwnedValueUse(args[i], valueTypes, live);
+            }
+        }
+    }
+
+    OwnershipAnalysis analyzeOwnership(const koopa_ir::FunctionDef& function,
+        const koopa_ir::Program& program, const FuncSigMap& sigs,
+        const PointeeMap& pointees, const ValueTypeMap& valueTypes)
+    {
+        OwnershipAnalysis analysis;
+        const size_t blockCount = function.blocks.size();
+        analysis.liveIn.resize(blockCount);
+        analysis.liveOut.resize(blockCount);
+        analysis.liveAfterStmt.resize(blockCount);
+        analysis.edges.resize(blockCount);
+
+        for (size_t i = 0; i < blockCount; ++i) {
+            const auto& block = program[function.blocks[i]];
+            analysis.blockIndexByLabel[block.label.spelling] = i;
+            analysis.liveAfterStmt[i].resize(block.statements.size());
+        }
+
+        for (size_t i = 0; i < blockCount; ++i) {
+            const auto& block = program[function.blocks[i]];
+            const std::string predRaw = stripPrefix(block.label.spelling);
+            const std::string predLabel = predRaw.empty() ? "__empty" : predRaw;
+            MATCH(block.terminator)
+            WITH(
+                [&](const yesod::Ref<koopa_ir::JumpTerminator>& jumpRef)
+                    -> void {
+                    const auto& jump = program[jumpRef];
+                    const auto targetIt
+                        = analysis.blockIndexByLabel.find(jump.target.spelling);
+                    if (targetIt != analysis.blockIndexByLabel.end()) {
+                        analysis.edges[i].push_back(EdgeInfo {
+                            .targetIndex = targetIt->second,
+                            .args = jump.args,
+                            .suffix = jump.args.empty() ? "" : "jump",
+                        });
+                    }
+                },
+                [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef)
+                    -> void {
+                    const auto& branch = program[brRef];
+                    const auto trueIt = analysis.blockIndexByLabel.find(
+                        branch.trueTarget.spelling);
+                    if (trueIt != analysis.blockIndexByLabel.end()) {
+                        analysis.edges[i].push_back(EdgeInfo {
+                            .targetIndex = trueIt->second,
+                            .args = branch.trueArgs,
+                            .suffix = "true",
+                        });
+                    }
+                    const auto falseIt = analysis.blockIndexByLabel.find(
+                        branch.falseTarget.spelling);
+                    if (falseIt != analysis.blockIndexByLabel.end()) {
+                        analysis.edges[i].push_back(EdgeInfo {
+                            .targetIndex = falseIt->second,
+                            .args = branch.falseArgs,
+                            .suffix = "false",
+                        });
+                    }
+                },
+                [](const yesod::Ref<koopa_ir::ReturnTerminator>&) -> void { });
+        }
+
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (size_t reverseIndex = 0; reverseIndex < blockCount;
+                ++reverseIndex) {
+                const size_t blockIndex = blockCount - reverseIndex - 1;
+                const auto& block = program[function.blocks[blockIndex]];
+
+                SymbolSet liveOut;
+                for (const auto& edge : analysis.edges[blockIndex]) {
+                    const auto& targetBlock
+                        = program[function.blocks[edge.targetIndex]];
+                    SymbolSet edgeLive = analysis.liveIn[edge.targetIndex];
+                    for (const auto& paramName :
+                        blockParamSymbols(targetBlock, program, valueTypes)) {
+                        if (!paramName.empty()) {
+                            edgeLive.erase(paramName);
+                        }
+                    }
+                    addOwnedEdgeArgs(
+                        edge.args, targetBlock, program, valueTypes, edgeLive);
+                    liveOut.insert(edgeLive.begin(), edgeLive.end());
+                }
+
+                SymbolSet live = liveOut;
+                MATCH(block.terminator)
+                WITH(
+                    [&](const yesod::Ref<koopa_ir::ReturnTerminator>& retRef)
+                        -> void {
+                        const auto& ret = program[retRef];
+                        if (ret.value.has_value()) {
+                            addOwnedValueUse(*ret.value, valueTypes, live);
+                        }
+                    },
+                    [](const yesod::Ref<koopa_ir::JumpTerminator>&) -> void { },
+                    [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef)
+                        -> void {
+                        addOwnedValueUse(
+                            program[brRef].condition, valueTypes, live);
+                    });
+
+                for (size_t reverseStmt = 0;
+                    reverseStmt < block.statements.size(); ++reverseStmt) {
+                    const size_t stmtIndex
+                        = block.statements.size() - reverseStmt - 1;
+                    analysis.liveAfterStmt[blockIndex][stmtIndex] = live;
+                    if (const auto def = statementDef(
+                            block.statements[stmtIndex], program, valueTypes);
+                        def.has_value()) {
+                        live.erase(*def);
+                    }
+                    const auto uses = statementUses(block.statements[stmtIndex],
+                        program, sigs, pointees, valueTypes);
+                    live.insert(uses.begin(), uses.end());
+                }
+
+                if (analysis.liveOut[blockIndex] != liveOut
+                    || analysis.liveIn[blockIndex] != live) {
+                    analysis.liveOut[blockIndex] = std::move(liveOut);
+                    analysis.liveIn[blockIndex] = std::move(live);
+                    changed = true;
+                }
+            }
+        }
+
+        return analysis;
     }
 
     // ─── Top-level emit helpers ───────────────────────────────────────────
@@ -349,6 +769,10 @@ namespace {
         ValueTypeMap valueTypes;
         ValueTypeMap logicalTypes;
         ValueTypeMap logicalPointees;
+        std::vector<std::pair<std::string, koopa_ir::Type>>
+            localPolyAllocations;
+        std::vector<std::pair<std::string, koopa_ir::Type>>
+            globalPolyAllocations;
         int32_t helperTempId = 0;
 
         auto nextHelperName = [&](const std::string& stem) -> std::string {
@@ -414,6 +838,10 @@ namespace {
                         logicalTypes[g.name.spelling] = "ptr";
                         logicalPointees[g.name.spelling]
                             = logicalTypeOfIrType(g.allocType);
+                        if (typeContainsPoly(g.allocType, program)) {
+                            globalPolyAllocations.emplace_back(
+                                g.name.spelling, g.allocType);
+                        }
                     }
                 },
                 item);
@@ -471,6 +899,11 @@ namespace {
                                             mem.allocType, program);
                                     if (!loadedPointee.empty()) {
                                         loadedPointees[sname] = loadedPointee;
+                                    }
+                                    if (typeContainsPoly(
+                                            mem.allocType, program)) {
+                                        localPolyAllocations.emplace_back(
+                                            sname, mem.allocType);
                                     }
                                 },
                                 [&](const yesod::Ref<koopa_ir::LoadExpr>&
@@ -671,7 +1104,8 @@ namespace {
         IncomingMap incoming;
         BlockLabelMap blockLabels;
         collectPhiEdges(function, program, incoming, blockLabels);
-
+        const OwnershipAnalysis ownership
+            = analyzeOwnership(function, program, sigs, pointees, valueTypes);
         // ── Function signature ─────────────────────────────────────────
         std::string retType = "void";
         if (function.returnType.has_value()) {
@@ -776,15 +1210,220 @@ namespace {
             return emitStackValue(std::string(PV_TYPE), value, "pv_arg");
         };
 
-        auto cloneCallArgument = [&](const koopa_ir::Value& value,
-                                     const std::string& type) -> std::string {
-            const std::string operand = emitValueOperand(value, program);
+        auto emitOwnedPtrDrop
+            = [&](const std::string& type, const std::string& ptr) -> void {
             if (type == POLY_TYPE) {
-                return emitPolyCloneValue(operand);
+                output << "  call void @__yesod_poly_drop(ptr " << ptr << ")\n";
+            } else if (type == PV_TYPE) {
+                output << "  call void @__yesod_pv_drop(ptr " << ptr << ")\n";
             }
-            return operand;
         };
 
+        auto emitOwnedValueDrop = [&](const std::string& symbolName) -> void {
+            const auto typeIt = valueTypes.find(symbolName);
+            if (typeIt == valueTypes.end()
+                || !isOwnedTypeString(typeIt->second)) {
+                return;
+            }
+            const std::string slot = emitStackValue(
+                typeIt->second, llvmValueName(symbolName), "drop");
+            emitOwnedPtrDrop(typeIt->second, slot);
+        };
+
+        auto emitOwnedValueDrops = [&](const SymbolSet& values) -> void {
+            for (const auto& value : values) {
+                emitOwnedValueDrop(value);
+            }
+        };
+
+        std::function<void(const koopa_ir::Type&, const std::string&)>
+            emitStorageDrop
+            = [&](const koopa_ir::Type& type, const std::string& ptr) -> void {
+            MATCH(type)
+            WITH(
+                [&](const koopa_ir::PolyType&) -> void {
+                    emitOwnedPtrDrop(std::string(POLY_TYPE), ptr);
+                },
+                [](const koopa_ir::I32Type&) -> void { },
+                [](const koopa_ir::MintType&) -> void { },
+                [&](const yesod::Ref<koopa_ir::ArrayType> arrayRef) -> void {
+                    const auto& arrayType = program[arrayRef];
+                    const std::string llvmArrayType = emitType(type, program);
+                    for (int32_t i = 0; i < arrayType.length; ++i) {
+                        const std::string elemPtr
+                            = nextHelperName("poly_elem_drop");
+                        output << "  " << elemPtr << " = getelementptr "
+                               << llvmArrayType << ", ptr " << ptr
+                               << ", i32 0, i32 " << i << "\n";
+                        emitStorageDrop(arrayType.elementType, elemPtr);
+                    }
+                },
+                [](const yesod::Ref<koopa_ir::PointerType>&) -> void { },
+                [](const yesod::Ref<koopa_ir::FunctionType>&) -> void { });
+        };
+
+        auto emitFunctionStorageCleanup = [&]() -> void {
+            for (const auto& allocation : localPolyAllocations) {
+                emitStorageDrop(
+                    allocation.second, llvmValueName(allocation.first));
+            }
+            if (name == "main") {
+                for (const auto& allocation : globalPolyAllocations) {
+                    emitStorageDrop(
+                        allocation.second, llvmValueName(allocation.first));
+                }
+            }
+        };
+
+        auto edgeReleaseSet = [&](const SymbolSet& beforeTerm,
+                                  const SymbolSet& edgeLive) -> SymbolSet {
+            SymbolSet result;
+            for (const auto& value : beforeTerm) {
+                if (!edgeLive.contains(value)) {
+                    result.insert(value);
+                }
+            }
+            return result;
+        };
+
+        auto planOwnedArguments
+            = [&](const std::vector<koopa_ir::Value>& values,
+                  const std::vector<std::string>& types,
+                  const SymbolSet& liveAfter,
+                  const std::string& cloneStem) -> ArgumentPlan {
+            ArgumentPlan plan;
+            plan.operands.reserve(values.size());
+            std::map<std::string, size_t> remainingUses;
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i >= types.size() || !isOwnedTypeString(types[i])) {
+                    continue;
+                }
+                if (const auto* symbol
+                    = std::get_if<koopa_ir::Symbol>(&values[i])) {
+                    remainingUses[symbol->spelling] += 1;
+                }
+            }
+            for (size_t i = 0; i < values.size(); ++i) {
+                const std::string operand
+                    = emitValueOperand(values[i], program);
+                if (i >= types.size() || !isOwnedTypeString(types[i])) {
+                    plan.operands.push_back(operand);
+                    continue;
+                }
+                const auto* symbol = std::get_if<koopa_ir::Symbol>(&values[i]);
+                if (symbol == nullptr) {
+                    plan.operands.push_back(operand);
+                    continue;
+                }
+                size_t& remaining = remainingUses[symbol->spelling];
+                const bool mustKeepOriginal
+                    = liveAfter.contains(symbol->spelling);
+                const bool needsClone = mustKeepOriginal || remaining > 1;
+                if (needsClone) {
+                    const std::string cloneName = nextHelperName(cloneStem);
+                    plan.clones.emplace_back(cloneName, operand);
+                    plan.operands.push_back(cloneName);
+                } else {
+                    plan.movedValues.insert(symbol->spelling);
+                    plan.operands.push_back(operand);
+                }
+                remaining -= 1;
+            }
+            return plan;
+        };
+
+        auto emitArgumentPlanClones = [&](const ArgumentPlan& plan) -> void {
+            for (const auto& clone : plan.clones) {
+                emitPolyCloneTo(clone.first, clone.second);
+            }
+        };
+
+        EdgePlanMap edgePlans;
+        for (size_t predIndex = 0; predIndex < function.blocks.size();
+            ++predIndex) {
+            const auto& predBlock = program[function.blocks[predIndex]];
+            const std::string predLabel = blockLabels[predBlock.label.spelling];
+            for (const auto& edge : ownership.edges[predIndex]) {
+                const auto& targetBlock
+                    = program[function.blocks[edge.targetIndex]];
+                std::vector<std::string> targetParamTypes;
+                targetParamTypes.reserve(edge.args.size());
+                for (size_t i = 0; i < edge.args.size(); ++i) {
+                    if (i < targetBlock.params.size()) {
+                        targetParamTypes.push_back(emitType(
+                            program[targetBlock.params[i]].type, program));
+                    } else {
+                        targetParamTypes.push_back("i32");
+                    }
+                }
+
+                SymbolSet liveAfterEdge = ownership.liveIn[edge.targetIndex];
+                for (const auto& paramName :
+                    blockParamSymbols(targetBlock, program, valueTypes)) {
+                    if (!paramName.empty()) {
+                        liveAfterEdge.erase(paramName);
+                    }
+                }
+
+                ArgumentPlan argPlan = planOwnedArguments(
+                    edge.args, targetParamTypes, liveAfterEdge, "edge_arg");
+                SymbolSet edgeLive = liveAfterEdge;
+                for (const auto& moved : argPlan.movedValues) {
+                    edgeLive.insert(moved);
+                }
+                for (const auto& clone : argPlan.clones) {
+                    edgeLive.insert(clone.first);
+                }
+                SymbolSet releases
+                    = edgeReleaseSet(ownership.liveOut[predIndex], edgeLive);
+                for (const auto& moved : argPlan.movedValues) {
+                    releases.erase(moved);
+                }
+
+                const std::string edgeLabel = edge.suffix.empty()
+                    ? predLabel
+                    : edgeBlockLabel(predLabel, edge.suffix);
+                edgePlans[{ predIndex, edge.suffix }] = EdgeEmissionPlan {
+                    .args = std::move(argPlan),
+                    .releases = std::move(releases),
+                    .label = edgeLabel,
+                    .targetLabel = blockLabels[targetBlock.label.spelling],
+                };
+            }
+        }
+
+        for (const auto& blockRef : function.blocks) {
+            const auto& block = program[blockRef];
+            auto incomingIt = incoming.find(block.label.spelling);
+            if (incomingIt == incoming.end()) {
+                continue;
+            }
+            for (size_t paramIndex = 0; paramIndex < block.params.size();
+                ++paramIndex) {
+                if (paramIndex >= incomingIt->second.size()) {
+                    continue;
+                }
+                const auto& param = program[block.params[paramIndex]];
+                if (emitType(param.type, program) != POLY_TYPE) {
+                    continue;
+                }
+                for (auto& edge : incomingIt->second[paramIndex]) {
+                    for (const auto& planItem : edgePlans) {
+                        const auto& plan = planItem.second;
+                        if (plan.label == edge.predLabel
+                            && paramIndex < plan.args.operands.size()) {
+                            edge.arg = koopa_ir::Symbol {
+                                .sourcePos = { },
+                                .spelling = plan.args.operands[paramIndex],
+                            };
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        std::vector<std::string> helperPvTemps;
         std::function<std::pair<std::string, std::string>(
             yesod::Ref<koopa_ir::PointwiseNode>)>
             emitPointwiseNode = [&](yesod::Ref<koopa_ir::PointwiseNode> nodeRef)
@@ -808,6 +1447,7 @@ namespace {
                     if (binary.op == koopa_ir::PvBinaryOp::times) {
                         emitPvHelperTo(result, "__yesod_pv_times",
                             "ptr " + lhsPtr + ", i32 " + rhs.second);
+                        helperPvTemps.push_back(result);
                         return { std::string(PV_TYPE), result };
                     }
                     const std::string rhsPtr = emitPvPtr(rhs.second);
@@ -819,6 +1459,7 @@ namespace {
                     }
                     emitPvHelperTo(
                         result, callee, "ptr " + lhsPtr + ", ptr " + rhsPtr);
+                    helperPvTemps.push_back(result);
                     return { std::string(PV_TYPE), result };
                 });
         };
@@ -833,16 +1474,12 @@ namespace {
 
             // Phi nodes from block parameters
             const auto& slots = incoming[block.label.spelling];
-            std::vector<std::pair<std::string, std::string>> phiClones;
             for (size_t pi = 0; pi < block.params.size(); ++pi) {
                 const auto& bp = program[block.params[pi]];
                 const std::string paramType = emitType(bp.type, program);
                 const std::string paramName = llvmValueName(bp.symbol.spelling);
-                const bool clonePhi = paramType == POLY_TYPE;
-                const std::string phiName
-                    = clonePhi ? paramName + "_phi" : paramName;
 
-                output << "  " << phiName << " = phi " << paramType;
+                output << "  " << paramName << " = phi " << paramType;
                 for (size_t ei = 0; ei < slots[pi].size(); ++ei) {
                     const auto& edge = slots[pi][ei];
                     if (ei != 0) {
@@ -852,12 +1489,6 @@ namespace {
                            << ", %" << edge.predLabel << " ]";
                 }
                 output << "\n";
-                if (clonePhi) {
-                    phiClones.emplace_back(paramName, phiName);
-                }
-            }
-            for (const auto& clone : phiClones) {
-                emitPolyCloneTo(clone.first, clone.second);
             }
             if (blockIndex == 0) {
                 for (const auto& paramRef : function.params) {
@@ -868,9 +1499,34 @@ namespace {
                     }
                 }
             }
+            for (const auto& paramRef : block.params) {
+                const auto& param = program[paramRef];
+                const auto typeIt = valueTypes.find(param.symbol.spelling);
+                if (typeIt != valueTypes.end()
+                    && isOwnedTypeString(typeIt->second)
+                    && !ownership.liveIn[blockIndex].contains(
+                        param.symbol.spelling)) {
+                    emitOwnedValueDrop(param.symbol.spelling);
+                }
+            }
+            if (blockIndex == 0) {
+                for (const auto& paramRef : function.params) {
+                    const auto& param = program[paramRef];
+                    const auto typeIt = valueTypes.find(param.symbol.spelling);
+                    if (typeIt != valueTypes.end()
+                        && isOwnedTypeString(typeIt->second)
+                        && !ownership.liveIn[blockIndex].contains(
+                            param.symbol.spelling)) {
+                        emitOwnedValueDrop(param.symbol.spelling);
+                    }
+                }
+            }
 
             // Statements
-            for (const auto& stmt : block.statements) {
+            for (size_t stmtIndex = 0; stmtIndex < block.statements.size();
+                ++stmtIndex) {
+                const auto& stmt = block.statements[stmtIndex];
+                SymbolSet movedValuesInStatement;
                 std::visit(
                     [&](auto stmtRef) {
                         using StmtNode
@@ -889,6 +1545,14 @@ namespace {
                                            << " = alloca "
                                            << emitType(mem.allocType, program)
                                            << "\n";
+                                    if (typeContainsPoly(
+                                            mem.allocType, program)) {
+                                        output
+                                            << "  store "
+                                            << emitType(mem.allocType, program)
+                                            << " zeroinitializer, ptr "
+                                            << llvmValueName(sname) << "\n";
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::LoadExpr>&
                                         loadRef) {
@@ -1170,32 +1834,37 @@ namespace {
                                     if (callRetTy != "void") {
                                         valueTypes[sname] = callRetTy;
                                     }
-                                    std::vector<
-                                        std::pair<std::string, std::string>>
-                                        args;
-                                    args.reserve(call.args.size());
+                                    std::vector<std::string> argTypes;
+                                    argTypes.reserve(call.args.size());
                                     for (size_t ai = 0; ai < call.args.size();
                                         ++ai) {
-                                        const std::string argType
-                                            = (sigIt != sigs.end()
-                                                  && ai < sigIt->second
-                                                          .paramTypes.size())
-                                            ? sigIt->second.paramTypes[ai]
-                                            : "i32";
-                                        args.emplace_back(argType,
-                                            cloneCallArgument(
-                                                call.args[ai], argType));
+                                        argTypes.push_back(
+                                            (sigIt != sigs.end()
+                                                && ai < sigIt->second.paramTypes
+                                                        .size())
+                                                ? sigIt->second.paramTypes[ai]
+                                                : "i32");
                                     }
+                                    const ArgumentPlan argPlan
+                                        = planOwnedArguments(call.args,
+                                            argTypes,
+                                            ownership.liveAfterStmt[blockIndex]
+                                                                   [stmtIndex],
+                                            "call_arg");
+                                    emitArgumentPlanClones(argPlan);
+                                    movedValuesInStatement.insert(
+                                        argPlan.movedValues.begin(),
+                                        argPlan.movedValues.end());
                                     output << "  " << llvmValueName(sname)
                                            << " = call " << callRetTy << " @"
                                            << callee << "(";
-                                    for (size_t ai = 0; ai < args.size();
-                                        ++ai) {
+                                    for (size_t ai = 0;
+                                        ai < argPlan.operands.size(); ++ai) {
                                         if (ai != 0) {
                                             output << ", ";
                                         }
-                                        output << args[ai].first << " "
-                                               << args[ai].second;
+                                        output << argTypes[ai] << " "
+                                               << argPlan.operands[ai];
                                     }
                                     output << ")\n";
                                 },
@@ -1320,6 +1989,8 @@ namespace {
                                         pointwiseRef) {
                                     const auto& pointwise
                                         = program[pointwiseRef];
+                                    const size_t pvTempStart
+                                        = helperPvTemps.size();
                                     const auto pv
                                         = emitPointwiseNode(pointwise.root);
                                     const std::string pvPtr
@@ -1332,6 +2003,14 @@ namespace {
                                             + ", i32 "
                                             + emitValueOperand(
                                                 pointwise.activeR, program));
+                                    for (size_t i = pvTempStart;
+                                        i < helperPvTemps.size(); ++i) {
+                                        const std::string pvDropPtr
+                                            = emitPvPtr(helperPvTemps[i]);
+                                        emitOwnedPtrDrop(
+                                            std::string(PV_TYPE), pvDropPtr);
+                                    }
+                                    helperPvTemps.resize(pvTempStart);
                                 },
                                 [&](const yesod::Ref<koopa_ir::CombineExpr>&
                                         combineRef) {
@@ -1339,6 +2018,7 @@ namespace {
                                     std::string acc
                                         = nextHelperName("poly_acc");
                                     emitPolyZeroTo(acc);
+                                    bool accOwned = false;
                                     for (const auto& term : combine.terms) {
                                         const std::string result
                                             = nextHelperName("poly_acc");
@@ -1364,9 +2044,20 @@ namespace {
                                                 + ", i32 "
                                                 + emitValueOperand(
                                                     term.scale, program));
+                                        if (accOwned) {
+                                            emitOwnedPtrDrop(
+                                                std::string(POLY_TYPE), accPtr);
+                                        }
                                         acc = result;
+                                        accOwned = true;
                                     }
                                     emitPolyCloneTo(llvmValueName(sname), acc);
+                                    if (accOwned) {
+                                        const std::string accPtr
+                                            = emitPolyPtr(acc);
+                                        emitOwnedPtrDrop(
+                                            std::string(POLY_TYPE), accPtr);
+                                    }
                                 },
                                 [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&
                                         getCoeffRef) {
@@ -1459,6 +2150,8 @@ namespace {
                                     storeValue = "zeroinitializer";
                                 });
                             if (elemTy == POLY_TYPE) {
+                                emitOwnedPtrDrop(std::string(POLY_TYPE),
+                                    llvmValueName(store.destination.spelling));
                                 storeValue = emitPolyCloneValue(storeValue);
                             }
                             output << "  store " << elemTy << " " << storeValue
@@ -1474,32 +2167,54 @@ namespace {
                             const std::string callRetTy = (sigIt != sigs.end())
                                 ? sigIt->second.retType
                                 : "void";
-                            std::vector<std::pair<std::string, std::string>>
-                                args;
-                            args.reserve(call.args.size());
+                            std::vector<std::string> argTypes;
+                            argTypes.reserve(call.args.size());
                             for (size_t ai = 0; ai < call.args.size(); ++ai) {
-                                const std::string argType
-                                    = (sigIt != sigs.end()
-                                          && ai
-                                              < sigIt->second.paramTypes.size())
-                                    ? sigIt->second.paramTypes[ai]
-                                    : "i32";
-                                args.emplace_back(argType,
-                                    cloneCallArgument(call.args[ai], argType));
+                                argTypes.push_back(
+                                    (sigIt != sigs.end()
+                                        && ai < sigIt->second.paramTypes.size())
+                                        ? sigIt->second.paramTypes[ai]
+                                        : "i32");
                             }
+                            const ArgumentPlan argPlan = planOwnedArguments(
+                                call.args, argTypes,
+                                ownership.liveAfterStmt[blockIndex][stmtIndex],
+                                "call_arg");
+                            emitArgumentPlanClones(argPlan);
+                            movedValuesInStatement.insert(
+                                argPlan.movedValues.begin(),
+                                argPlan.movedValues.end());
                             output << "  call " << callRetTy << " @" << callee
                                    << "(";
-                            for (size_t ai = 0; ai < args.size(); ++ai) {
+                            for (size_t ai = 0; ai < argPlan.operands.size();
+                                ++ai) {
                                 if (ai != 0) {
                                     output << ", ";
                                 }
-                                output << args[ai].first << " "
-                                       << args[ai].second;
+                                output << argTypes[ai] << " "
+                                       << argPlan.operands[ai];
                             }
                             output << ")\n";
                         }
                     },
                     stmt);
+                const auto uses
+                    = statementUses(stmt, program, sigs, pointees, valueTypes);
+                SymbolSet valuesToDrop;
+                for (const auto& use : uses) {
+                    if (!ownership.liveAfterStmt[blockIndex][stmtIndex]
+                            .contains(use)
+                        && !movedValuesInStatement.contains(use)) {
+                        valuesToDrop.insert(use);
+                    }
+                }
+                const auto def = statementDef(stmt, program, valueTypes);
+                if (def.has_value()
+                    && !ownership.liveAfterStmt[blockIndex][stmtIndex].contains(
+                        *def)) {
+                    valuesToDrop.insert(*def);
+                }
+                emitOwnedValueDrops(valuesToDrop);
             }
 
             // ── Terminator ─────────────────────────────────────────────
@@ -1507,6 +2222,21 @@ namespace {
             WITH(
                 [&](const yesod::Ref<koopa_ir::JumpTerminator>& jumpRef) {
                     const auto& jump = program[jumpRef];
+                    const auto planIt = edgePlans.find({ blockIndex,
+                        jump.args.empty() ? std::string("") : "jump" });
+                    const bool splitJump = planIt != edgePlans.end()
+                        && planIt->second.label != llvmLabel;
+                    if (!splitJump && planIt != edgePlans.end()) {
+                        emitArgumentPlanClones(planIt->second.args);
+                        emitOwnedValueDrops(planIt->second.releases);
+                    }
+                    if (splitJump) {
+                        output << "  br label %" << planIt->second.label
+                               << "\n";
+                        output << planIt->second.label << ":\n";
+                        emitArgumentPlanClones(planIt->second.args);
+                        emitOwnedValueDrops(planIt->second.releases);
+                    }
                     output << "  br label %"
                            << blockLabels[jump.target.spelling] << "\n";
                 },
@@ -1517,20 +2247,61 @@ namespace {
                     output << "  %" << condName << " = icmp ne i32 "
                            << emitValueOperand(br.condition, program)
                            << ", 0\n";
-                    if (needsSameTargetBranchSplit(br)) {
+                    const auto truePlanIt
+                        = edgePlans.find({ blockIndex, "true" });
+                    const auto falsePlanIt
+                        = edgePlans.find({ blockIndex, "false" });
+                    const SymbolSet trueReleases = truePlanIt == edgePlans.end()
+                        ? SymbolSet { }
+                        : truePlanIt->second.releases;
+                    const SymbolSet falseReleases
+                        = falsePlanIt == edgePlans.end()
+                        ? SymbolSet { }
+                        : falsePlanIt->second.releases;
+                    const bool trueHasClones = truePlanIt != edgePlans.end()
+                        && !truePlanIt->second.args.clones.empty();
+                    const bool falseHasClones = falsePlanIt != edgePlans.end()
+                        && !falsePlanIt->second.args.clones.empty();
+                    const bool splitTrue = !br.trueArgs.empty()
+                        || !trueReleases.empty() || trueHasClones;
+                    const bool splitFalse = !br.falseArgs.empty()
+                        || !falseReleases.empty() || falseHasClones;
+                    if (splitTrue || splitFalse
+                        || needsSameTargetBranchSplit(br)) {
                         const std::string trueEdgeLabel
                             = edgeBlockLabel(llvmLabel, "true");
                         const std::string falseEdgeLabel
                             = edgeBlockLabel(llvmLabel, "false");
-                        output << "  br i1 %" << condName << ", label %"
-                               << trueEdgeLabel << ", label %" << falseEdgeLabel
+                        output << "  br i1 %" << condName << ", label %";
+                        output << (splitTrue
+                                ? trueEdgeLabel
+                                : blockLabels[br.trueTarget.spelling]);
+                        output << ", label %";
+                        output << (splitFalse
+                                ? falseEdgeLabel
+                                : blockLabels[br.falseTarget.spelling])
                                << "\n";
-                        output << trueEdgeLabel << ":\n";
-                        output << "  br label %"
-                               << blockLabels[br.trueTarget.spelling] << "\n";
-                        output << falseEdgeLabel << ":\n";
-                        output << "  br label %"
-                               << blockLabels[br.falseTarget.spelling] << "\n";
+                        if (splitTrue) {
+                            output << trueEdgeLabel << ":\n";
+                            if (truePlanIt != edgePlans.end()) {
+                                emitArgumentPlanClones(truePlanIt->second.args);
+                            }
+                            emitOwnedValueDrops(trueReleases);
+                            output << "  br label %"
+                                   << blockLabels[br.trueTarget.spelling]
+                                   << "\n";
+                        }
+                        if (splitFalse) {
+                            output << falseEdgeLabel << ":\n";
+                            if (falsePlanIt != edgePlans.end()) {
+                                emitArgumentPlanClones(
+                                    falsePlanIt->second.args);
+                            }
+                            emitOwnedValueDrops(falseReleases);
+                            output << "  br label %"
+                                   << blockLabels[br.falseTarget.spelling]
+                                   << "\n";
+                        }
                         return;
                     }
                     output << "  br i1 %" << condName << ", label %"
@@ -1539,6 +2310,19 @@ namespace {
                 },
                 [&](const yesod::Ref<koopa_ir::ReturnTerminator>& retRef) {
                     const auto& ret = program[retRef];
+                    SymbolSet beforeReturn;
+                    if (ret.value.has_value()) {
+                        addOwnedValueUse(*ret.value, valueTypes, beforeReturn);
+                    }
+                    SymbolSet returnReleases = beforeReturn;
+                    if (ret.value.has_value()) {
+                        if (const auto* symbol
+                            = std::get_if<koopa_ir::Symbol>(&*ret.value)) {
+                            returnReleases.erase(symbol->spelling);
+                        }
+                    }
+                    emitOwnedValueDrops(returnReleases);
+                    emitFunctionStorageCleanup();
                     if (ret.value.has_value()) {
                         const std::string valueType = valueTypeOf(*ret.value);
                         output << "  ret " << valueType << " "

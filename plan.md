@@ -96,10 +96,12 @@
 
 ### 测试
 
-利用 lli 工具解释执行编译器生成的 LLVM IR。
+将编译器生成的 LLVM IR 先用 clang 编译成带 AddressSanitizer 的可执行文件，
+再在 `ASAN_OPTIONS=detect_leaks=1` 下执行。
 
 - 当前基础 SysY/mint LLVM IR 目标为 `x86_64-pc-linux-gnu`。
-- poly LLVM IR lowering 仍为后续阶段，不包含在当前基础后端中。
+- 当前 poly LLVM lowering 采用 helper runtime，实现 load/store/copy/setattr
+  等硬复制边界；精确活跃区间释放仍为后续优化。
 - llvm_basic_test：运行 lv1~lv9
 - llvm_extra_test：运行 lvX
 - llvm_poly_test：运行 poly 测试集
@@ -119,30 +121,64 @@
 
 测试：Koopa 解释器需要在函数返回时，断言每个局部 poly 对象（包括局部 poly 数组中的每个元素）都被释放恰好一次内存。
 
-### 基本块“调用”内存释放
+### load, store, copy, setattr
 
-如果对基本块 `bb` 的一处“调用”需要在调用前释放内存，将其替换为一个专门释放内存的基本块，这个基本款跳转到 `bb`。
+load ptr：将 ptr 指向内存空间视作 poly 类型结构体，将该对象硬复制一份出来存放在寄存器（SSA 形式）中。当前 LLVM lowering 调用 poly clone helper 生成硬复制结果。
 
+store ptr, src：释放 ptr 指向内存中的 poly 对象。如果 src 活跃则硬复制；否则移动给 ptr。当前 LLVM lowering 为简单正确性版本，始终把 src clone 后写入目的地址，runtime 在进程退出时统一回收 helper 分配的对象。
+
+dst = copy src：断言 dst, src 均活跃，进行硬复制。（dst 不活跃说明死代码消除没做好；dst 活跃但 src 不活跃说明覆写传播没做好）当前 LLVM lowering 调用 poly clone helper。
+
+result = setattr src, attr, val：断言 src 不活跃，直接翻译成 LLVM IR 的对应指令。当前 LLVM lowering 先 clone 输入，再通过 helper 更新对应属性，保持无共享语义。
+
+### 函数调用
+
+函数调用时，将参数移动给 callee，但如果参数仍活跃则硬复制。例如：
+
+```koopa
+call @foo(%1, %2, %1, %2) // %1 不活跃，%2 活跃，都是多项式类型
+```
+需要变成：
+```koopa
+%1_1 = %1 // 硬复制
+%2_1 = %2 // 硬复制
+%2_2 = %2 // 硬复制
+call @foo(%1_1, %2_1, %1, %2_2)
+```
+
+caller 不负责释放 callee 的参数内存。
+
+### 基本块跳转
+
+我们的 SSA 是基本块参数形式的，形式上有些类似函数调用。
+
+`jump` 的处理和函数调用类似。
+
+对于 `branch`，由于多项式对象的复制、释放比较昂贵，进行翻译，插入两个临时基本块。
 示意：
 ```koopa
-  branch ... bb() // free x
-  ...
-  branch ... bb() // free y
+  branch ... bb1(...) bb2(...)
 ```
 变成：
 ```koopa
-  branch ... bb_1()
-  ...
-  branch ... bb_2()
-
-bb_1():
-  // free x
-  jump bb()
-
-bb_2():
-  // free y
-  jump bb()
+  branch ... bb1_1 bb2_1
+bb1_1:
+  // 复制和释放 poly 对象
+  jump bb1(...)
+bb2_1:
+  // 复制和释放 poly 对象
+  jump bb2(...)
 ```
+
+如果对基本块 `bb` 的一处“调用”需要在调用前释放内存，将其替换为一个专门释放内存的基本块，这个基本块跳转到 `bb`。
+
+基本块“调用”也是类似的（下一条指令为跳转目标基本块的开头）。
+
+### 数组/全局 poly 对象释放
+
+对于每个全局 poly 数组/全局 poly 变量，在 atexit 时释放。
+
+对于临时栈分配的数组，在 `ret` 前释放。对于 `combine` 或 `pointwise` 融合算子生成的临时数组，在融合算子执行完后释放。
 
 ### pointwise 融合算子代码生成
 
@@ -213,24 +249,6 @@ for (int i = 0; i < n; i++)
 4. 特别地，`mint` 数乘先不运行蒙哥马利 reduce。固定表达式形式，维护每个和式的数值范围，在即将 `int64` 溢出时通过便宜的比较、加减、cmov 运算将范围折半。最终把范围缩进 `M << 32` 后再 reduce。
 5. 对于很长的段，可以尝试拆成长度能放进缓存的小段。
 
-#### 多项式类型函数调用
-
-如果一个多项式类型的值在调用处被传递，则进行复制，但副本的内存由被调用的函数负责释放。
-
-例如，若 `x` 类型为 `poly`，则
-
-```koopa
-foo(x, x)
-```
-翻译成：
-```koopa
-x1 = x // 硬复制
-x2 = x // 如果 x 之后不活跃，这里进行移动而非硬复制
-foo(x1, x2)
-```
-
 #### 内存清理
 
 释放所有不活跃输入 `poly` 对象。注意不要重复释放，不要释放重新利用为结果的那个输入。
-
-释放所有临时栈分配的数组。

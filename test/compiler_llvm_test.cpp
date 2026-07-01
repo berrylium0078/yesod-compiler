@@ -219,9 +219,7 @@ std::string makeLliRunnableLlvm(const std::string& llvmText)
     std::ostringstream output;
     std::string line;
     while (std::getline(input, line)) {
-        if (line.starts_with("target datalayout")
-            || line.starts_with("target triple")
-            || isSysyRuntimeDeclaration(line)) {
+        if (isSysyRuntimeDeclaration(line)) {
             continue;
         }
         output << line << '\n';
@@ -382,6 +380,7 @@ bool runTestCase(const TestCase& testCase, const Options& options,
 
     TempFile rawLlvmFile(".ll");
     TempFile runnableLlvmFile(".ll");
+    TempFile executableFile(".out");
     TempFile outputFile(".txt");
     const std::string inputRedirect = testCase.inputPath.empty()
         ? " < /dev/null"
@@ -397,12 +396,19 @@ bool runTestCase(const TestCase& testCase, const Options& options,
         writeTextFile(runnableLlvmFile.path(),
             makeLliRunnableLlvm(readTextFile(rawLlvmFile.path())));
 
-        const int actualReturn = runCommandAllowingProgramReturn("HOME=/tmp "
-                                                                 "timeout "
-                + std::to_string(options.timeoutSeconds) + "s lli "
-                + quoteShell(runnableLlvmFile.path().string()) + inputRedirect
-                + " > " + quoteShell(outputFile.path().string()),
-            "executing LLVM IR with lli");
+        runCheckedCommand("timeout " + std::to_string(options.timeoutSeconds)
+                + "s clang -fsanitize=address -g "
+                + quoteShell(runnableLlvmFile.path().string()) + " -o "
+                + quoteShell(executableFile.path().string()),
+            "compiling LLVM IR with AddressSanitizer");
+
+        const int actualReturn
+            = runCommandAllowingProgramReturn("ASAN_OPTIONS=detect_leaks=1 "
+                                              "HOME=/tmp timeout "
+                    + std::to_string(options.timeoutSeconds) + "s "
+                    + quoteShell(executableFile.path().string()) + inputRedirect
+                    + " > " + quoteShell(outputFile.path().string()),
+                "executing AddressSanitizer-built LLVM IR");
 
         const auto expected
             = parseExpectedOutput(readTextFile(testCase.outputPath));
@@ -476,6 +482,6 @@ int main(int argc, char** argv)
         }
     }
     std::cerr << "passed " << passed << " / " << testCases.size()
-              << " LLVM lli tests\n";
+              << " LLVM AddressSanitizer tests\n";
     return passed == testCases.size() ? 0 : 1;
 }

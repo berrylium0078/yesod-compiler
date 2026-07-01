@@ -11,6 +11,7 @@ typedef unsigned long long u64;
 typedef unsigned long usize;
 
 extern void *malloc(usize size);
+extern void free(void *ptr);
 
 typedef struct YesodPoly {
     int *coeffs;
@@ -79,6 +80,21 @@ static void __yesod_rt_poly_zero(YesodPoly *out) {
     out->len = 0;
     out->l = 0;
     out->r = 0;
+}
+
+void __yesod_poly_drop(YesodPoly *poly) {
+    if (poly->coeffs != (int *)0) {
+        free(poly->coeffs);
+    }
+    __yesod_rt_poly_zero(poly);
+}
+
+void __yesod_pv_drop(YesodPointValues *pv) {
+    if (pv->values != (int *)0) {
+        free(pv->values);
+    }
+    pv->values = (int *)0;
+    pv->len = 0;
 }
 
 static int __yesod_rt_max_int(int a, int b) { return a > b ? a : b; }
@@ -231,6 +247,7 @@ void __yesod_poly_ntt(
             folded[i % length], __yesod_rt_poly_coeff_raw(poly, i));
     }
     __yesod_rt_transform(out->values, folded, length, 0);
+    free(folded);
 }
 
 void __yesod_pv_add(YesodPointValues *out, const YesodPointValues *lhs,
@@ -287,6 +304,7 @@ void __yesod_poly_from_pointwise(
     for (int i = activeL; i < activeR; ++i) {
         out->coeffs[i] = coeffs[i % pv->len];
     }
+    free(coeffs);
 }
 )";
 
