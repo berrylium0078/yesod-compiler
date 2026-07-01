@@ -195,6 +195,8 @@ bb2_1:
 1. 如果 `%pv1` 的空间利用率低于 $1/4$（活跃区间长度与分配内存块大小的比值），或者因为循环结果不连续，则重新分配内存并复制内容使其连续。
 2. 否则，修改 `base` 使得 `[base + l, base + r)` 指向循环卷积的结果。
 
+当前 LLVM lowering 已实现 pointwise 融合循环：为 pointwise 结果分配输出 PV，在 LLVM IR 循环内逐点计算表达式树，随后调用 `__yesod_poly_take_pointwise` 就地 INTT，并在结果区间连续且空间利用率足够时把 PV backing store 转交给 poly，否则重新分配紧凑 poly。第一版仍由 `ntt` helper 生成输入 PV，尚未实现不活跃输入 poly 的 NTT 原地覆写。
+
 ### combine 融合算子代码生成
 
 #### 结果内存分配

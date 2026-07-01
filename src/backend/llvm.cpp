@@ -1426,44 +1426,61 @@ namespace {
             }
         }
 
-        std::vector<std::string> helperPvTemps;
-        std::function<std::pair<std::string, std::string>(
-            yesod::Ref<koopa_ir::PointwiseNode>)>
-            emitPointwiseNode = [&](yesod::Ref<koopa_ir::PointwiseNode> nodeRef)
-            -> std::pair<std::string, std::string> {
+        auto nextLabelName = [&](const std::string& stem) -> std::string {
+            return stripPrefix(nextHelperName(stem));
+        };
+
+        auto emitMintHelperCall
+            = [&](const std::string& callee, const std::string& lhs,
+                  const std::string& rhs) -> std::string {
+            const std::string result = nextHelperName("mint");
+            output << "  " << result << " = call i32 @" << callee << "(i32 "
+                   << lhs << ", i32 " << rhs << ")\n";
+            return result;
+        };
+
+        std::function<std::string(
+            yesod::Ref<koopa_ir::PointwiseNode>, const std::string&)>
+            emitPointwiseScalar
+            = [&](yesod::Ref<koopa_ir::PointwiseNode> nodeRef,
+                  const std::string& index) -> std::string {
             const auto& node = program[nodeRef];
             return MATCH(node.kind) WITH(
-                [&](const koopa_ir::PointwiseLeaf& leaf)
-                    -> std::pair<std::string, std::string> {
+                [&](const koopa_ir::PointwiseLeaf& leaf) -> std::string {
                     if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
-                        return { "i32", emitValueOperand(leaf.value, program) };
+                        return emitValueOperand(leaf.value, program);
                     }
-                    return { std::string(PV_TYPE),
-                        emitValueOperand(leaf.value, program) };
+                    const std::string pv
+                        = emitValueOperand(leaf.value, program);
+                    const std::string values = nextHelperName("pv_values");
+                    output << "  " << values << " = extractvalue " << PV_TYPE
+                           << " " << pv << ", 0\n";
+                    const std::string elementPtr = nextHelperName("pv_elem");
+                    output << "  " << elementPtr << " = getelementptr i32, ptr "
+                           << values << ", i32 " << index << "\n";
+                    const std::string value = nextHelperName("pv_value");
+                    output << "  " << value << " = load i32, ptr " << elementPtr
+                           << "\n";
+                    return value;
                 },
-                [&](const koopa_ir::PointwiseBinary& binary)
-                    -> std::pair<std::string, std::string> {
-                    const auto lhs = emitPointwiseNode(binary.lhs);
-                    const auto rhs = emitPointwiseNode(binary.rhs);
-                    const std::string result = nextHelperName("pv");
-                    const std::string lhsPtr = emitPvPtr(lhs.second);
+                [&](const koopa_ir::PointwiseBinary& binary) -> std::string {
+                    const std::string lhs
+                        = emitPointwiseScalar(binary.lhs, index);
+                    const std::string rhs
+                        = emitPointwiseScalar(binary.rhs, index);
                     if (binary.op == koopa_ir::PvBinaryOp::times) {
-                        emitPvHelperTo(result, "__yesod_pv_times",
-                            "ptr " + lhsPtr + ", i32 " + rhs.second);
-                        helperPvTemps.push_back(result);
-                        return { std::string(PV_TYPE), result };
+                        return emitMintHelperCall(
+                            "__yesod_field_mul", lhs, rhs);
                     }
-                    const std::string rhsPtr = emitPvPtr(rhs.second);
-                    const char* callee = "__yesod_pv_add";
+                    const char* callee = "__yesod_field_add";
                     if (binary.op == koopa_ir::PvBinaryOp::sub) {
-                        callee = "__yesod_pv_sub";
+                        callee = "__yesod_field_sub";
                     } else if (binary.op == koopa_ir::PvBinaryOp::mul) {
-                        callee = "__yesod_pv_mul";
+                        callee = "__yesod_field_mul";
+                    } else {
+                        callee = "__yesod_field_add";
                     }
-                    emitPvHelperTo(
-                        result, callee, "ptr " + lhsPtr + ", ptr " + rhsPtr);
-                    helperPvTemps.push_back(result);
-                    return { std::string(PV_TYPE), result };
+                    return emitMintHelperCall(callee, lhs, rhs);
                 });
         };
 
@@ -2004,28 +2021,75 @@ namespace {
                                         pointwiseRef) {
                                     const auto& pointwise
                                         = program[pointwiseRef];
-                                    const size_t pvTempStart
-                                        = helperPvTemps.size();
-                                    const auto pv
-                                        = emitPointwiseNode(pointwise.root);
+                                    const std::string length = emitValueOperand(
+                                        pointwise.length, program);
+                                    const std::string outputPv
+                                        = nextHelperName("pv_fused");
+                                    emitPvHelperTo(outputPv, "__yesod_pv_alloc",
+                                        "i32 " + length);
+                                    const std::string outputValues
+                                        = nextHelperName("pv_values");
+                                    output << "  " << outputValues
+                                           << " = extractvalue " << PV_TYPE
+                                           << " " << outputPv << ", 0\n";
+                                    const std::string preheaderLabel
+                                        = nextLabelName("pointwise_preheader");
+                                    const std::string condLabel
+                                        = nextLabelName("pointwise_cond");
+                                    const std::string bodyLabel
+                                        = nextLabelName("pointwise_body");
+                                    const std::string endLabel
+                                        = nextLabelName("pointwise_end");
+                                    output << "  br label %" << preheaderLabel
+                                           << "\n";
+                                    output << preheaderLabel << ":\n";
+                                    output << "  br label %" << condLabel
+                                           << "\n";
+                                    output << condLabel << ":\n";
+                                    const std::string index
+                                        = nextHelperName("pointwise_i");
+                                    const std::string next
+                                        = nextHelperName("pointwise_next");
+                                    output << "  " << index
+                                           << " = phi i32 [ 0, %"
+                                           << preheaderLabel << " ], [ " << next
+                                           << ", %" << bodyLabel << " ]\n";
+                                    const std::string keep
+                                        = nextHelperName("pointwise_keep");
+                                    output << "  " << keep << " = icmp slt i32 "
+                                           << index << ", " << length << "\n";
+                                    output << "  br i1 " << keep << ", label %"
+                                           << bodyLabel << ", label %"
+                                           << endLabel << "\n";
+                                    output << bodyLabel << ":\n";
+                                    const std::string value
+                                        = emitPointwiseScalar(
+                                            pointwise.root, index);
+                                    const std::string outputElement
+                                        = nextHelperName("pv_out_elem");
+                                    output << "  " << outputElement
+                                           << " = getelementptr i32, ptr "
+                                           << outputValues << ", i32 " << index
+                                           << "\n";
+                                    output << "  store i32 " << value
+                                           << ", ptr " << outputElement << "\n";
+                                    output << "  " << next << " = add i32 "
+                                           << index << ", 1\n";
+                                    output << "  br label %" << condLabel
+                                           << "\n";
+                                    output << endLabel << ":\n";
                                     const std::string pvPtr
-                                        = emitPvPtr(pv.second);
+                                        = emitPvPtr(outputPv);
                                     emitPolyHelperTo(llvmValueName(sname),
-                                        "__yesod_poly_from_pointwise",
+                                        "__yesod_poly_take_pointwise",
                                         "ptr " + pvPtr + ", i32 "
                                             + emitValueOperand(
                                                 pointwise.activeL, program)
                                             + ", i32 "
                                             + emitValueOperand(
                                                 pointwise.activeR, program));
-                                    for (size_t i = pvTempStart;
-                                        i < helperPvTemps.size(); ++i) {
-                                        const std::string pvDropPtr
-                                            = emitPvPtr(helperPvTemps[i]);
-                                        emitOwnedPtrDrop(
-                                            std::string(PV_TYPE), pvDropPtr);
-                                    }
-                                    helperPvTemps.resize(pvTempStart);
+                                    emitOwnedPtrDrop(
+                                        std::string(PV_TYPE), pvPtr);
                                 },
                                 [&](const yesod::Ref<koopa_ir::CombineExpr>&
                                         combineRef) {
