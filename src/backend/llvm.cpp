@@ -2370,16 +2370,29 @@ namespace {
                                     const auto& combine = program[combineRef];
                                     struct CombineTermState {
                                         std::string srcCoeffs;
+                                        std::string srcAddr;
+                                        std::string srcN;
                                         std::string lower;
                                         std::string upper;
                                         std::string shift;
                                         std::string scale;
+                                        std::string sourceSymbol;
+                                        bool reuseCandidate = false;
                                     };
+                                    std::map<std::string, int> sourceUseCounts;
+                                    for (const auto& term : combine.terms) {
+                                        if (const auto* symbol
+                                            = std::get_if<koopa_ir::Symbol>(
+                                                &term.value)) {
+                                            ++sourceUseCounts[symbol->spelling];
+                                        }
+                                    }
                                     std::vector<CombineTermState> termStates;
                                     termStates.reserve(combine.terms.size());
                                     std::string resultL = "0";
                                     std::string resultR = "0";
                                     std::string hasAny = "false";
+                                    int reuseCandidateIndex = -1;
                                     for (const auto& term : combine.terms) {
                                         if (const auto* scaleLiteral
                                             = std::get_if<
@@ -2399,6 +2412,19 @@ namespace {
                                                << " = extractvalue "
                                                << POLY_TYPE << " " << src
                                                << ", 0\n";
+                                        const std::string srcAddr
+                                            = nextHelperName(
+                                                "combine_src_addr");
+                                        output << "  " << srcAddr
+                                               << " = extractvalue "
+                                               << POLY_TYPE << " " << src
+                                               << ", 1\n";
+                                        const std::string srcN
+                                            = nextHelperName("combine_src_n");
+                                        output << "  " << srcN
+                                               << " = extractvalue "
+                                               << POLY_TYPE << " " << src
+                                               << ", 2\n";
                                         const std::string srcL
                                             = nextHelperName("combine_src_l");
                                         output << "  " << srcL
@@ -2524,27 +2550,68 @@ namespace {
                                         resultL = nextResultL;
                                         resultR = nextResultR;
                                         hasAny = nextHasAny;
+                                        std::string sourceSymbol;
+                                        bool canBeReuseCandidate = false;
+                                        if (const auto* symbol
+                                            = std::get_if<koopa_ir::Symbol>(
+                                                &term.value)) {
+                                            sourceSymbol = symbol->spelling;
+                                            const auto typeIt
+                                                = valueTypes.find(sourceSymbol);
+                                            const auto useCountIt
+                                                = sourceUseCounts.find(
+                                                    sourceSymbol);
+                                            const auto* scaleLiteral
+                                                = std::get_if<
+                                                    koopa_ir::IntegerLiteral>(
+                                                    &term.scale);
+                                            const auto* shiftLiteral
+                                                = std::get_if<
+                                                    koopa_ir::IntegerLiteral>(
+                                                    &term.shift);
+                                            canBeReuseCandidate
+                                                = typeIt != valueTypes.end()
+                                                && typeIt->second == POLY_TYPE
+                                                && useCountIt
+                                                    != sourceUseCounts.end()
+                                                && useCountIt->second == 1
+                                                && scaleLiteral != nullptr
+                                                && scaleLiteral->value == 1
+                                                && shiftLiteral != nullptr
+                                                && shiftLiteral->value == 0
+                                                && !ownership
+                                                        .liveAfterStmt
+                                                            [blockIndex]
+                                                            [stmtIndex]
+                                                        .contains(sourceSymbol);
+                                        }
+                                        if (canBeReuseCandidate
+                                            && reuseCandidateIndex < 0) {
+                                            reuseCandidateIndex
+                                                = static_cast<int>(
+                                                    termStates.size());
+                                        }
                                         termStates.push_back(CombineTermState {
                                             .srcCoeffs = srcCoeffs,
+                                            .srcAddr = srcAddr,
+                                            .srcN = srcN,
                                             .lower = termL,
                                             .upper = termR,
                                             .shift = shift,
                                             .scale
                                             = emitMintOperand(term.scale),
+                                            .sourceSymbol = sourceSymbol,
+                                            .reuseCandidate
+                                            = canBeReuseCandidate
+                                                && reuseCandidateIndex
+                                                    == static_cast<int>(
+                                                        termStates.size()),
                                         });
                                     }
                                     if (termStates.empty()) {
                                         emitPolyZeroTo(llvmValueName(sname));
                                         return;
                                     }
-                                    const std::string resultAddr
-                                        = nextHelperName("combine_result_addr");
-                                    output << "  " << resultAddr
-                                           << " = call ptr "
-                                              "@__yesod_poly_alloc_zero_data("
-                                              "i32 "
-                                           << resultL << ", i32 " << resultR
-                                           << ")\n";
                                     const std::string resultLen
                                         = nextHelperName("combine_result_len");
                                     output << "  " << resultLen << " = sub i32 "
@@ -2568,22 +2635,247 @@ namespace {
                                     output << "  " << resultN << " = select i1 "
                                            << resultEmpty << ", i32 0, i32 "
                                            << resultRawN << "\n";
-                                    const std::string resultPolyCoeffs
-                                        = emitPolyCoeffPtrForAddr(
+                                    auto emitZeroRange
+                                        = [&](const std::string& coeffs,
+                                              const std::string& begin,
+                                              const std::string& end)
+                                        -> std::string {
+                                        const std::string preheaderLabel
+                                            = nextLabelName(
+                                                "combine_zero_preheader");
+                                        const std::string condLabel
+                                            = nextLabelName(
+                                                "combine_zero_cond");
+                                        const std::string bodyLabel
+                                            = nextLabelName(
+                                                "combine_zero_body");
+                                        const std::string endLabel
+                                            = nextLabelName("combine_zero_end");
+                                        output << "  br label %"
+                                               << preheaderLabel << "\n";
+                                        output << preheaderLabel << ":\n";
+                                        output << "  br label %" << condLabel
+                                               << "\n";
+                                        output << condLabel << ":\n";
+                                        const std::string index
+                                            = nextHelperName("combine_zero_i");
+                                        const std::string next = nextHelperName(
+                                            "combine_zero_next");
+                                        output << "  " << index
+                                               << " = phi i32 [ " << begin
+                                               << ", %" << preheaderLabel
+                                               << " ], [ " << next << ", %"
+                                               << bodyLabel << " ]\n";
+                                        const std::string keep = nextHelperName(
+                                            "combine_zero_keep");
+                                        output << "  " << keep
+                                               << " = icmp slt i32 " << index
+                                               << ", " << end << "\n";
+                                        output << "  br i1 " << keep
+                                               << ", label %" << bodyLabel
+                                               << ", label %" << endLabel
+                                               << "\n";
+                                        output << bodyLabel << ":\n";
+                                        const std::string dstPtr
+                                            = nextHelperName(
+                                                "combine_zero_dst");
+                                        output << "  " << dstPtr
+                                               << " = getelementptr i32, ptr "
+                                               << coeffs << ", i32 " << index
+                                               << "\n";
+                                        output << "  store i32 0, ptr "
+                                               << dstPtr << "\n";
+                                        output << "  " << next << " = add i32 "
+                                               << index << ", 1\n";
+                                        output << "  br label %" << condLabel
+                                               << "\n";
+                                        output << endLabel << ":\n";
+                                        return endLabel;
+                                    };
+                                    std::string resultAddr;
+                                    std::string resultCoeffs;
+                                    std::string resultOwnedN;
+                                    std::string reusedCandidateFlag = "false";
+                                    if (reuseCandidateIndex >= 0) {
+                                        const CombineTermState& candidate
+                                            = termStates[static_cast<size_t>(
+                                                reuseCandidateIndex)];
+                                        movedValuesInStatement.insert(
+                                            candidate.sourceSymbol);
+                                        const std::string coeffsInt
+                                            = nextHelperName(
+                                                "combine_reuse_coeffs_i");
+                                        const std::string addrInt
+                                            = nextHelperName(
+                                                "combine_reuse_addr_i");
+                                        output << "  " << coeffsInt
+                                               << " = ptrtoint ptr "
+                                               << candidate.srcCoeffs
+                                               << " to i64\n";
+                                        output << "  " << addrInt
+                                               << " = ptrtoint ptr "
+                                               << candidate.srcAddr
+                                               << " to i64\n";
+                                        const std::string byteOffset
+                                            = nextHelperName(
+                                                "combine_reuse_byte_offset");
+                                        output << "  " << byteOffset
+                                               << " = sub i64 " << coeffsInt
+                                               << ", " << addrInt << "\n";
+                                        const std::string elemOffset
+                                            = nextHelperName(
+                                                "combine_reuse_elem_offset");
+                                        output << "  " << elemOffset
+                                               << " = sdiv i64 " << byteOffset
+                                               << ", 4\n";
+                                        const std::string resultL64
+                                            = nextHelperName(
+                                                "combine_reuse_l64");
+                                        output << "  " << resultL64
+                                               << " = sext i32 " << resultL
+                                               << " to i64\n";
+                                        const std::string resultR64
+                                            = nextHelperName(
+                                                "combine_reuse_r64");
+                                        output << "  " << resultR64
+                                               << " = sext i32 " << resultR
+                                               << " to i64\n";
+                                        const std::string resultBeginOffset
+                                            = nextHelperName(
+                                                "combine_reuse_begin");
+                                        output << "  " << resultBeginOffset
+                                               << " = add i64 " << elemOffset
+                                               << ", " << resultL64 << "\n";
+                                        const std::string resultEndOffset
+                                            = nextHelperName(
+                                                "combine_reuse_end");
+                                        output << "  " << resultEndOffset
+                                               << " = add i64 " << elemOffset
+                                               << ", " << resultR64 << "\n";
+                                        const std::string srcN64
+                                            = nextHelperName(
+                                                "combine_reuse_n64");
+                                        output << "  " << srcN64
+                                               << " = sext i32 "
+                                               << candidate.srcN << " to i64\n";
+                                        const std::string beginInBounds
+                                            = nextHelperName(
+                                                "combine_reuse_begin_ok");
+                                        output << "  " << beginInBounds
+                                               << " = icmp sge i64 "
+                                               << resultBeginOffset << ", 0\n";
+                                        const std::string endInBounds
+                                            = nextHelperName(
+                                                "combine_reuse_end_ok");
+                                        output << "  " << endInBounds
+                                               << " = icmp sle i64 "
+                                               << resultEndOffset << ", "
+                                               << srcN64 << "\n";
+                                        const std::string capacityOk
+                                            = nextHelperName(
+                                                "combine_reuse_capacity");
+                                        output << "  " << capacityOk
+                                               << " = and i1 " << beginInBounds
+                                               << ", " << endInBounds << "\n";
+                                        const std::string notEmpty
+                                            = nextHelperName(
+                                                "combine_reuse_not_empty");
+                                        output << "  " << notEmpty
+                                               << " = icmp slt i32 " << resultL
+                                               << ", " << resultR << "\n";
+                                        const std::string canReuse
+                                            = nextHelperName(
+                                                "combine_can_reuse");
+                                        output << "  " << canReuse
+                                               << " = and i1 " << capacityOk
+                                               << ", " << notEmpty << "\n";
+                                        const std::string reuseLabel
+                                            = nextLabelName("combine_reuse");
+                                        const std::string allocLabel
+                                            = nextLabelName("combine_alloc");
+                                        const std::string afterLabel
+                                            = nextLabelName(
+                                                "combine_after_alloc");
+                                        output << "  br i1 " << canReuse
+                                               << ", label %" << reuseLabel
+                                               << ", label %" << allocLabel
+                                               << "\n";
+                                        output << reuseLabel << ":\n";
+                                        std::string reuseExitLabel
+                                            = emitZeroRange(candidate.srcCoeffs,
+                                                resultL, candidate.lower);
+                                        reuseExitLabel
+                                            = emitZeroRange(candidate.srcCoeffs,
+                                                candidate.upper, resultR);
+                                        output << "  br label %" << afterLabel
+                                               << "\n";
+                                        output << allocLabel << ":\n";
+                                        const std::string allocAddr
+                                            = nextHelperName(
+                                                "combine_result_addr");
+                                        output << "  " << allocAddr
+                                               << " = call ptr "
+                                                  "@__yesod_poly_alloc_zero_"
+                                                  "data(i32 "
+                                               << resultL << ", i32 " << resultR
+                                               << ")\n";
+                                        const std::string allocCoeffs
+                                            = emitPolyCoeffPtrForAddr(allocAddr,
+                                                resultL, resultEmpty);
+                                        output << "  br label %" << afterLabel
+                                               << "\n";
+                                        output << afterLabel << ":\n";
+                                        resultAddr = nextHelperName(
+                                            "combine_result_addr_phi");
+                                        resultCoeffs = nextHelperName(
+                                            "combine_result_coeffs_phi");
+                                        resultOwnedN = nextHelperName(
+                                            "combine_result_n_phi");
+                                        reusedCandidateFlag = nextHelperName(
+                                            "combine_reused_phi");
+                                        output << "  " << resultAddr
+                                               << " = phi ptr [ "
+                                               << candidate.srcAddr << ", %"
+                                               << reuseExitLabel << " ], [ "
+                                               << allocAddr << ", %"
+                                               << allocLabel << " ]\n";
+                                        output << "  " << resultCoeffs
+                                               << " = phi ptr [ "
+                                               << candidate.srcCoeffs << ", %"
+                                               << reuseExitLabel << " ], [ "
+                                               << allocCoeffs << ", %"
+                                               << allocLabel << " ]\n";
+                                        output << "  " << resultOwnedN
+                                               << " = phi i32 [ "
+                                               << candidate.srcN << ", %"
+                                               << reuseExitLabel << " ], [ "
+                                               << resultN << ", %" << allocLabel
+                                               << " ]\n";
+                                        output << "  " << reusedCandidateFlag
+                                               << " = phi i1 [ true, %"
+                                               << reuseExitLabel
+                                               << " ], [ false, %" << allocLabel
+                                               << " ]\n";
+                                    } else {
+                                        resultAddr = nextHelperName(
+                                            "combine_result_addr");
+                                        output
+                                            << "  " << resultAddr
+                                            << " = call ptr "
+                                               "@__yesod_poly_alloc_zero_data("
+                                               "i32 "
+                                            << resultL << ", i32 " << resultR
+                                            << ")\n";
+                                        resultCoeffs = emitPolyCoeffPtrForAddr(
                                             resultAddr, resultL, resultEmpty);
+                                        resultOwnedN = resultN;
+                                    }
                                     emitPolyFromFields(llvmValueName(sname),
-                                        PolyFields { .coeffs = resultPolyCoeffs,
+                                        PolyFields { .coeffs = resultCoeffs,
                                             .addr = resultAddr,
-                                            .n = resultN,
+                                            .n = resultOwnedN,
                                             .l = resultL,
                                             .r = resultR });
-                                    const std::string resultCoeffs
-                                        = nextHelperName(
-                                            "combine_result_coeffs");
-                                    output << "  " << resultCoeffs
-                                           << " = extractvalue " << POLY_TYPE
-                                           << " " << llvmValueName(sname)
-                                           << ", 0\n";
                                     const std::string montOne = std::to_string(
                                         intToMontgomeryConst(1));
                                     const std::string montMinusOne
@@ -2613,8 +2905,16 @@ namespace {
                                             = nextLabelName("combine_body");
                                         const std::string endLabel
                                             = nextLabelName("combine_end");
-                                        output << "  br label %"
-                                               << preheaderLabel << "\n";
+                                        if (term.reuseCandidate) {
+                                            output << "  br i1 "
+                                                   << reusedCandidateFlag
+                                                   << ", label %" << endLabel
+                                                   << ", label %"
+                                                   << preheaderLabel << "\n";
+                                        } else {
+                                            output << "  br label %"
+                                                   << preheaderLabel << "\n";
+                                        }
                                         output << preheaderLabel << ":\n";
                                         output << "  br label %" << condLabel
                                                << "\n";
@@ -2687,6 +2987,28 @@ namespace {
                                         output << "  br label %" << condLabel
                                                << "\n";
                                         output << endLabel << ":\n";
+                                    }
+                                    if (reuseCandidateIndex >= 0) {
+                                        const CombineTermState& candidate
+                                            = termStates[static_cast<size_t>(
+                                                reuseCandidateIndex)];
+                                        const std::string dropOldLabel
+                                            = nextLabelName("combine_drop_old");
+                                        const std::string doneLabel
+                                            = nextLabelName(
+                                                "combine_drop_done");
+                                        output << "  br i1 "
+                                               << reusedCandidateFlag
+                                               << ", label %" << doneLabel
+                                               << ", label %" << dropOldLabel
+                                               << "\n";
+                                        output << dropOldLabel << ":\n";
+                                        output << "  call void "
+                                                  "@__yesod_rt_free_ints(ptr "
+                                               << candidate.srcAddr << ")\n";
+                                        output << "  br label %" << doneLabel
+                                               << "\n";
+                                        output << doneLabel << ":\n";
                                     }
                                 },
                                 [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&
