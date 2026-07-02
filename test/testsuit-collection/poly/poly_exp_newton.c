@@ -62,8 +62,7 @@ poly poly_exp_newton(poly f, int n)
         if (new_k > n) {
             new_k = n;
         }
-        poly pad_g = g + (poly(0) << new_k);
-        poly ln_g = poly_ln(pad_g, new_k);
+        poly ln_g = poly_ln(g, new_k);
         g = g + (g * (f - ln_g))[k, new_k];
         k = new_k;
     }

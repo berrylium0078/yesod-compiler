@@ -1719,11 +1719,59 @@ namespace {
             return emitPolyConstruct(std::move(elements));
         }
 
+        [[nodiscard]] bool isPolyLinearExpression(Ref<Exp> exp) const
+        {
+            const auto& parsedExp = exp(m_ast);
+            return MATCH(parsedExp.kind) WITH(
+                [&](Exp::Binary expAlt) -> bool {
+                    if ((expAlt.op == BinaryOpKeyword::plus
+                            || expAlt.op == BinaryOpKeyword::minus)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)
+                        && expHasType(expAlt.rhs, SemanticTypeKind::poly)) {
+                        return isPolyLinearExpression(expAlt.lhs)
+                            && isPolyLinearExpression(expAlt.rhs);
+                    }
+                    if (expAlt.op == BinaryOpKeyword::star) {
+                        const bool lhsIsPoly
+                            = expHasType(expAlt.lhs, SemanticTypeKind::poly);
+                        const bool rhsIsPoly
+                            = expHasType(expAlt.rhs, SemanticTypeKind::poly);
+                        if (lhsIsPoly && rhsIsPoly) {
+                            return false;
+                        }
+                        if (lhsIsPoly) {
+                            return isPolyLinearExpression(expAlt.lhs);
+                        }
+                        if (rhsIsPoly) {
+                            return isPolyLinearExpression(expAlt.rhs);
+                        }
+                        return false;
+                    }
+                    if ((expAlt.op == BinaryOpKeyword::sar
+                            || expAlt.op == BinaryOpKeyword::shl)
+                        && expHasType(expAlt.lhs, SemanticTypeKind::poly)) {
+                        return isPolyLinearExpression(expAlt.lhs);
+                    }
+                    return false;
+                },
+                [&](Exp::Cast expAlt) -> bool {
+                    return expAlt.targetType == BTypeKeyword::polyKeyword;
+                },
+                [&](Exp::Call) -> bool { return true; },
+                [&](Exp::LVal) -> bool { return true; },
+                [&](Exp::Slice) -> bool { return true; },
+                [&](Exp::PolyConstruct) -> bool { return true; },
+                [&](const auto&) -> bool { return false; });
+        }
+
         [[nodiscard]] bool canBuildPointwise(Ref<Exp> exp) const
         {
             const auto& parsedExp = exp(m_ast);
             return MATCH(parsedExp.kind) WITH(
                 [&](Exp::Binary expAlt) -> bool {
+                    if (isPolyLinearExpression(exp)) {
+                        return false;
+                    }
                     if ((expAlt.op == BinaryOpKeyword::plus
                             || expAlt.op == BinaryOpKeyword::minus)
                         && expHasType(expAlt.lhs, SemanticTypeKind::poly)
@@ -1749,6 +1797,9 @@ namespace {
             const auto& parsedExp = exp(m_ast);
             return MATCH(parsedExp.kind) WITH(
                 [&](Exp::Binary expAlt) -> Ref<koopa_ir::PointwiseNode> {
+                    if (isPolyLinearExpression(exp)) {
+                        return makePointwiseLeaf(generatePolyBaseValue(exp));
+                    }
                     if ((expAlt.op == BinaryOpKeyword::plus
                             || expAlt.op == BinaryOpKeyword::minus)
                         && expHasType(expAlt.lhs, SemanticTypeKind::poly)
