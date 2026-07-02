@@ -241,6 +241,470 @@ namespace {
             });
     }
 
+    struct FunctionTypeContext {
+        PointeeMap pointees;
+        PointeeMap loadedPointees;
+        ValueTypeMap valueTypes;
+        ValueTypeMap logicalTypes;
+        ValueTypeMap logicalPointees;
+        std::vector<std::pair<std::string, koopa_ir::Type>>
+            localPolyAllocations;
+        std::vector<std::pair<std::string, koopa_ir::Type>>
+            globalPolyAllocations;
+    };
+
+    std::string logicalTypeOfIrType(
+        const koopa_ir::Type& type, const koopa_ir::Program& program)
+    {
+        if (std::holds_alternative<koopa_ir::MintType>(type)) {
+            return "mint";
+        }
+        if (std::holds_alternative<koopa_ir::PolyType>(type)) {
+            return "poly";
+        }
+        if (std::holds_alternative<koopa_ir::I32Type>(type)) {
+            return "int";
+        }
+        if (std::holds_alternative<yesod::Ref<koopa_ir::PointerType>>(type)) {
+            return "ptr";
+        }
+        return emitType(type, program);
+    }
+
+    std::string valueTypeOfValue(
+        const koopa_ir::Value& value, const ValueTypeMap& valueTypes)
+    {
+        if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+            const auto typeIt = valueTypes.find(symbol->spelling);
+            return typeIt == valueTypes.end() ? "i32" : typeIt->second;
+        }
+        return "i32";
+    }
+
+    std::string logicalTypeOfValue(
+        const koopa_ir::Value& value, const ValueTypeMap& logicalTypes)
+    {
+        if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+            const auto typeIt = logicalTypes.find(symbol->spelling);
+            return typeIt == logicalTypes.end() ? "int" : typeIt->second;
+        }
+        return "int";
+    }
+
+    std::string arrayElementTypeString(const std::string& arrayType)
+    {
+        const auto xpos = arrayType.find(" x ");
+        if (xpos == std::string::npos) {
+            return arrayType;
+        }
+        std::string elemType = arrayType.substr(xpos + 3);
+        if (!elemType.empty() && elemType.back() == ']') {
+            elemType.pop_back();
+        }
+        return elemType;
+    }
+
+    void recordPointerType(FunctionTypeContext& context,
+        const std::string& symbol, const koopa_ir::Type& type,
+        const koopa_ir::Program& program)
+    {
+        const std::string pointee = pointeeTypeString(type, program);
+        if (!pointee.empty()) {
+            context.valueTypes[symbol] = "ptr";
+            context.pointees[symbol] = pointee;
+            context.logicalTypes[symbol] = "ptr";
+        }
+    }
+
+    void recordGlobalType(FunctionTypeContext& context,
+        const koopa_ir::GlobalMemoryDef& global,
+        const koopa_ir::Program& program)
+    {
+        context.valueTypes[global.name.spelling] = "ptr";
+        context.pointees[global.name.spelling]
+            = emitType(global.allocType, program);
+        context.logicalTypes[global.name.spelling] = "ptr";
+        context.logicalPointees[global.name.spelling]
+            = logicalTypeOfIrType(global.allocType, program);
+        if (typeContainsPoly(global.allocType, program)) {
+            context.globalPolyAllocations.emplace_back(
+                global.name.spelling, global.allocType);
+        }
+    }
+
+    template <typename Parameter>
+    void recordParameterType(FunctionTypeContext& context,
+        const Parameter& param, const koopa_ir::Program& program)
+    {
+        context.valueTypes[param.symbol.spelling]
+            = emitType(param.type, program);
+        context.logicalTypes[param.symbol.spelling]
+            = logicalTypeOfIrType(param.type, program);
+        if (const auto* prefType
+            = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&param.type)) {
+            context.pointees[param.symbol.spelling]
+                = emitType(program[*prefType].pointeeType, program);
+            context.logicalPointees[param.symbol.spelling]
+                = logicalTypeOfIrType(program[*prefType].pointeeType, program);
+        }
+    }
+
+    void recordSymbolDefType(FunctionTypeContext& context,
+        const koopa_ir::SymbolDef& symbolDef, const koopa_ir::Program& program,
+        const FuncSigMap& sigs)
+    {
+        const std::string& sname = symbolDef.symbol.spelling;
+        MATCH(symbolDef.rhs)
+        WITH(
+            [&](const yesod::Ref<koopa_ir::MemoryDeclaration>& memRef) -> void {
+                const auto& mem = program[memRef];
+                context.valueTypes[sname] = "ptr";
+                context.logicalTypes[sname] = "ptr";
+                context.pointees[sname] = emitType(mem.allocType, program);
+                context.logicalPointees[sname]
+                    = logicalTypeOfIrType(mem.allocType, program);
+                const std::string loadedPointee
+                    = loadedPointerPointeeTypeString(mem.allocType, program);
+                if (!loadedPointee.empty()) {
+                    context.loadedPointees[sname] = loadedPointee;
+                }
+                if (typeContainsPoly(mem.allocType, program)) {
+                    context.localPolyAllocations.emplace_back(
+                        sname, mem.allocType);
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::LoadExpr>& loadRef) -> void {
+                const auto& load = program[loadRef];
+                const auto typeIt = context.pointees.find(load.source.spelling);
+                context.valueTypes[sname]
+                    = typeIt != context.pointees.end() ? typeIt->second : "i32";
+                const auto logicalIt
+                    = context.logicalPointees.find(load.source.spelling);
+                context.logicalTypes[sname]
+                    = logicalIt == context.logicalPointees.end()
+                    ? "int"
+                    : logicalIt->second;
+                if (context.valueTypes[sname] == "ptr") {
+                    const auto loadedPointeeIt
+                        = context.loadedPointees.find(load.source.spelling);
+                    if (loadedPointeeIt != context.loadedPointees.end()) {
+                        context.pointees[sname] = loadedPointeeIt->second;
+                    }
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::GetPointerExpr>& getPtrRef) -> void {
+                const auto& getPtr = program[getPtrRef];
+                const auto valueIt
+                    = context.valueTypes.find(getPtr.source.spelling);
+                context.valueTypes[sname] = valueIt != context.valueTypes.end()
+                    ? valueIt->second
+                    : "ptr";
+                context.logicalTypes[sname] = "ptr";
+                const auto pointeeIt
+                    = context.pointees.find(getPtr.source.spelling);
+                if (pointeeIt != context.pointees.end()) {
+                    context.pointees[sname] = pointeeIt->second;
+                }
+                const auto logicalPointeeIt
+                    = context.logicalPointees.find(getPtr.source.spelling);
+                if (logicalPointeeIt != context.logicalPointees.end()) {
+                    context.logicalPointees[sname] = logicalPointeeIt->second;
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::GetElementPointerExpr>& gelemRef)
+                -> void {
+                const auto& gelem = program[gelemRef];
+                context.valueTypes[sname] = "ptr";
+                context.logicalTypes[sname] = "ptr";
+                const auto pointeeIt
+                    = context.pointees.find(gelem.source.spelling);
+                if (pointeeIt != context.pointees.end()) {
+                    context.pointees[sname]
+                        = arrayElementTypeString(pointeeIt->second);
+                }
+                const auto logicalPointeeIt
+                    = context.logicalPointees.find(gelem.source.spelling);
+                if (logicalPointeeIt != context.logicalPointees.end()) {
+                    context.logicalPointees[sname]
+                        = arrayElementTypeString(logicalPointeeIt->second);
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::BinaryExpr>& binRef) -> void {
+                const auto& bin = program[binRef];
+                context.valueTypes[sname] = "i32";
+                switch (bin.op) {
+                case koopa_ir::BinaryOp::eq:
+                case koopa_ir::BinaryOp::ne:
+                case koopa_ir::BinaryOp::gt:
+                case koopa_ir::BinaryOp::lt:
+                case koopa_ir::BinaryOp::ge:
+                case koopa_ir::BinaryOp::le:
+                case koopa_ir::BinaryOp::mod:
+                case koopa_ir::BinaryOp::bitAnd:
+                case koopa_ir::BinaryOp::bitOr:
+                case koopa_ir::BinaryOp::bitXor:
+                case koopa_ir::BinaryOp::shl:
+                case koopa_ir::BinaryOp::shr:
+                case koopa_ir::BinaryOp::sar:
+                    context.logicalTypes[sname] = "int";
+                    break;
+                default:
+                    context.logicalTypes[sname]
+                        = logicalTypeOfValue(bin.lhs, context.logicalTypes)
+                                == "mint"
+                            || logicalTypeOfValue(bin.rhs, context.logicalTypes)
+                                == "mint"
+                        ? "mint"
+                        : "int";
+                    break;
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::CallExpr>& callRef) -> void {
+                const auto& call = program[callRef];
+                const auto sigIt = sigs.find(call.callee.spelling);
+                if (sigIt != sigs.end() && sigIt->second.retType != "void") {
+                    context.valueTypes[sname] = sigIt->second.retType;
+                    context.logicalTypes[sname] = "int";
+                } else {
+                    context.valueTypes[sname] = "i32";
+                    context.logicalTypes[sname] = "int";
+                }
+            },
+            [&](const yesod::Ref<koopa_ir::CopyExpr>& copyRef) -> void {
+                const auto& copy = program[copyRef];
+                context.valueTypes[sname]
+                    = valueTypeOfValue(copy.value, context.valueTypes);
+                context.logicalTypes[sname]
+                    = logicalTypeOfValue(copy.value, context.logicalTypes);
+            },
+            [&](const yesod::Ref<koopa_ir::GetAttrExpr>& getAttrRef) -> void {
+                const auto& getAttr = program[getAttrRef];
+                context.valueTypes[sname]
+                    = getAttr.attr == koopa_ir::PolyAttr::base
+                        || getAttr.attr == koopa_ir::PolyAttr::addr
+                    ? "ptr"
+                    : "i32";
+                context.logicalTypes[sname]
+                    = context.valueTypes[sname] == "ptr" ? "ptr" : "int";
+            },
+            [&](const yesod::Ref<koopa_ir::SetAttrExpr>&) -> void {
+                context.valueTypes[sname] = std::string(POLY_TYPE);
+                context.logicalTypes[sname] = "poly";
+            },
+            [&](const yesod::Ref<koopa_ir::SelectExpr>& selectRef) -> void {
+                const auto& select = program[selectRef];
+                context.valueTypes[sname]
+                    = valueTypeOfValue(select.trueValue, context.valueTypes);
+                context.logicalTypes[sname] = logicalTypeOfValue(
+                    select.trueValue, context.logicalTypes);
+            },
+            [&](const yesod::Ref<koopa_ir::NextPow2Expr>&) -> void {
+                context.valueTypes[sname] = "i32";
+                context.logicalTypes[sname] = "int";
+            },
+            [&](const yesod::Ref<koopa_ir::NttExpr>&) -> void {
+                context.valueTypes[sname] = std::string(PV_TYPE);
+                context.logicalTypes[sname] = "pv";
+            },
+            [&](const yesod::Ref<koopa_ir::PointwiseExpr>&) -> void {
+                context.valueTypes[sname] = std::string(POLY_TYPE);
+                context.logicalTypes[sname] = "poly";
+            },
+            [&](const yesod::Ref<koopa_ir::CombineExpr>&) -> void {
+                context.valueTypes[sname] = std::string(POLY_TYPE);
+                context.logicalTypes[sname] = "poly";
+            },
+            [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&) -> void {
+                context.valueTypes[sname] = "i32";
+                context.logicalTypes[sname] = "mint";
+            },
+            [&](const yesod::Ref<koopa_ir::PolyConstructExpr>&) -> void {
+                context.valueTypes[sname] = std::string(POLY_TYPE);
+                context.logicalTypes[sname] = "poly";
+            },
+            [&](const yesod::Ref<koopa_ir::ConversionExpr>& convRef) -> void {
+                context.valueTypes[sname] = "i32";
+                context.logicalTypes[sname]
+                    = program[convRef].op == koopa_ir::ConversionOp::int2mint
+                    ? "mint"
+                    : "int";
+            },
+            [&](const auto&) -> void {
+                throw std::runtime_error(
+                    "LLVM backend does not support native poly/pv "
+                    "pseudo-instructions");
+            });
+    }
+
+    FunctionTypeContext buildFunctionTypeContext(
+        const koopa_ir::FunctionDef& function, const koopa_ir::Program& program,
+        const FuncSigMap& sigs)
+    {
+        FunctionTypeContext context;
+        for (const auto& item : program.items) {
+            std::visit(
+                [&](auto itemRef) -> void {
+                    using Item
+                        = std::remove_cvref_t<decltype(program[itemRef])>;
+                    if constexpr (std::same_as<Item,
+                                      koopa_ir::GlobalMemoryDef>) {
+                        recordGlobalType(context, program[itemRef], program);
+                    }
+                },
+                item);
+        }
+
+        for (const auto& paramRef : function.params) {
+            recordParameterType(context, program[paramRef], program);
+        }
+
+        for (const auto& blockRef : function.blocks) {
+            const auto& block = program[blockRef];
+            for (const auto& paramRef : block.params) {
+                recordParameterType(context, program[paramRef], program);
+                recordPointerType(context, program[paramRef].symbol.spelling,
+                    program[paramRef].type, program);
+            }
+            for (const auto& stmt : block.statements) {
+                std::visit(
+                    [&](auto stmtRef) -> void {
+                        using StmtNode
+                            = std::remove_cvref_t<decltype(program[stmtRef])>;
+                        if constexpr (std::same_as<StmtNode,
+                                          koopa_ir::SymbolDef>) {
+                            recordSymbolDefType(
+                                context, program[stmtRef], program, sigs);
+                        }
+                    },
+                    stmt);
+            }
+        }
+        return context;
+    }
+
+    struct LlvmNameGenerator {
+        int32_t helperTempId = 0;
+
+        std::string nextHelperName(const std::string& stem)
+        {
+            return "%" + stem + "_" + std::to_string(helperTempId++);
+        }
+    };
+
+    struct MintIrEmitter {
+        std::ostream& output;
+        LlvmNameGenerator& names;
+
+        std::string emitMontgomeryReduce(const std::string& value)
+        {
+            const std::string truncated = names.nextHelperName("mont_trunc");
+            output << "  " << truncated << " = trunc i64 " << value
+                   << " to i32\n";
+            const std::string q = names.nextHelperName("mont_q");
+            output << "  " << q << " = mul i32 " << truncated << ", " << MONT_U
+                   << "\n";
+            const std::string q64 = names.nextHelperName("mont_q64");
+            output << "  " << q64 << " = sext i32 " << q << " to i64\n";
+            const std::string mq = names.nextHelperName("mont_mq");
+            output << "  " << mq << " = mul i64 " << MINT_MOD << ", " << q64
+                   << "\n";
+            const std::string sum = names.nextHelperName("mont_sum");
+            output << "  " << sum << " = add i64 " << value << ", " << mq
+                   << "\n";
+            const std::string shifted = names.nextHelperName("mont_shift");
+            output << "  " << shifted << " = ashr i64 " << sum << ", 32\n";
+            const std::string result = names.nextHelperName("mont_reduce");
+            output << "  " << result << " = trunc i64 " << shifted
+                   << " to i32\n";
+            return result;
+        }
+
+        std::string emitIntToMint(const std::string& value)
+        {
+            const std::string wide = names.nextHelperName("mint_i64");
+            output << "  " << wide << " = sext i32 " << value << " to i64\n";
+            const std::string scaled = names.nextHelperName("mint_r2");
+            output << "  " << scaled << " = mul i64 " << wide << ", " << MONT_R2
+                   << "\n";
+            return emitMontgomeryReduce(scaled);
+        }
+
+        std::string emitMintToInt(const std::string& value)
+        {
+            const std::string wide = names.nextHelperName("mint_to_i64");
+            output << "  " << wide << " = sext i32 " << value << " to i64\n";
+            const std::string reduced = emitMontgomeryReduce(wide);
+            const std::string isNegative = names.nextHelperName("mint_neg");
+            output << "  " << isNegative << " = icmp slt i32 " << reduced
+                   << ", 0\n";
+            const std::string adjusted = names.nextHelperName("mint_adjusted");
+            output << "  " << adjusted << " = add i32 " << reduced << ", "
+                   << MINT_MOD << "\n";
+            const std::string result = names.nextHelperName("mint_int");
+            output << "  " << result << " = select i1 " << isNegative
+                   << ", i32 " << adjusted << ", i32 " << reduced << "\n";
+            return result;
+        }
+
+        std::string emitMintAddSub(
+            const std::string& lhs, const std::string& rhs, bool isSub)
+        {
+            const std::string raw
+                = names.nextHelperName(isSub ? "mint_sub" : "mint_add");
+            output << "  " << raw << " = " << (isSub ? "sub" : "add") << " i32 "
+                   << lhs << ", " << rhs << "\n";
+            const std::string isNegative
+                = names.nextHelperName("mint_fold_neg");
+            output << "  " << isNegative << " = icmp slt i32 " << raw
+                   << ", 0\n";
+            const std::string plus2m = names.nextHelperName("mint_plus_2m");
+            output << "  " << plus2m << " = add i32 " << raw << ", "
+                   << (2 * MINT_MOD) << "\n";
+            const std::string nonNegative = names.nextHelperName("mint_nonneg");
+            output << "  " << nonNegative << " = select i1 " << isNegative
+                   << ", i32 " << plus2m << ", i32 " << raw << "\n";
+            const std::string atLeastMod = names.nextHelperName("mint_ge_mod");
+            output << "  " << atLeastMod << " = icmp sge i32 " << nonNegative
+                   << ", " << MINT_MOD << "\n";
+            const std::string minusMod = names.nextHelperName("mint_minus_mod");
+            output << "  " << minusMod << " = sub i32 " << nonNegative << ", "
+                   << MINT_MOD << "\n";
+            const std::string result = names.nextHelperName("mint_folded");
+            output << "  " << result << " = select i1 " << atLeastMod
+                   << ", i32 " << minusMod << ", i32 " << nonNegative << "\n";
+            return result;
+        }
+
+        std::string emitMintMul(const std::string& lhs, const std::string& rhs)
+        {
+            const std::string lhs64 = names.nextHelperName("mint_lhs64");
+            output << "  " << lhs64 << " = sext i32 " << lhs << " to i64\n";
+            const std::string rhs64 = names.nextHelperName("mint_rhs64");
+            output << "  " << rhs64 << " = sext i32 " << rhs << " to i64\n";
+            const std::string product = names.nextHelperName("mint_product");
+            output << "  " << product << " = mul i64 " << lhs64 << ", " << rhs64
+                   << "\n";
+            return emitMontgomeryReduce(product);
+        }
+
+        std::string emitMintPowConst(const std::string& base, int32_t exponent)
+        {
+            std::string result = std::to_string(301989884);
+            std::string power = base;
+            int32_t exp = exponent;
+            while (exp > 0) {
+                if ((exp & 1) != 0) {
+                    result = emitMintMul(result, power);
+                }
+                exp >>= 1;
+                if (exp > 0) {
+                    power = emitMintMul(power, power);
+                }
+            }
+            return result;
+        }
+    };
+
     // ─── Phi-edge collection ──────────────────────────────────────────────
 
     struct IncomingEdge {
@@ -779,500 +1243,10 @@ namespace {
         output << ")\n";
     }
 
-    // ─── Function body emitter ────────────────────────────────────────────
-
-    void emitFunctionDef(const koopa_ir::FunctionDef& function,
-        const koopa_ir::Program& program, const FuncSigMap& sigs,
+    void emitFunctionSignature(const koopa_ir::FunctionDef& function,
+        const koopa_ir::Program& program, const std::string& name,
         std::ostream& output)
     {
-        const std::string name = stripPrefix(function.name.spelling);
-
-        // ── Build per-function type maps ───────────────────────────────
-        PointeeMap pointees;
-        PointeeMap loadedPointees;
-        ValueTypeMap valueTypes;
-        ValueTypeMap logicalTypes;
-        ValueTypeMap logicalPointees;
-        std::vector<std::pair<std::string, koopa_ir::Type>>
-            localPolyAllocations;
-        std::vector<std::pair<std::string, koopa_ir::Type>>
-            globalPolyAllocations;
-        int32_t helperTempId = 0;
-
-        auto nextHelperName = [&](const std::string& stem) -> std::string {
-            return "%" + stem + "_" + std::to_string(helperTempId++);
-        };
-
-        auto emitMontgomeryReduce
-            = [&](const std::string& value) -> std::string {
-            const std::string truncated = nextHelperName("mont_trunc");
-            output << "  " << truncated << " = trunc i64 " << value
-                   << " to i32\n";
-            const std::string q = nextHelperName("mont_q");
-            output << "  " << q << " = mul i32 " << truncated << ", " << MONT_U
-                   << "\n";
-            const std::string q64 = nextHelperName("mont_q64");
-            output << "  " << q64 << " = sext i32 " << q << " to i64\n";
-            const std::string mq = nextHelperName("mont_mq");
-            output << "  " << mq << " = mul i64 " << MINT_MOD << ", " << q64
-                   << "\n";
-            const std::string sum = nextHelperName("mont_sum");
-            output << "  " << sum << " = add i64 " << value << ", " << mq
-                   << "\n";
-            const std::string shifted = nextHelperName("mont_shift");
-            output << "  " << shifted << " = ashr i64 " << sum << ", 32\n";
-            const std::string result = nextHelperName("mont_reduce");
-            output << "  " << result << " = trunc i64 " << shifted
-                   << " to i32\n";
-            return result;
-        };
-
-        auto emitIntToMint = [&](const std::string& value) -> std::string {
-            const std::string wide = nextHelperName("mint_i64");
-            output << "  " << wide << " = sext i32 " << value << " to i64\n";
-            const std::string scaled = nextHelperName("mint_r2");
-            output << "  " << scaled << " = mul i64 " << wide << ", " << MONT_R2
-                   << "\n";
-            return emitMontgomeryReduce(scaled);
-        };
-
-        auto emitMintToInt = [&](const std::string& value) -> std::string {
-            const std::string wide = nextHelperName("mint_to_i64");
-            output << "  " << wide << " = sext i32 " << value << " to i64\n";
-            const std::string reduced = emitMontgomeryReduce(wide);
-            const std::string isNegative = nextHelperName("mint_neg");
-            output << "  " << isNegative << " = icmp slt i32 " << reduced
-                   << ", 0\n";
-            const std::string adjusted = nextHelperName("mint_adjusted");
-            output << "  " << adjusted << " = add i32 " << reduced << ", "
-                   << MINT_MOD << "\n";
-            const std::string result = nextHelperName("mint_int");
-            output << "  " << result << " = select i1 " << isNegative
-                   << ", i32 " << adjusted << ", i32 " << reduced << "\n";
-            return result;
-        };
-
-        auto emitMintAddSub
-            = [&](const std::string& lhs, const std::string& rhs,
-                  bool isSub) -> std::string {
-            const std::string raw
-                = nextHelperName(isSub ? "mint_sub" : "mint_add");
-            output << "  " << raw << " = " << (isSub ? "sub" : "add") << " i32 "
-                   << lhs << ", " << rhs << "\n";
-            const std::string isNegative = nextHelperName("mint_fold_neg");
-            output << "  " << isNegative << " = icmp slt i32 " << raw
-                   << ", 0\n";
-            const std::string plus2m = nextHelperName("mint_plus_2m");
-            output << "  " << plus2m << " = add i32 " << raw << ", "
-                   << (2 * MINT_MOD) << "\n";
-            const std::string nonNegative = nextHelperName("mint_nonneg");
-            output << "  " << nonNegative << " = select i1 " << isNegative
-                   << ", i32 " << plus2m << ", i32 " << raw << "\n";
-            const std::string atLeastMod = nextHelperName("mint_ge_mod");
-            output << "  " << atLeastMod << " = icmp sge i32 " << nonNegative
-                   << ", " << MINT_MOD << "\n";
-            const std::string minusMod = nextHelperName("mint_minus_mod");
-            output << "  " << minusMod << " = sub i32 " << nonNegative << ", "
-                   << MINT_MOD << "\n";
-            const std::string result = nextHelperName("mint_folded");
-            output << "  " << result << " = select i1 " << atLeastMod
-                   << ", i32 " << minusMod << ", i32 " << nonNegative << "\n";
-            return result;
-        };
-
-        auto emitMintMul = [&](const std::string& lhs,
-                               const std::string& rhs) -> std::string {
-            const std::string lhs64 = nextHelperName("mint_lhs64");
-            output << "  " << lhs64 << " = sext i32 " << lhs << " to i64\n";
-            const std::string rhs64 = nextHelperName("mint_rhs64");
-            output << "  " << rhs64 << " = sext i32 " << rhs << " to i64\n";
-            const std::string product = nextHelperName("mint_product");
-            output << "  " << product << " = mul i64 " << lhs64 << ", " << rhs64
-                   << "\n";
-            return emitMontgomeryReduce(product);
-        };
-
-        auto emitMintPowConst
-            = [&](const std::string& base, int32_t exponent) -> std::string {
-            std::string result = std::to_string(301989884);
-            std::string power = base;
-            int32_t exp = exponent;
-            while (exp > 0) {
-                if ((exp & 1) != 0) {
-                    result = emitMintMul(result, power);
-                }
-                exp >>= 1;
-                if (exp > 0) {
-                    power = emitMintMul(power, power);
-                }
-            }
-            return result;
-        };
-
-        auto valueTypeOf = [&](const koopa_ir::Value& value) -> std::string {
-            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
-                const auto typeIt = valueTypes.find(symbol->spelling);
-                return typeIt == valueTypes.end() ? "i32" : typeIt->second;
-            }
-            return "i32";
-        };
-
-        auto logicalTypeOfIrType
-            = [&](const koopa_ir::Type& type) -> std::string {
-            if (std::holds_alternative<koopa_ir::MintType>(type)) {
-                return "mint";
-            }
-            if (std::holds_alternative<koopa_ir::PolyType>(type)) {
-                return "poly";
-            }
-            if (std::holds_alternative<koopa_ir::I32Type>(type)) {
-                return "int";
-            }
-            if (std::holds_alternative<yesod::Ref<koopa_ir::PointerType>>(
-                    type)) {
-                return "ptr";
-            }
-            return emitType(type, program);
-        };
-
-        auto logicalTypeOf = [&](const koopa_ir::Value& value) -> std::string {
-            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
-                const auto typeIt = logicalTypes.find(symbol->spelling);
-                return typeIt == logicalTypes.end() ? "int" : typeIt->second;
-            }
-            return "int";
-        };
-
-        auto emitMintOperand
-            = [&](const koopa_ir::Value& value) -> std::string {
-            if (logicalTypeOf(value) == "mint") {
-                return emitValueOperand(value, program);
-            }
-            if (const auto* literal
-                = std::get_if<koopa_ir::IntegerLiteral>(&value)) {
-                return std::to_string(intToMontgomeryConst(literal->value));
-            }
-            return emitIntToMint(emitValueOperand(value, program));
-        };
-
-        auto recordPointer
-            = [&](const std::string& sym, const koopa_ir::Type& type) {
-                  const std::string pt = pointeeTypeString(type, program);
-                  if (!pt.empty()) {
-                      valueTypes[sym] = "ptr";
-                      pointees[sym] = pt;
-                      logicalTypes[sym] = "ptr";
-                  }
-              };
-
-        // Pre-populate global symbols from the program's GlobalMemoryDef items.
-        for (const auto& item : program.items) {
-            std::visit(
-                [&](auto itemRef) {
-                    using Item
-                        = std::remove_cvref_t<decltype(program[itemRef])>;
-                    if constexpr (std::same_as<Item,
-                                      koopa_ir::GlobalMemoryDef>) {
-                        const auto& g = program[itemRef];
-                        valueTypes[g.name.spelling] = "ptr";
-                        pointees[g.name.spelling]
-                            = emitType(g.allocType, program);
-                        logicalTypes[g.name.spelling] = "ptr";
-                        logicalPointees[g.name.spelling]
-                            = logicalTypeOfIrType(g.allocType);
-                        if (typeContainsPoly(g.allocType, program)) {
-                            globalPolyAllocations.emplace_back(
-                                g.name.spelling, g.allocType);
-                        }
-                    }
-                },
-                item);
-        }
-
-        // Function parameter types
-        for (const auto& pref : function.params) {
-            const auto& param = program[pref];
-            const std::string ps = emitType(param.type, program);
-            valueTypes[param.symbol.spelling] = ps;
-            logicalTypes[param.symbol.spelling]
-                = logicalTypeOfIrType(param.type);
-            if (const auto* prefType
-                = std::get_if<yesod::Ref<koopa_ir::PointerType>>(&param.type)) {
-                pointees[param.symbol.spelling]
-                    = emitType(program[*prefType].pointeeType, program);
-                logicalPointees[param.symbol.spelling]
-                    = logicalTypeOfIrType(program[*prefType].pointeeType);
-            }
-        }
-
-        // Walk all blocks to build type maps
-        for (const auto& blockRef : function.blocks) {
-            const auto& block = program[blockRef];
-
-            for (const auto& ppref : block.params) {
-                const auto& bp = program[ppref];
-                const std::string ps = emitType(bp.type, program);
-                valueTypes[bp.symbol.spelling] = ps;
-                logicalTypes[bp.symbol.spelling] = logicalTypeOfIrType(bp.type);
-                recordPointer(bp.symbol.spelling, bp.type);
-            }
-
-            for (const auto& stmt : block.statements) {
-                std::visit(
-                    [&](auto stmtRef) {
-                        using StmtNode
-                            = std::remove_cvref_t<decltype(program[stmtRef])>;
-                        if constexpr (std::same_as<StmtNode,
-                                          koopa_ir::SymbolDef>) {
-                            const auto& sd = program[stmtRef];
-                            const std::string& sname = sd.symbol.spelling;
-
-                            MATCH(sd.rhs)
-                            WITH(
-                                [&](const yesod::Ref<
-                                    koopa_ir::MemoryDeclaration>& memRef) {
-                                    const auto& mem = program[memRef];
-                                    valueTypes[sname] = "ptr";
-                                    logicalTypes[sname] = "ptr";
-                                    pointees[sname]
-                                        = emitType(mem.allocType, program);
-                                    logicalPointees[sname]
-                                        = logicalTypeOfIrType(mem.allocType);
-                                    const std::string loadedPointee
-                                        = loadedPointerPointeeTypeString(
-                                            mem.allocType, program);
-                                    if (!loadedPointee.empty()) {
-                                        loadedPointees[sname] = loadedPointee;
-                                    }
-                                    if (typeContainsPoly(
-                                            mem.allocType, program)) {
-                                        localPolyAllocations.emplace_back(
-                                            sname, mem.allocType);
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::LoadExpr>&
-                                        loadRef) {
-                                    const auto& ld = program[loadRef];
-                                    const auto it
-                                        = pointees.find(ld.source.spelling);
-                                    valueTypes[sname] = (it != pointees.end())
-                                        ? it->second
-                                        : "i32";
-                                    const auto logicalIt = logicalPointees.find(
-                                        ld.source.spelling);
-                                    logicalTypes[sname]
-                                        = logicalIt == logicalPointees.end()
-                                        ? "int"
-                                        : logicalIt->second;
-                                    if (valueTypes[sname] == "ptr") {
-                                        const auto loadedPointeeIt
-                                            = loadedPointees.find(
-                                                ld.source.spelling);
-                                        if (loadedPointeeIt
-                                            != loadedPointees.end()) {
-                                            pointees[sname]
-                                                = loadedPointeeIt->second;
-                                        }
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetPointerExpr>&
-                                        getptrRef) {
-                                    const auto& gp = program[getptrRef];
-                                    const auto vtIt
-                                        = valueTypes.find(gp.source.spelling);
-                                    valueTypes[sname]
-                                        = (vtIt != valueTypes.end())
-                                        ? vtIt->second
-                                        : "ptr";
-                                    logicalTypes[sname] = "ptr";
-                                    const auto ptIt
-                                        = pointees.find(gp.source.spelling);
-                                    if (ptIt != pointees.end()) {
-                                        pointees[sname] = ptIt->second;
-                                    }
-                                    const auto logicalPtIt
-                                        = logicalPointees.find(
-                                            gp.source.spelling);
-                                    if (logicalPtIt != logicalPointees.end()) {
-                                        logicalPointees[sname]
-                                            = logicalPtIt->second;
-                                    }
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::GetElementPointerExpr>&
-                                        gelemRef) {
-                                    const auto& ge = program[gelemRef];
-                                    valueTypes[sname] = "ptr";
-                                    logicalTypes[sname] = "ptr";
-                                    const auto ptIt
-                                        = pointees.find(ge.source.spelling);
-                                    if (ptIt != pointees.end()) {
-                                        const std::string& arrType
-                                            = ptIt->second;
-                                        auto xpos = arrType.find(" x ");
-                                        if (xpos != std::string::npos) {
-                                            std::string elemTy
-                                                = arrType.substr(xpos + 3);
-                                            if (!elemTy.empty()
-                                                && elemTy.back() == ']') {
-                                                elemTy.pop_back();
-                                            }
-                                            pointees[sname] = elemTy;
-                                        } else {
-                                            pointees[sname] = ptIt->second;
-                                        }
-                                    }
-                                    const auto logicalPtIt
-                                        = logicalPointees.find(
-                                            ge.source.spelling);
-                                    if (logicalPtIt != logicalPointees.end()) {
-                                        const std::string& arrType
-                                            = logicalPtIt->second;
-                                        auto xpos = arrType.find(" x ");
-                                        if (xpos != std::string::npos) {
-                                            std::string elemTy
-                                                = arrType.substr(xpos + 3);
-                                            if (!elemTy.empty()
-                                                && elemTy.back() == ']') {
-                                                elemTy.pop_back();
-                                            }
-                                            logicalPointees[sname] = elemTy;
-                                        } else {
-                                            logicalPointees[sname]
-                                                = logicalPtIt->second;
-                                        }
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::BinaryExpr>&
-                                        binRef) {
-                                    const auto& bin = program[binRef];
-                                    valueTypes[sname] = "i32";
-                                    switch (bin.op) {
-                                    case koopa_ir::BinaryOp::eq:
-                                    case koopa_ir::BinaryOp::ne:
-                                    case koopa_ir::BinaryOp::gt:
-                                    case koopa_ir::BinaryOp::lt:
-                                    case koopa_ir::BinaryOp::ge:
-                                    case koopa_ir::BinaryOp::le:
-                                    case koopa_ir::BinaryOp::mod:
-                                    case koopa_ir::BinaryOp::bitAnd:
-                                    case koopa_ir::BinaryOp::bitOr:
-                                    case koopa_ir::BinaryOp::bitXor:
-                                    case koopa_ir::BinaryOp::shl:
-                                    case koopa_ir::BinaryOp::shr:
-                                    case koopa_ir::BinaryOp::sar:
-                                        logicalTypes[sname] = "int";
-                                        break;
-                                    default:
-                                        logicalTypes[sname]
-                                            = logicalTypeOf(bin.lhs) == "mint"
-                                                || logicalTypeOf(bin.rhs)
-                                                    == "mint"
-                                            ? "mint"
-                                            : "int";
-                                        break;
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::CallExpr>&
-                                        callRef) {
-                                    const auto& call = program[callRef];
-                                    const auto sigIt
-                                        = sigs.find(call.callee.spelling);
-                                    if (sigIt != sigs.end()
-                                        && sigIt->second.retType != "void") {
-                                        valueTypes[sname]
-                                            = sigIt->second.retType;
-                                        logicalTypes[sname] = "int";
-                                    } else {
-                                        valueTypes[sname] = "i32";
-                                        logicalTypes[sname] = "int";
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::CopyExpr>&
-                                        copyRef) {
-                                    const auto& copy = program[copyRef];
-                                    valueTypes[sname] = valueTypeOf(copy.value);
-                                    logicalTypes[sname]
-                                        = logicalTypeOf(copy.value);
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetAttrExpr>&
-                                        getAttrRef) {
-                                    const auto& getAttr = program[getAttrRef];
-                                    valueTypes[sname]
-                                        = (getAttr.attr
-                                                  == koopa_ir::PolyAttr::base
-                                              || getAttr.attr
-                                                  == koopa_ir::PolyAttr::addr)
-                                        ? "ptr"
-                                        : "i32";
-                                    logicalTypes[sname]
-                                        = valueTypes[sname] == "ptr" ? "ptr"
-                                                                     : "int";
-                                },
-                                [&](const yesod::Ref<koopa_ir::SetAttrExpr>&) {
-                                    valueTypes[sname] = std::string(POLY_TYPE);
-                                    logicalTypes[sname] = "poly";
-                                },
-                                [&](const yesod::Ref<koopa_ir::SelectExpr>&
-                                        selectRef) {
-                                    const auto& select = program[selectRef];
-                                    valueTypes[sname]
-                                        = valueTypeOf(select.trueValue);
-                                    logicalTypes[sname]
-                                        = logicalTypeOf(select.trueValue);
-                                },
-                                [&](const yesod::Ref<koopa_ir::NextPow2Expr>&) {
-                                    valueTypes[sname] = "i32";
-                                    logicalTypes[sname] = "int";
-                                },
-                                [&](const yesod::Ref<koopa_ir::NttExpr>&) {
-                                    valueTypes[sname] = std::string(PV_TYPE);
-                                    logicalTypes[sname] = "pv";
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::PointwiseExpr>&) {
-                                    valueTypes[sname] = std::string(POLY_TYPE);
-                                    logicalTypes[sname] = "poly";
-                                },
-                                [&](const yesod::Ref<koopa_ir::CombineExpr>&) {
-                                    valueTypes[sname] = std::string(POLY_TYPE);
-                                    logicalTypes[sname] = "poly";
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&) {
-                                    valueTypes[sname] = "i32";
-                                    logicalTypes[sname] = "mint";
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::PolyConstructExpr>&) {
-                                    valueTypes[sname] = std::string(POLY_TYPE);
-                                    logicalTypes[sname] = "poly";
-                                },
-                                [&](const yesod::Ref<koopa_ir::ConversionExpr>&
-                                        convRef) {
-                                    valueTypes[sname] = "i32";
-                                    logicalTypes[sname] = program[convRef].op
-                                            == koopa_ir::ConversionOp::int2mint
-                                        ? "mint"
-                                        : "int";
-                                },
-                                [&](const auto&) {
-                                    throw std::runtime_error(
-                                        "LLVM backend does not support native "
-                                        "poly/pv pseudo-instructions");
-                                });
-                        }
-                    },
-                    stmt);
-            }
-        }
-
-        // ── Collect phi edges ──────────────────────────────────────────
-        IncomingMap incoming;
-        BlockLabelMap blockLabels;
-        collectPhiEdges(function, program, incoming, blockLabels);
-        const OwnershipAnalysis ownership
-            = analyzeOwnership(function, program, sigs, pointees, valueTypes);
-        // ── Function signature ─────────────────────────────────────────
         std::string retType = "void";
         if (function.returnType.has_value()) {
             retType = emitType(*function.returnType, program);
@@ -1284,31 +1258,36 @@ namespace {
                 output << ", ";
             }
             const auto& param = program[function.params[i]];
-            const std::string paramType = emitType(param.type, program);
-            output << paramType << " ";
-            output << llvmValueName(param.symbol.spelling);
+            output << emitType(param.type, program) << " "
+                   << llvmValueName(param.symbol.spelling);
         }
         output << ") {\n";
+    }
 
-        struct PolyFields {
-            std::string coeffs;
-            std::string addr;
-            std::string n;
-            std::string l;
-            std::string r;
-        };
+    struct PolyFields {
+        std::string coeffs;
+        std::string addr;
+        std::string n;
+        std::string l;
+        std::string r;
+    };
 
-        struct PvFields {
-            std::string values;
-            std::string len;
-        };
+    struct PvFields {
+        std::string values;
+        std::string len;
+    };
 
-        auto emitPolyFromFields
-            = [&](const std::string& result, const PolyFields& fields) -> void {
-            const std::string s0 = nextHelperName("poly_make");
-            const std::string s1 = nextHelperName("poly_make");
-            const std::string s2 = nextHelperName("poly_make");
-            const std::string s3 = nextHelperName("poly_make");
+    struct PolyIrEmitter {
+        std::ostream& output;
+        LlvmNameGenerator& names;
+
+        void emitPolyFromFields(
+            const std::string& result, const PolyFields& fields)
+        {
+            const std::string s0 = names.nextHelperName("poly_make");
+            const std::string s1 = names.nextHelperName("poly_make");
+            const std::string s2 = names.nextHelperName("poly_make");
+            const std::string s3 = names.nextHelperName("poly_make");
             output << "  " << s0 << " = insertvalue " << POLY_TYPE
                    << " undef, ptr " << fields.coeffs << ", 0\n";
             output << "  " << s1 << " = insertvalue " << POLY_TYPE << " " << s0
@@ -1319,24 +1298,25 @@ namespace {
                    << ", i32 " << fields.l << ", 3\n";
             output << "  " << result << " = insertvalue " << POLY_TYPE << " "
                    << s3 << ", i32 " << fields.r << ", 4\n";
-        };
+        }
 
-        auto emitPvFromFields
-            = [&](const std::string& result, const PvFields& fields) -> void {
-            const std::string s0 = nextHelperName("pv_make");
+        void emitPvFromFields(const std::string& result, const PvFields& fields)
+        {
+            const std::string s0 = names.nextHelperName("pv_make");
             output << "  " << s0 << " = insertvalue " << PV_TYPE
                    << " undef, ptr " << fields.values << ", 0\n";
             output << "  " << result << " = insertvalue " << PV_TYPE << " "
                    << s0 << ", i32 " << fields.len << ", 1\n";
-        };
+        }
 
-        auto emitPolyFields = [&](const std::string& value) -> PolyFields {
+        PolyFields emitPolyFields(const std::string& value)
+        {
             PolyFields fields {
-                .coeffs = nextHelperName("poly_coeffs"),
-                .addr = nextHelperName("poly_addr"),
-                .n = nextHelperName("poly_n"),
-                .l = nextHelperName("poly_l"),
-                .r = nextHelperName("poly_r"),
+                .coeffs = names.nextHelperName("poly_coeffs"),
+                .addr = names.nextHelperName("poly_addr"),
+                .n = names.nextHelperName("poly_n"),
+                .l = names.nextHelperName("poly_l"),
+                .r = names.nextHelperName("poly_r"),
             };
             output << "  " << fields.coeffs << " = extractvalue " << POLY_TYPE
                    << " " << value << ", 0\n";
@@ -1349,47 +1329,56 @@ namespace {
             output << "  " << fields.r << " = extractvalue " << POLY_TYPE << " "
                    << value << ", 4\n";
             return fields;
-        };
+        }
 
-        auto emitPvFields = [&](const std::string& value) -> PvFields {
+        PvFields emitPvFields(const std::string& value)
+        {
             PvFields fields {
-                .values = nextHelperName("pv_values"),
-                .len = nextHelperName("pv_len"),
+                .values = names.nextHelperName("pv_values"),
+                .len = names.nextHelperName("pv_len"),
             };
             output << "  " << fields.values << " = extractvalue " << PV_TYPE
                    << " " << value << ", 0\n";
             output << "  " << fields.len << " = extractvalue " << PV_TYPE << " "
                    << value << ", 1\n";
             return fields;
-        };
+        }
 
-        auto emitPolyCoeffPtrForAddr
-            = [&](const std::string& addr, const std::string& l,
-                  const std::string& isEmpty) -> std::string {
-            const std::string negL = nextHelperName("poly_neg_l");
+        std::string emitPolyCoeffPtrForAddr(const std::string& addr,
+            const std::string& l, const std::string& isEmpty)
+        {
+            const std::string negL = names.nextHelperName("poly_neg_l");
             output << "  " << negL << " = sub i32 0, " << l << "\n";
-            const std::string raw = nextHelperName("poly_coeffs_from_addr");
+            const std::string raw
+                = names.nextHelperName("poly_coeffs_from_addr");
             output << "  " << raw << " = getelementptr i32, ptr " << addr
                    << ", i32 " << negL << "\n";
-            const std::string coeffs = nextHelperName("poly_coeffs_select");
+            const std::string coeffs
+                = names.nextHelperName("poly_coeffs_select");
             output << "  " << coeffs << " = select i1 " << isEmpty
                    << ", ptr null, ptr " << raw << "\n";
             return coeffs;
-        };
+        }
 
-        auto emitPolyCloneTo
-            = [&](const std::string& result, const std::string& value) -> void {
+        void emitPolyCloneTo(
+            const std::string& result, const std::string& value)
+        {
             const PolyFields input = emitPolyFields(value);
-            const std::string clonedAddr = nextHelperName("poly_clone_addr");
+            const std::string clonedAddr
+                = names.nextHelperName("poly_clone_addr");
             output << "  " << clonedAddr
                    << " = call ptr @__yesod_poly_clone_data(ptr " << input.addr
                    << ", i32 " << input.n << ")\n";
-            const std::string inputCoeffsInt = nextHelperName("poly_coeff_i");
-            const std::string inputAddrInt = nextHelperName("poly_addr_i");
-            const std::string byteOffset = nextHelperName("poly_byte_offset");
-            const std::string elemOffset = nextHelperName("poly_elem_offset");
+            const std::string inputCoeffsInt
+                = names.nextHelperName("poly_coeff_i");
+            const std::string inputAddrInt
+                = names.nextHelperName("poly_addr_i");
+            const std::string byteOffset
+                = names.nextHelperName("poly_byte_offset");
+            const std::string elemOffset
+                = names.nextHelperName("poly_elem_offset");
             const std::string clonedCoeffs
-                = nextHelperName("poly_clone_coeffs");
+                = names.nextHelperName("poly_clone_coeffs");
             output << "  " << inputCoeffsInt << " = ptrtoint ptr "
                    << input.coeffs << " to i64\n";
             output << "  " << inputAddrInt << " = ptrtoint ptr " << input.addr
@@ -1406,19 +1395,21 @@ namespace {
                     .n = input.n,
                     .l = input.l,
                     .r = input.r });
-        };
+        }
 
-        auto emitPolyCloneValue = [&](const std::string& value) -> std::string {
-            const std::string result = nextHelperName("poly_clone");
+        std::string emitPolyCloneValue(const std::string& value)
+        {
+            const std::string result = names.nextHelperName("poly_clone");
             emitPolyCloneTo(result, value);
             return result;
-        };
+        }
 
-        auto emitPolyZeroTo = [&](const std::string& result) -> void {
-            const std::string s0 = nextHelperName("poly_zero");
-            const std::string s1 = nextHelperName("poly_zero");
-            const std::string s2 = nextHelperName("poly_zero");
-            const std::string s3 = nextHelperName("poly_zero");
+        void emitPolyZeroTo(const std::string& result)
+        {
+            const std::string s0 = names.nextHelperName("poly_zero");
+            const std::string s1 = names.nextHelperName("poly_zero");
+            const std::string s2 = names.nextHelperName("poly_zero");
+            const std::string s3 = names.nextHelperName("poly_zero");
             output << "  " << s0 << " = insertvalue " << POLY_TYPE
                    << " undef, ptr null, 0\n";
             output << "  " << s1 << " = insertvalue " << POLY_TYPE << " " << s0
@@ -1429,80 +1420,266 @@ namespace {
                    << ", i32 0, 3\n";
             output << "  " << result << " = insertvalue " << POLY_TYPE << " "
                    << s3 << ", i32 0, 4\n";
-        };
+        }
+    };
 
-        auto emitOwnedValueDropByType
-            = [&](const std::string& type, const std::string& value) -> void {
+    // ─── Function body emitter ────────────────────────────────────────────
+
+    class FunctionEmitter {
+    public:
+        FunctionEmitter(const koopa_ir::FunctionDef& function,
+            const koopa_ir::Program& program, const FuncSigMap& sigs,
+            std::ostream& output)
+            : m_function(function)
+            , m_program(program)
+            , m_sigs(sigs)
+            , m_output(output)
+            , m_name(stripPrefix(function.name.spelling))
+            , m_typeContext(buildFunctionTypeContext(function, program, sigs))
+            , m_pointees(m_typeContext.pointees)
+            , m_valueTypes(m_typeContext.valueTypes)
+            , m_logicalTypes(m_typeContext.logicalTypes)
+            , m_logicalPointees(m_typeContext.logicalPointees)
+            , m_localPolyAllocations(m_typeContext.localPolyAllocations)
+            , m_globalPolyAllocations(m_typeContext.globalPolyAllocations)
+            , m_mintEmitter { m_output, m_nameGenerator }
+            , m_polyEmitter { m_output, m_nameGenerator }
+        {
+        }
+
+        void emit()
+        {
+            // ── Collect phi edges ──────────────────────────────────────────
+            collectPhiEdges(m_function, m_program, m_incoming, m_blockLabels);
+            m_ownership = analyzeOwnership(
+                m_function, m_program, m_sigs, m_pointees, m_valueTypes);
+            // ── Function signature ─────────────────────────────────────────
+            emitFunctionSignature(m_function, m_program, m_name, m_output);
+
+            // ── Build edge plans ─────────────────────────────────────────
+            buildEdgePlans();
+            rewritePhiIncoming();
+
+            // ── Emit blocks ────────────────────────────────────────────────
+            emitBlocks();
+
+            m_output << "}\n\n";
+        }
+
+    private:
+        // ── State references ──────────────────────────────────────────
+        const koopa_ir::FunctionDef& m_function;
+        const koopa_ir::Program& m_program;
+        const FuncSigMap& m_sigs;
+        std::ostream& m_output;
+        const std::string m_name;
+
+        FunctionTypeContext m_typeContext;
+        PointeeMap& m_pointees;
+        ValueTypeMap& m_valueTypes;
+        ValueTypeMap& m_logicalTypes;
+        ValueTypeMap& m_logicalPointees;
+        std::vector<std::pair<std::string, koopa_ir::Type>>&
+            m_localPolyAllocations;
+        std::vector<std::pair<std::string, koopa_ir::Type>>&
+            m_globalPolyAllocations;
+
+        LlvmNameGenerator m_nameGenerator;
+        MintIrEmitter m_mintEmitter;
+        PolyIrEmitter m_polyEmitter;
+
+        IncomingMap m_incoming;
+        BlockLabelMap m_blockLabels;
+        OwnershipAnalysis m_ownership;
+        EdgePlanMap m_edgePlans;
+
+        // ── Helper methods (replacing lambdas) ────────────────────────
+        std::string nextHelperName(const std::string& stem)
+        {
+            return m_nameGenerator.nextHelperName(stem);
+        }
+
+        std::string nextLabelName(const std::string& stem)
+        {
+            return stripPrefix(nextHelperName(stem));
+        }
+
+        std::string emitIntToMint(const std::string& value)
+        {
+            return m_mintEmitter.emitIntToMint(value);
+        }
+
+        std::string emitMintToInt(const std::string& value)
+        {
+            return m_mintEmitter.emitMintToInt(value);
+        }
+
+        std::string emitMintAddSub(
+            const std::string& lhs, const std::string& rhs, bool isSub)
+        {
+            return m_mintEmitter.emitMintAddSub(lhs, rhs, isSub);
+        }
+
+        std::string emitMintMul(const std::string& lhs, const std::string& rhs)
+        {
+            return m_mintEmitter.emitMintMul(lhs, rhs);
+        }
+
+        std::string emitMintPowConst(const std::string& base, int32_t exponent)
+        {
+            return m_mintEmitter.emitMintPowConst(base, exponent);
+        }
+
+        std::string valueTypeOf(const koopa_ir::Value& value) const
+        {
+            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+                const auto typeIt = m_valueTypes.find(symbol->spelling);
+                return typeIt == m_valueTypes.end() ? "i32" : typeIt->second;
+            }
+            return "i32";
+        }
+
+        std::string logicalTypeOf(const koopa_ir::Value& value) const
+        {
+            if (const auto* symbol = std::get_if<koopa_ir::Symbol>(&value)) {
+                const auto typeIt = m_logicalTypes.find(symbol->spelling);
+                return typeIt == m_logicalTypes.end() ? "int" : typeIt->second;
+            }
+            return "int";
+        }
+
+        std::string emitMintOperand(const koopa_ir::Value& value)
+        {
+            if (logicalTypeOf(value) == "mint") {
+                return emitValueOperand(value, m_program);
+            }
+            if (const auto* literal
+                = std::get_if<koopa_ir::IntegerLiteral>(&value)) {
+                return std::to_string(intToMontgomeryConst(literal->value));
+            }
+            return emitIntToMint(emitValueOperand(value, m_program));
+        }
+
+        // ── Poly emitter delegates ────────────────────────────────────
+        void emitPolyFromFields(
+            const std::string& result, const PolyFields& fields)
+        {
+            m_polyEmitter.emitPolyFromFields(result, fields);
+        }
+
+        void emitPvFromFields(const std::string& result, const PvFields& fields)
+        {
+            m_polyEmitter.emitPvFromFields(result, fields);
+        }
+
+        PolyFields emitPolyFields(const std::string& value)
+        {
+            return m_polyEmitter.emitPolyFields(value);
+        }
+
+        PvFields emitPvFields(const std::string& value)
+        {
+            return m_polyEmitter.emitPvFields(value);
+        }
+
+        std::string emitPolyCoeffPtrForAddr(const std::string& addr,
+            const std::string& l, const std::string& isEmpty)
+        {
+            return m_polyEmitter.emitPolyCoeffPtrForAddr(addr, l, isEmpty);
+        }
+
+        void emitPolyCloneTo(
+            const std::string& result, const std::string& value)
+        {
+            m_polyEmitter.emitPolyCloneTo(result, value);
+        }
+
+        std::string emitPolyCloneValue(const std::string& value)
+        {
+            return m_polyEmitter.emitPolyCloneValue(value);
+        }
+
+        void emitPolyZeroTo(const std::string& result)
+        {
+            m_polyEmitter.emitPolyZeroTo(result);
+        }
+
+        void emitOwnedValueDropByType(
+            const std::string& type, const std::string& value)
+        {
             if (type == POLY_TYPE) {
                 const PolyFields fields = emitPolyFields(value);
-                output << "  call void @__yesod_rt_free_ints(ptr "
-                       << fields.addr << ")\n";
+                m_output << "  call void @__yesod_rt_free_ints(ptr "
+                         << fields.addr << ")\n";
             } else if (type == PV_TYPE) {
                 const PvFields fields = emitPvFields(value);
-                output << "  call void @__yesod_rt_free_ints(ptr "
-                       << fields.values << ")\n";
+                m_output << "  call void @__yesod_rt_free_ints(ptr "
+                         << fields.values << ")\n";
             }
-        };
+        }
 
-        auto emitOwnedValueDrop = [&](const std::string& symbolName) -> void {
-            const auto typeIt = valueTypes.find(symbolName);
-            if (typeIt == valueTypes.end()
+        void emitOwnedValueDrop(const std::string& symbolName)
+        {
+            const auto typeIt = m_valueTypes.find(symbolName);
+            if (typeIt == m_valueTypes.end()
                 || !isOwnedTypeString(typeIt->second)) {
                 return;
             }
             emitOwnedValueDropByType(typeIt->second, llvmValueName(symbolName));
-        };
+        }
 
-        auto emitOwnedValueDrops = [&](const SymbolSet& values) -> void {
+        void emitOwnedValueDrops(const SymbolSet& values)
+        {
             for (const auto& value : values) {
                 emitOwnedValueDrop(value);
             }
-        };
+        }
 
-        std::function<void(const koopa_ir::Type&, const std::string&)>
-            emitStorageDrop
-            = [&](const koopa_ir::Type& type, const std::string& ptr) -> void {
+        void emitStorageDrop(const koopa_ir::Type& type, const std::string& ptr)
+        {
             MATCH(type)
             WITH(
                 [&](const koopa_ir::PolyType&) -> void {
                     const std::string value = nextHelperName("poly_storage");
-                    output << "  " << value << " = load " << POLY_TYPE
-                           << ", ptr " << ptr << "\n";
+                    m_output << "  " << value << " = load " << POLY_TYPE
+                             << ", ptr " << ptr << "\n";
                     emitOwnedValueDropByType(std::string(POLY_TYPE), value);
                 },
                 [](const koopa_ir::I32Type&) -> void { },
                 [](const koopa_ir::MintType&) -> void { },
                 [&](const yesod::Ref<koopa_ir::ArrayType> arrayRef) -> void {
-                    const auto& arrayType = program[arrayRef];
-                    const std::string llvmArrayType = emitType(type, program);
+                    const auto& arrayType = m_program[arrayRef];
+                    const std::string llvmArrayType = emitType(type, m_program);
                     for (int32_t i = 0; i < arrayType.length; ++i) {
                         const std::string elemPtr
                             = nextHelperName("poly_elem_drop");
-                        output << "  " << elemPtr << " = getelementptr "
-                               << llvmArrayType << ", ptr " << ptr
-                               << ", i32 0, i32 " << i << "\n";
+                        m_output << "  " << elemPtr << " = getelementptr "
+                                 << llvmArrayType << ", ptr " << ptr
+                                 << ", i32 0, i32 " << i << "\n";
                         emitStorageDrop(arrayType.elementType, elemPtr);
                     }
                 },
                 [](const yesod::Ref<koopa_ir::PointerType>&) -> void { },
                 [](const yesod::Ref<koopa_ir::FunctionType>&) -> void { });
-        };
+        }
 
-        auto emitFunctionStorageCleanup = [&]() -> void {
-            for (const auto& allocation : localPolyAllocations) {
+        void emitFunctionStorageCleanup()
+        {
+            for (const auto& allocation : m_localPolyAllocations) {
                 emitStorageDrop(
                     allocation.second, llvmValueName(allocation.first));
             }
-            if (name == "main") {
-                for (const auto& allocation : globalPolyAllocations) {
+            if (m_name == "main") {
+                for (const auto& allocation : m_globalPolyAllocations) {
                     emitStorageDrop(
                         allocation.second, llvmValueName(allocation.first));
                 }
             }
-        };
+        }
 
-        auto edgeReleaseSet = [&](const SymbolSet& beforeTerm,
-                                  const SymbolSet& edgeLive) -> SymbolSet {
+        SymbolSet edgeReleaseSet(
+            const SymbolSet& beforeTerm, const SymbolSet& edgeLive)
+        {
             SymbolSet result;
             for (const auto& value : beforeTerm) {
                 if (!edgeLive.contains(value)) {
@@ -1510,13 +1687,13 @@ namespace {
                 }
             }
             return result;
-        };
+        }
 
-        auto planOwnedArguments
-            = [&](const std::vector<koopa_ir::Value>& values,
-                  const std::vector<std::string>& types,
-                  const SymbolSet& liveAfter,
-                  const std::string& cloneStem) -> ArgumentPlan {
+        ArgumentPlan planOwnedArguments(
+            const std::vector<koopa_ir::Value>& values,
+            const std::vector<std::string>& types, const SymbolSet& liveAfter,
+            const std::string& cloneStem)
+        {
             ArgumentPlan plan;
             plan.operands.reserve(values.size());
             std::map<std::string, size_t> remainingUses;
@@ -1531,7 +1708,7 @@ namespace {
             }
             for (size_t i = 0; i < values.size(); ++i) {
                 const std::string operand
-                    = emitValueOperand(values[i], program);
+                    = emitValueOperand(values[i], m_program);
                 if (i >= types.size() || !isOwnedTypeString(types[i])) {
                     plan.operands.push_back(operand);
                     continue;
@@ -1556,125 +1733,133 @@ namespace {
                 remaining -= 1;
             }
             return plan;
-        };
+        }
 
-        auto emitArgumentPlanClones = [&](const ArgumentPlan& plan) -> void {
+        void emitArgumentPlanClones(const ArgumentPlan& plan)
+        {
             for (const auto& clone : plan.clones) {
                 emitPolyCloneTo(clone.first, clone.second);
             }
-        };
+        }
 
-        EdgePlanMap edgePlans;
-        for (size_t predIndex = 0; predIndex < function.blocks.size();
-            ++predIndex) {
-            const auto& predBlock = program[function.blocks[predIndex]];
-            const std::string predLabel = blockLabels[predBlock.label.spelling];
-            for (const auto& edge : ownership.edges[predIndex]) {
-                const auto& targetBlock
-                    = program[function.blocks[edge.targetIndex]];
-                std::vector<std::string> targetParamTypes;
-                targetParamTypes.reserve(edge.args.size());
-                for (size_t i = 0; i < edge.args.size(); ++i) {
-                    if (i < targetBlock.params.size()) {
-                        targetParamTypes.push_back(emitType(
-                            program[targetBlock.params[i]].type, program));
-                    } else {
-                        targetParamTypes.push_back("i32");
+        // ── Edge plan construction ────────────────────────────────────
+        void buildEdgePlans()
+        {
+            for (size_t predIndex = 0; predIndex < m_function.blocks.size();
+                ++predIndex) {
+                const auto& predBlock = m_program[m_function.blocks[predIndex]];
+                const std::string predLabel
+                    = m_blockLabels[predBlock.label.spelling];
+                for (const auto& edge : m_ownership.edges[predIndex]) {
+                    const auto& targetBlock
+                        = m_program[m_function.blocks[edge.targetIndex]];
+                    std::vector<std::string> targetParamTypes;
+                    targetParamTypes.reserve(edge.args.size());
+                    for (size_t i = 0; i < edge.args.size(); ++i) {
+                        if (i < targetBlock.params.size()) {
+                            targetParamTypes.push_back(
+                                emitType(m_program[targetBlock.params[i]].type,
+                                    m_program));
+                        } else {
+                            targetParamTypes.push_back("i32");
+                        }
                     }
-                }
 
-                SymbolSet liveAfterEdge = ownership.liveIn[edge.targetIndex];
-                for (const auto& paramName :
-                    blockParamSymbols(targetBlock, program, valueTypes)) {
-                    if (!paramName.empty()) {
-                        liveAfterEdge.erase(paramName);
+                    SymbolSet liveAfterEdge
+                        = m_ownership.liveIn[edge.targetIndex];
+                    for (const auto& paramName : blockParamSymbols(
+                             targetBlock, m_program, m_valueTypes)) {
+                        if (!paramName.empty()) {
+                            liveAfterEdge.erase(paramName);
+                        }
                     }
-                }
 
-                ArgumentPlan argPlan = planOwnedArguments(
-                    edge.args, targetParamTypes, liveAfterEdge, "edge_arg");
-                SymbolSet edgeLive = liveAfterEdge;
-                for (const auto& moved : argPlan.movedValues) {
-                    edgeLive.insert(moved);
-                }
-                for (const auto& clone : argPlan.clones) {
-                    edgeLive.insert(clone.first);
-                }
-                SymbolSet releases
-                    = edgeReleaseSet(ownership.liveOut[predIndex], edgeLive);
-                for (const auto& moved : argPlan.movedValues) {
-                    releases.erase(moved);
-                }
+                    ArgumentPlan argPlan = planOwnedArguments(
+                        edge.args, targetParamTypes, liveAfterEdge, "edge_arg");
+                    SymbolSet edgeLive = liveAfterEdge;
+                    for (const auto& moved : argPlan.movedValues) {
+                        edgeLive.insert(moved);
+                    }
+                    for (const auto& clone : argPlan.clones) {
+                        edgeLive.insert(clone.first);
+                    }
+                    SymbolSet releases = edgeReleaseSet(
+                        m_ownership.liveOut[predIndex], edgeLive);
+                    for (const auto& moved : argPlan.movedValues) {
+                        releases.erase(moved);
+                    }
 
-                const std::string edgeLabel = edge.suffix.empty()
-                    ? predLabel
-                    : edgeBlockLabel(predLabel, edge.suffix);
-                edgePlans[{ predIndex, edge.suffix }] = EdgeEmissionPlan {
-                    .args = std::move(argPlan),
-                    .releases = std::move(releases),
-                    .label = edgeLabel,
-                    .targetLabel = blockLabels[targetBlock.label.spelling],
-                };
+                    const std::string edgeLabel = edge.suffix.empty()
+                        ? predLabel
+                        : edgeBlockLabel(predLabel, edge.suffix);
+                    m_edgePlans[{ predIndex, edge.suffix }] = EdgeEmissionPlan {
+                        .args = std::move(argPlan),
+                        .releases = std::move(releases),
+                        .label = edgeLabel,
+                        .targetLabel
+                        = m_blockLabels[targetBlock.label.spelling],
+                    };
+                }
             }
         }
 
-        for (const auto& blockRef : function.blocks) {
-            const auto& block = program[blockRef];
-            auto incomingIt = incoming.find(block.label.spelling);
-            if (incomingIt == incoming.end()) {
-                continue;
-            }
-            for (size_t paramIndex = 0; paramIndex < block.params.size();
-                ++paramIndex) {
-                if (paramIndex >= incomingIt->second.size()) {
+        void rewritePhiIncoming()
+        {
+            for (const auto& blockRef : m_function.blocks) {
+                const auto& block = m_program[blockRef];
+                auto incomingIt = m_incoming.find(block.label.spelling);
+                if (incomingIt == m_incoming.end()) {
                     continue;
                 }
-                const auto& param = program[block.params[paramIndex]];
-                if (emitType(param.type, program) != POLY_TYPE) {
-                    continue;
-                }
-                for (auto& edge : incomingIt->second[paramIndex]) {
-                    for (const auto& planItem : edgePlans) {
-                        const auto& plan = planItem.second;
-                        if (plan.label == edge.predLabel
-                            && paramIndex < plan.args.operands.size()) {
-                            edge.arg = koopa_ir::Symbol {
-                                .sourcePos = { },
-                                .spelling = plan.args.operands[paramIndex],
-                            };
-                            break;
+                for (size_t paramIndex = 0; paramIndex < block.params.size();
+                    ++paramIndex) {
+                    if (paramIndex >= incomingIt->second.size()) {
+                        continue;
+                    }
+                    const auto& param = m_program[block.params[paramIndex]];
+                    if (emitType(param.type, m_program) != POLY_TYPE) {
+                        continue;
+                    }
+                    for (auto& edge : incomingIt->second[paramIndex]) {
+                        for (const auto& planItem : m_edgePlans) {
+                            const auto& plan = planItem.second;
+                            if (plan.label == edge.predLabel
+                                && paramIndex < plan.args.operands.size()) {
+                                edge.arg = koopa_ir::Symbol {
+                                    .sourcePos = { },
+                                    .spelling = plan.args.operands[paramIndex],
+                                };
+                                break;
+                            }
                         }
                     }
                 }
             }
         }
 
-        auto nextLabelName = [&](const std::string& stem) -> std::string {
-            return stripPrefix(nextHelperName(stem));
-        };
-
-        std::function<std::string(
-            yesod::Ref<koopa_ir::PointwiseNode>, const std::string&)>
-            emitPointwiseScalar
-            = [&](yesod::Ref<koopa_ir::PointwiseNode> nodeRef,
-                  const std::string& index) -> std::string {
-            const auto& node = program[nodeRef];
+        // ── Pointwise scalar recursion ───────────────────────────────
+        std::string emitPointwiseScalar(
+            yesod::Ref<koopa_ir::PointwiseNode> nodeRef,
+            const std::string& index)
+        {
+            const auto& node = m_program[nodeRef];
             return MATCH(node.kind) WITH(
                 [&](const koopa_ir::PointwiseLeaf& leaf) -> std::string {
                     if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
                         return emitMintOperand(leaf.value);
                     }
                     const std::string pv
-                        = emitValueOperand(leaf.value, program);
+                        = emitValueOperand(leaf.value, m_program);
                     const std::string values = nextHelperName("pv_values");
-                    output << "  " << values << " = extractvalue " << PV_TYPE
-                           << " " << pv << ", 0\n";
+                    m_output << "  " << values << " = extractvalue " << PV_TYPE
+                             << " " << pv << ", 0\n";
                     const std::string elementPtr = nextHelperName("pv_elem");
-                    output << "  " << elementPtr << " = getelementptr i32, ptr "
-                           << values << ", i32 " << index << "\n";
+                    m_output << "  " << elementPtr
+                             << " = getelementptr i32, ptr " << values
+                             << ", i32 " << index << "\n";
                     const std::string value = nextHelperName("pv_value");
-                    output << "  " << value << " = load i32, ptr " << elementPtr
-                           << "\n";
+                    m_output << "  " << value << " = load i32, ptr "
+                             << elementPtr << "\n";
                     return value;
                 },
                 [&](const koopa_ir::PointwiseBinary& binary) -> std::string {
@@ -1693,58 +1878,92 @@ namespace {
                     }
                     return emitMintAddSub(lhs, rhs, false);
                 });
-        };
+        }
 
-        // ── Emit blocks ────────────────────────────────────────────────
-        for (size_t blockIndex = 0; blockIndex < function.blocks.size();
-            ++blockIndex) {
-            const auto& blockRef = function.blocks[blockIndex];
-            const auto& block = program[blockRef];
-            const std::string llvmLabel = blockLabels[block.label.spelling];
-            output << llvmLabel << ":\n";
+        // ── Block emission ───────────────────────────────────────────
+        void emitBlocks()
+        {
+            for (size_t blockIndex = 0; blockIndex < m_function.blocks.size();
+                ++blockIndex) {
+                const auto& blockRef = m_function.blocks[blockIndex];
+                const auto& block = m_program[blockRef];
+                const std::string llvmLabel
+                    = m_blockLabels[block.label.spelling];
+                m_output << llvmLabel << ":\n";
+
+                emitBlockPrologue(blockIndex);
+                emitStatements(blockIndex);
+
+                // ── Terminator ─────────────────────────────────────────────
+                MATCH(block.terminator)
+                WITH(
+                    [&](const yesod::Ref<koopa_ir::JumpTerminator>& jumpRef) {
+                        emitTerminatorJump(
+                            m_program[jumpRef], blockIndex, llvmLabel);
+                    },
+                    [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef) {
+                        emitTerminatorBranch(
+                            m_program[brRef], blockIndex, llvmLabel);
+                    },
+                    [&](const yesod::Ref<koopa_ir::ReturnTerminator>& retRef) {
+                        emitTerminatorReturn(m_program[retRef]);
+                    });
+            }
+        }
+
+        void emitBlockPrologue(size_t blockIndex)
+        {
+            const auto& blockRef = m_function.blocks[blockIndex];
+            const auto& block = m_program[blockRef];
 
             // Phi nodes from block parameters
-            const auto& slots = incoming[block.label.spelling];
+            const auto& slots = m_incoming[block.label.spelling];
             for (size_t pi = 0; pi < block.params.size(); ++pi) {
-                const auto& bp = program[block.params[pi]];
-                const std::string paramType = emitType(bp.type, program);
+                const auto& bp = m_program[block.params[pi]];
+                const std::string paramType = emitType(bp.type, m_program);
                 const std::string paramName = llvmValueName(bp.symbol.spelling);
 
-                output << "  " << paramName << " = phi " << paramType;
+                m_output << "  " << paramName << " = phi " << paramType;
                 for (size_t ei = 0; ei < slots[pi].size(); ++ei) {
                     const auto& edge = slots[pi][ei];
                     if (ei != 0) {
-                        output << ",";
+                        m_output << ",";
                     }
-                    output << " [ " << emitValueOperand(edge.arg, program)
-                           << ", %" << edge.predLabel << " ]";
+                    m_output << " [ " << emitValueOperand(edge.arg, m_program)
+                             << ", %" << edge.predLabel << " ]";
                 }
-                output << "\n";
+                m_output << "\n";
             }
             for (const auto& paramRef : block.params) {
-                const auto& param = program[paramRef];
-                const auto typeIt = valueTypes.find(param.symbol.spelling);
-                if (typeIt != valueTypes.end()
+                const auto& param = m_program[paramRef];
+                const auto typeIt = m_valueTypes.find(param.symbol.spelling);
+                if (typeIt != m_valueTypes.end()
                     && isOwnedTypeString(typeIt->second)
-                    && !ownership.liveIn[blockIndex].contains(
+                    && !m_ownership.liveIn[blockIndex].contains(
                         param.symbol.spelling)) {
                     emitOwnedValueDrop(param.symbol.spelling);
                 }
             }
             if (blockIndex == 0) {
-                for (const auto& paramRef : function.params) {
-                    const auto& param = program[paramRef];
-                    const auto typeIt = valueTypes.find(param.symbol.spelling);
-                    if (typeIt != valueTypes.end()
+                for (const auto& paramRef : m_function.params) {
+                    const auto& param = m_program[paramRef];
+                    const auto typeIt
+                        = m_valueTypes.find(param.symbol.spelling);
+                    if (typeIt != m_valueTypes.end()
                         && isOwnedTypeString(typeIt->second)
-                        && !ownership.liveIn[blockIndex].contains(
+                        && !m_ownership.liveIn[blockIndex].contains(
                             param.symbol.spelling)) {
                         emitOwnedValueDrop(param.symbol.spelling);
                     }
                 }
             }
+        }
 
-            // Statements
+        void emitStatements(size_t blockIndex)
+        {
+            const auto& blockRef = m_function.blocks[blockIndex];
+            const auto& block = m_program[blockRef];
+
             for (size_t stmtIndex = 0; stmtIndex < block.statements.size();
                 ++stmtIndex) {
                 const auto& stmt = block.statements[stmtIndex];
@@ -1752,1557 +1971,1143 @@ namespace {
                 std::visit(
                     [&](auto stmtRef) {
                         using StmtNode
-                            = std::remove_cvref_t<decltype(program[stmtRef])>;
+                            = std::remove_cvref_t<decltype(m_program[stmtRef])>;
                         if constexpr (std::same_as<StmtNode,
                                           koopa_ir::SymbolDef>) {
-                            const auto& sd = program[stmtRef];
+                            const auto& sd = m_program[stmtRef];
                             const std::string& sname = sd.symbol.spelling;
-
-                            MATCH(sd.rhs)
-                            WITH(
-                                [&](const yesod::Ref<
-                                    koopa_ir::MemoryDeclaration>& memRef) {
-                                    const auto& mem = program[memRef];
-                                    output << "  " << llvmValueName(sname)
-                                           << " = alloca "
-                                           << emitType(mem.allocType, program)
-                                           << "\n";
-                                    if (typeContainsPoly(
-                                            mem.allocType, program)) {
-                                        output
-                                            << "  store "
-                                            << emitType(mem.allocType, program)
-                                            << " zeroinitializer, ptr "
-                                            << llvmValueName(sname) << "\n";
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::LoadExpr>&
-                                        loadRef) {
-                                    const auto& ld = program[loadRef];
-                                    const auto ptIt
-                                        = pointees.find(ld.source.spelling);
-                                    const std::string elemTy
-                                        = (ptIt != pointees.end())
-                                        ? ptIt->second
-                                        : "i32";
-                                    if (elemTy == POLY_TYPE) {
-                                        const std::string rawName
-                                            = llvmValueName(sname) + "_raw";
-                                        output
-                                            << "  " << rawName << " = load "
-                                            << elemTy << ", ptr "
-                                            << llvmValueName(ld.source.spelling)
-                                            << "\n";
-                                        emitPolyCloneTo(
-                                            llvmValueName(sname), rawName);
-                                    } else {
-                                        output
-                                            << "  " << llvmValueName(sname)
-                                            << " = load " << elemTy << ", ptr "
-                                            << llvmValueName(ld.source.spelling)
-                                            << "\n";
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetPointerExpr>&
-                                        getptrRef) {
-                                    const auto& gp = program[getptrRef];
-                                    const auto ptIt
-                                        = pointees.find(gp.source.spelling);
-                                    const std::string gepElemTy
-                                        = (ptIt != pointees.end())
-                                        ? ptIt->second
-                                        : "i32";
-                                    output
-                                        << "  " << llvmValueName(sname)
-                                        << " = getelementptr " << gepElemTy
-                                        << ", ptr "
-                                        << llvmValueName(gp.source.spelling)
-                                        << ", i32 "
-                                        << emitValueOperand(gp.index, program)
-                                        << "\n";
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::GetElementPointerExpr>&
-                                        gelemRef) {
-                                    const auto& ge = program[gelemRef];
-                                    const auto ptIt
-                                        = pointees.find(ge.source.spelling);
-                                    const std::string gepTy
-                                        = (ptIt != pointees.end())
-                                        ? ptIt->second
-                                        : "[0 x i32]";
-                                    output
-                                        << "  " << llvmValueName(sname)
-                                        << " = getelementptr " << gepTy
-                                        << ", ptr "
-                                        << llvmValueName(ge.source.spelling)
-                                        << ", i32 0, i32 "
-                                        << emitValueOperand(ge.index, program)
-                                        << "\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::BinaryExpr>&
-                                        binRef) {
-                                    const auto& bin = program[binRef];
-                                    const std::string lhs_typed = "i32 "
-                                        + emitValueOperand(bin.lhs, program);
-                                    const std::string lhs_bare
-                                        = emitValueOperand(bin.lhs, program);
-                                    const std::string rhs_bare
-                                        = emitValueOperand(bin.rhs, program);
-                                    const bool lhsIsMint
-                                        = logicalTypeOf(bin.lhs) == "mint";
-                                    const bool rhsIsMint
-                                        = logicalTypeOf(bin.rhs) == "mint";
-                                    const bool isMintBinary
-                                        = lhsIsMint || rhsIsMint;
-                                    const std::string lhs_mint
-                                        = !isMintBinary || lhsIsMint
-                                        ? lhs_bare
-                                        : emitIntToMint(lhs_bare);
-                                    const std::string rhs_mint
-                                        = !isMintBinary || rhsIsMint
-                                        ? rhs_bare
-                                        : emitIntToMint(rhs_bare);
-                                    using BOp = koopa_ir::BinaryOp;
-                                    switch (bin.op) {
-                                    case BOp::add:
-                                        if (isMintBinary) {
-                                            const std::string result
-                                                = emitMintAddSub(
-                                                    lhs_mint, rhs_mint, false);
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = add i32 " << result
-                                                   << ", 0\n";
-                                        } else {
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = add " << lhs_typed
-                                                   << ", " << rhs_bare << "\n";
-                                        }
-                                        break;
-                                    case BOp::sub:
-                                        if (isMintBinary) {
-                                            const std::string result
-                                                = emitMintAddSub(
-                                                    lhs_mint, rhs_mint, true);
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = add i32 " << result
-                                                   << ", 0\n";
-                                        } else {
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = sub " << lhs_typed
-                                                   << ", " << rhs_bare << "\n";
-                                        }
-                                        break;
-                                    case BOp::mul:
-                                        if (isMintBinary) {
-                                            const std::string result
-                                                = emitMintMul(
-                                                    lhs_mint, rhs_mint);
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = add i32 " << result
-                                                   << ", 0\n";
-                                        } else {
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = mul " << lhs_typed
-                                                   << ", " << rhs_bare << "\n";
-                                        }
-                                        break;
-                                    case BOp::div:
-                                        if (isMintBinary) {
-                                            const std::string inverse
-                                                = emitMintPowConst(
-                                                    rhs_mint, MINT_MOD - 2);
-                                            const std::string result
-                                                = emitMintMul(
-                                                    lhs_mint, inverse);
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = add i32 " << result
-                                                   << ", 0\n";
-                                        } else {
-                                            output << "  "
-                                                   << llvmValueName(sname)
-                                                   << " = sdiv " << lhs_typed
-                                                   << ", " << rhs_bare << "\n";
-                                        }
-                                        break;
-                                    case BOp::mod:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = srem " << lhs_typed
-                                               << ", " << rhs_bare << "\n";
-                                        break;
-                                    case BOp::bitAnd:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = and " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
-                                        break;
-                                    case BOp::bitOr:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = or " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
-                                        break;
-                                    case BOp::bitXor:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = xor " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
-                                        break;
-                                    case BOp::shl:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = shl " << lhs_typed << ", "
-                                               << rhs_bare << "\n";
-                                        break;
-                                    case BOp::shr:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = lshr " << lhs_typed
-                                               << ", " << rhs_bare << "\n";
-                                        break;
-                                    case BOp::sar:
-                                        output << "  " << llvmValueName(sname)
-                                               << " = ashr " << lhs_typed
-                                               << ", " << rhs_bare << "\n";
-                                        break;
-                                    case BOp::eq: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp eq "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    case BOp::ne: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp ne "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    case BOp::gt: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp sgt "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    case BOp::lt: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp slt "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    case BOp::ge: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp sge "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    case BOp::le: {
-                                        const std::string cn = sname + "_cmp";
-                                        const std::string rhs_bare
-                                            = emitValueOperand(
-                                                bin.rhs, program);
-                                        output << "  " << cn << " = icmp sle "
-                                               << lhs_typed << ", " << rhs_bare
-                                               << "\n";
-                                        output << "  " << llvmValueName(sname)
-                                               << " = zext i1 " << cn
-                                               << " to i32\n";
-                                        break;
-                                    }
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::CallExpr>&
-                                        callRef) {
-                                    const auto& call = program[callRef];
-                                    const std::string callee
-                                        = stripPrefix(call.callee.spelling);
-                                    const auto sigIt
-                                        = sigs.find(call.callee.spelling);
-                                    const std::string callRetTy
-                                        = (sigIt != sigs.end())
-                                        ? sigIt->second.retType
-                                        : "void";
-                                    // Mark the value type for the result of the
-                                    // call.
-                                    if (callRetTy != "void") {
-                                        valueTypes[sname] = callRetTy;
-                                    }
-                                    std::vector<std::string> argTypes;
-                                    argTypes.reserve(call.args.size());
-                                    for (size_t ai = 0; ai < call.args.size();
-                                        ++ai) {
-                                        argTypes.push_back(
-                                            (sigIt != sigs.end()
-                                                && ai < sigIt->second.paramTypes
-                                                        .size())
-                                                ? sigIt->second.paramTypes[ai]
-                                                : "i32");
-                                    }
-                                    const ArgumentPlan argPlan
-                                        = planOwnedArguments(call.args,
-                                            argTypes,
-                                            ownership.liveAfterStmt[blockIndex]
-                                                                   [stmtIndex],
-                                            "call_arg");
-                                    emitArgumentPlanClones(argPlan);
-                                    movedValuesInStatement.insert(
-                                        argPlan.movedValues.begin(),
-                                        argPlan.movedValues.end());
-                                    output << "  " << llvmValueName(sname)
-                                           << " = call " << callRetTy << " @"
-                                           << callee << "(";
-                                    for (size_t ai = 0;
-                                        ai < argPlan.operands.size(); ++ai) {
-                                        if (ai != 0) {
-                                            output << ", ";
-                                        }
-                                        output << argTypes[ai] << " "
-                                               << argPlan.operands[ai];
-                                    }
-                                    output << ")\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::ConversionExpr>&
-                                        convRef) {
-                                    const auto& conv = program[convRef];
-                                    const std::string input
-                                        = emitValueOperand(conv.value, program);
-                                    const std::string converted = conv.op
-                                            == koopa_ir::ConversionOp::int2mint
-                                        ? emitIntToMint(input)
-                                        : emitMintToInt(input);
-                                    output << "  " << llvmValueName(sname)
-                                           << " = add i32 " << converted
-                                           << ", 0\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::CopyExpr>&
-                                        copyRef) {
-                                    const auto& copy = program[copyRef];
-                                    const std::string valueType
-                                        = valueTypeOf(copy.value);
-                                    if (valueType == POLY_TYPE) {
-                                        emitPolyCloneTo(llvmValueName(sname),
-                                            emitValueOperand(
-                                                copy.value, program));
-                                    } else {
-                                        output << "  " << llvmValueName(sname)
-                                               << " = add i32 "
-                                               << emitValueOperand(
-                                                      copy.value, program)
-                                               << ", 0\n";
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetAttrExpr>&
-                                        getAttrRef) {
-                                    const auto& getAttr = program[getAttrRef];
-                                    const int32_t index = getAttr.attr
-                                            == koopa_ir::PolyAttr::base
-                                        ? 0
-                                        : getAttr.attr
-                                            == koopa_ir::PolyAttr::addr
-                                        ? 1
-                                        : getAttr.attr == koopa_ir::PolyAttr::l
-                                        ? 3
-                                        : 4;
-                                    output << "  " << llvmValueName(sname)
-                                           << " = extractvalue " << POLY_TYPE
-                                           << " "
-                                           << emitValueOperand(
-                                                  getAttr.value, program)
-                                           << ", " << index << "\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::SetAttrExpr>&
-                                        setAttrRef) {
-                                    const auto& setAttr = program[setAttrRef];
-                                    if (const auto* symbol
-                                        = std::get_if<koopa_ir::Symbol>(
-                                            &setAttr.value)) {
-                                        movedValuesInStatement.insert(
-                                            symbol->spelling);
-                                    }
-                                    const std::string input = emitValueOperand(
-                                        setAttr.value, program);
-                                    const std::string value = emitValueOperand(
-                                        setAttr.attrValue, program);
-                                    const int32_t index = setAttr.attr
-                                            == koopa_ir::PolyAttr::base
-                                        ? 0
-                                        : setAttr.attr
-                                            == koopa_ir::PolyAttr::addr
-                                        ? 1
-                                        : setAttr.attr == koopa_ir::PolyAttr::l
-                                        ? 3
-                                        : 4;
-                                    const std::string valueType
-                                        = (setAttr.attr
-                                                  == koopa_ir::PolyAttr::base
-                                              || setAttr.attr
-                                                  == koopa_ir::PolyAttr::addr)
-                                        ? "ptr"
-                                        : "i32";
-                                    output << "  " << llvmValueName(sname)
-                                           << " = insertvalue " << POLY_TYPE
-                                           << " " << input << ", " << valueType
-                                           << " " << value << ", " << index
-                                           << "\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::SelectExpr>&
-                                        selectRef) {
-                                    const auto& select = program[selectRef];
-                                    const std::string resultType
-                                        = valueTypeOf(select.trueValue);
-                                    const std::string cond
-                                        = nextHelperName("select_cond");
-                                    output << "  " << cond << " = icmp ne i32 "
-                                           << emitValueOperand(
-                                                  select.condition, program)
-                                           << ", 0\n";
-                                    const std::string raw
-                                        = resultType == POLY_TYPE
-                                        ? nextHelperName("select_poly")
-                                        : llvmValueName(sname);
-                                    output << "  " << raw << " = select i1 "
-                                           << cond << ", " << resultType << " "
-                                           << emitValueOperand(
-                                                  select.trueValue, program)
-                                           << ", " << resultType << " "
-                                           << emitValueOperand(
-                                                  select.falseValue, program)
-                                           << "\n";
-                                    if (resultType == POLY_TYPE) {
-                                        emitPolyCloneTo(
-                                            llvmValueName(sname), raw);
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::NextPow2Expr>&
-                                        nextPow2Ref) {
-                                    const auto& nextPow2 = program[nextPow2Ref];
-                                    output << "  " << llvmValueName(sname)
-                                           << " = call i32 @__yesod_next_pow2("
-                                           << "i32 "
-                                           << emitValueOperand(
-                                                  nextPow2.value, program)
-                                           << ")\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::NttExpr>&
-                                        nttRef) {
-                                    const auto& ntt = program[nttRef];
-                                    const PolyFields input = emitPolyFields(
-                                        emitValueOperand(ntt.value, program));
-                                    const std::string length
-                                        = emitValueOperand(ntt.length, program);
-                                    const std::string values
-                                        = nextHelperName("pv_ntt_values");
-                                    output << "  " << values
-                                           << " = call ptr "
-                                              "@__yesod_poly_ntt_data(ptr "
-                                           << input.coeffs << ", i32 "
-                                           << input.l << ", i32 " << input.r
-                                           << ", i32 " << length << ")\n";
-                                    emitPvFromFields(llvmValueName(sname),
-                                        PvFields {
-                                            .values = values, .len = length });
-                                },
-                                [&](const yesod::Ref<koopa_ir::PointwiseExpr>&
-                                        pointwiseRef) {
-                                    const auto& pointwise
-                                        = program[pointwiseRef];
-                                    const std::string length = emitValueOperand(
-                                        pointwise.length, program);
-                                    const std::string outputPv
-                                        = nextHelperName("pv_fused");
-                                    const std::string outputValues
-                                        = nextHelperName("pv_values");
-                                    output << "  " << outputValues
-                                           << " = call ptr "
-                                              "@__yesod_rt_alloc_ints(i32 "
-                                           << length << ")\n";
-                                    emitPvFromFields(outputPv,
-                                        PvFields { .values = outputValues,
-                                            .len = length });
-                                    const std::string preheaderLabel
-                                        = nextLabelName("pointwise_preheader");
-                                    const std::string condLabel
-                                        = nextLabelName("pointwise_cond");
-                                    const std::string bodyLabel
-                                        = nextLabelName("pointwise_body");
-                                    const std::string endLabel
-                                        = nextLabelName("pointwise_end");
-                                    output << "  br label %" << preheaderLabel
-                                           << "\n";
-                                    output << preheaderLabel << ":\n";
-                                    output << "  br label %" << condLabel
-                                           << "\n";
-                                    output << condLabel << ":\n";
-                                    const std::string index
-                                        = nextHelperName("pointwise_i");
-                                    const std::string next
-                                        = nextHelperName("pointwise_next");
-                                    output << "  " << index
-                                           << " = phi i32 [ 0, %"
-                                           << preheaderLabel << " ], [ " << next
-                                           << ", %" << bodyLabel << " ]\n";
-                                    const std::string keep
-                                        = nextHelperName("pointwise_keep");
-                                    output << "  " << keep << " = icmp slt i32 "
-                                           << index << ", " << length << "\n";
-                                    output << "  br i1 " << keep << ", label %"
-                                           << bodyLabel << ", label %"
-                                           << endLabel << "\n";
-                                    output << bodyLabel << ":\n";
-                                    const std::string value
-                                        = emitPointwiseScalar(
-                                            pointwise.root, index);
-                                    const std::string outputElement
-                                        = nextHelperName("pv_out_elem");
-                                    output << "  " << outputElement
-                                           << " = getelementptr i32, ptr "
-                                           << outputValues << ", i32 " << index
-                                           << "\n";
-                                    output << "  store i32 " << value
-                                           << ", ptr " << outputElement << "\n";
-                                    output << "  " << next << " = add i32 "
-                                           << index << ", 1\n";
-                                    output << "  br label %" << condLabel
-                                           << "\n";
-                                    output << endLabel << ":\n";
-                                    const std::string activeL
-                                        = emitValueOperand(
-                                            pointwise.activeL, program);
-                                    const std::string activeR
-                                        = emitValueOperand(
-                                            pointwise.activeR, program);
-                                    const std::string resultAddr
-                                        = nextHelperName("poly_from_pv_addr");
-                                    output
-                                        << "  " << resultAddr
-                                        << " = call ptr "
-                                           "@__yesod_poly_from_pointwise_data"
-                                           "(ptr "
-                                        << outputValues << ", i32 " << length
-                                        << ", i32 " << activeL << ", i32 "
-                                        << activeR << ")\n";
-                                    const std::string activeLen
-                                        = nextHelperName("poly_from_pv_len");
-                                    output << "  " << activeLen << " = sub i32 "
-                                           << activeR << ", " << activeL
-                                           << "\n";
-                                    const std::string isEmpty
-                                        = nextHelperName("poly_from_pv_empty");
-                                    output << "  " << isEmpty
-                                           << " = icmp sge i32 " << activeL
-                                           << ", " << activeR << "\n";
-                                    const std::string rawN
-                                        = nextHelperName("poly_from_pv_n_raw");
-                                    output << "  " << rawN
-                                           << " = call i32 @__yesod_next_pow2("
-                                              "i32 "
-                                           << activeLen << ")\n";
-                                    const std::string resultN
-                                        = nextHelperName("poly_from_pv_n");
-                                    output << "  " << resultN << " = select i1 "
-                                           << isEmpty << ", i32 0, i32 " << rawN
-                                           << "\n";
-                                    const std::string resultCoeffs
-                                        = emitPolyCoeffPtrForAddr(
-                                            resultAddr, activeL, isEmpty);
-                                    emitPolyFromFields(llvmValueName(sname),
-                                        PolyFields { .coeffs = resultCoeffs,
-                                            .addr = resultAddr,
-                                            .n = resultN,
-                                            .l = activeL,
-                                            .r = activeR });
-                                    output
-                                        << "  call void @__yesod_rt_free_ints"
-                                           "(ptr "
-                                        << outputValues << ")\n";
-                                },
-                                [&](const yesod::Ref<koopa_ir::CombineExpr>&
-                                        combineRef) {
-                                    const auto& combine = program[combineRef];
-                                    struct CombineTermState {
-                                        std::string srcCoeffs;
-                                        std::string srcAddr;
-                                        std::string srcN;
-                                        std::string lower;
-                                        std::string upper;
-                                        std::string shift;
-                                        std::string scale;
-                                        std::string sourceSymbol;
-                                        bool reuseCandidate = false;
-                                    };
-                                    std::map<std::string, int> sourceUseCounts;
-                                    for (const auto& term : combine.terms) {
-                                        if (const auto* symbol
-                                            = std::get_if<koopa_ir::Symbol>(
-                                                &term.value)) {
-                                            ++sourceUseCounts[symbol->spelling];
-                                        }
-                                    }
-                                    std::vector<CombineTermState> termStates;
-                                    termStates.reserve(combine.terms.size());
-                                    std::string resultL = "0";
-                                    std::string resultR = "0";
-                                    std::string hasAny = "false";
-                                    int reuseCandidateIndex = -1;
-                                    for (const auto& term : combine.terms) {
-                                        if (const auto* scaleLiteral
-                                            = std::get_if<
-                                                koopa_ir::IntegerLiteral>(
-                                                &term.scale);
-                                            scaleLiteral != nullptr
-                                            && scaleLiteral->value == 0) {
-                                            continue;
-                                        }
-                                        const std::string src
-                                            = emitValueOperand(
-                                                term.value, program);
-                                        const std::string srcCoeffs
-                                            = nextHelperName(
-                                                "combine_src_coeffs");
-                                        output << "  " << srcCoeffs
-                                               << " = extractvalue "
-                                               << POLY_TYPE << " " << src
-                                               << ", 0\n";
-                                        const std::string srcAddr
-                                            = nextHelperName(
-                                                "combine_src_addr");
-                                        output << "  " << srcAddr
-                                               << " = extractvalue "
-                                               << POLY_TYPE << " " << src
-                                               << ", 1\n";
-                                        const std::string srcN
-                                            = nextHelperName("combine_src_n");
-                                        output << "  " << srcN
-                                               << " = extractvalue "
-                                               << POLY_TYPE << " " << src
-                                               << ", 2\n";
-                                        const std::string srcL
-                                            = nextHelperName("combine_src_l");
-                                        output << "  " << srcL
-                                               << " = extractvalue "
-                                               << POLY_TYPE << " " << src
-                                               << ", 3\n";
-                                        const std::string srcR
-                                            = nextHelperName("combine_src_r");
-                                        output << "  " << srcR
-                                               << " = extractvalue "
-                                               << POLY_TYPE << " " << src
-                                               << ", 4\n";
-                                        const std::string start
-                                            = emitValueOperand(
-                                                term.start, program);
-                                        const std::string endValue
-                                            = term.end.has_value()
-                                            ? emitValueOperand(
-                                                  *term.end, program)
-                                            : std::to_string(INF_END);
-                                        const std::string endBeforeSrcR
-                                            = nextHelperName(
-                                                "combine_end_before_src_r");
-                                        output << "  " << endBeforeSrcR
-                                               << " = icmp slt i32 " << endValue
-                                               << ", " << srcR << "\n";
-                                        const std::string upper
-                                            = nextHelperName("combine_upper");
-                                        output << "  " << upper
-                                               << " = select i1 "
-                                               << endBeforeSrcR << ", i32 "
-                                               << endValue << ", i32 " << srcR
-                                               << "\n";
-                                        const std::string startAfterSrcL
-                                            = nextHelperName(
-                                                "combine_start_after_src_l");
-                                        output << "  " << startAfterSrcL
-                                               << " = icmp sgt i32 " << start
-                                               << ", " << srcL << "\n";
-                                        const std::string lower
-                                            = nextHelperName("combine_lower");
-                                        output << "  " << lower
-                                               << " = select i1 "
-                                               << startAfterSrcL << ", i32 "
-                                               << start << ", i32 " << srcL
-                                               << "\n";
-                                        const std::string hasTerm
-                                            = nextHelperName(
-                                                "combine_has_term");
-                                        output << "  " << hasTerm
-                                               << " = icmp slt i32 " << lower
-                                               << ", " << upper << "\n";
-                                        const std::string shift
-                                            = emitValueOperand(
-                                                term.shift, program);
-                                        const std::string termL
-                                            = nextHelperName("combine_term_l");
-                                        output << "  " << termL << " = sub i32 "
-                                               << lower << ", " << shift
-                                               << "\n";
-                                        const std::string termR
-                                            = nextHelperName("combine_term_r");
-                                        output << "  " << termR << " = sub i32 "
-                                               << upper << ", " << shift
-                                               << "\n";
-                                        const std::string isSmallerL
-                                            = nextHelperName(
-                                                "combine_l_smaller");
-                                        output << "  " << isSmallerL
-                                               << " = icmp slt i32 " << termL
-                                               << ", " << resultL << "\n";
-                                        const std::string minL
-                                            = nextHelperName("combine_min_l");
-                                        output << "  " << minL
-                                               << " = select i1 " << isSmallerL
-                                               << ", i32 " << termL << ", i32 "
-                                               << resultL << "\n";
-                                        const std::string isLargerR
-                                            = nextHelperName(
-                                                "combine_r_larger");
-                                        output << "  " << isLargerR
-                                               << " = icmp sgt i32 " << termR
-                                               << ", " << resultR << "\n";
-                                        const std::string maxR
-                                            = nextHelperName("combine_max_r");
-                                        output << "  " << maxR
-                                               << " = select i1 " << isLargerR
-                                               << ", i32 " << termR << ", i32 "
-                                               << resultR << "\n";
-                                        const std::string mergedL
-                                            = nextHelperName(
-                                                "combine_merged_l");
-                                        output << "  " << mergedL
-                                               << " = select i1 " << hasAny
-                                               << ", i32 " << minL << ", i32 "
-                                               << termL << "\n";
-                                        const std::string mergedR
-                                            = nextHelperName(
-                                                "combine_merged_r");
-                                        output << "  " << mergedR
-                                               << " = select i1 " << hasAny
-                                               << ", i32 " << maxR << ", i32 "
-                                               << termR << "\n";
-                                        const std::string nextResultL
-                                            = nextHelperName(
-                                                "combine_result_l");
-                                        output << "  " << nextResultL
-                                               << " = select i1 " << hasTerm
-                                               << ", i32 " << mergedL
-                                               << ", i32 " << resultL << "\n";
-                                        const std::string nextResultR
-                                            = nextHelperName(
-                                                "combine_result_r");
-                                        output << "  " << nextResultR
-                                               << " = select i1 " << hasTerm
-                                               << ", i32 " << mergedR
-                                               << ", i32 " << resultR << "\n";
-                                        const std::string nextHasAny
-                                            = nextHelperName("combine_any");
-                                        output << "  " << nextHasAny
-                                               << " = or i1 " << hasAny << ", "
-                                               << hasTerm << "\n";
-                                        resultL = nextResultL;
-                                        resultR = nextResultR;
-                                        hasAny = nextHasAny;
-                                        std::string sourceSymbol;
-                                        bool canBeReuseCandidate = false;
-                                        if (const auto* symbol
-                                            = std::get_if<koopa_ir::Symbol>(
-                                                &term.value)) {
-                                            sourceSymbol = symbol->spelling;
-                                            const auto typeIt
-                                                = valueTypes.find(sourceSymbol);
-                                            const auto useCountIt
-                                                = sourceUseCounts.find(
-                                                    sourceSymbol);
-                                            const auto* scaleLiteral
-                                                = std::get_if<
-                                                    koopa_ir::IntegerLiteral>(
-                                                    &term.scale);
-                                            const auto* shiftLiteral
-                                                = std::get_if<
-                                                    koopa_ir::IntegerLiteral>(
-                                                    &term.shift);
-                                            canBeReuseCandidate
-                                                = typeIt != valueTypes.end()
-                                                && typeIt->second == POLY_TYPE
-                                                && useCountIt
-                                                    != sourceUseCounts.end()
-                                                && useCountIt->second == 1
-                                                && scaleLiteral != nullptr
-                                                && scaleLiteral->value == 1
-                                                && shiftLiteral != nullptr
-                                                && shiftLiteral->value == 0
-                                                && !ownership
-                                                        .liveAfterStmt
-                                                            [blockIndex]
-                                                            [stmtIndex]
-                                                        .contains(sourceSymbol);
-                                        }
-                                        if (canBeReuseCandidate
-                                            && reuseCandidateIndex < 0) {
-                                            reuseCandidateIndex
-                                                = static_cast<int>(
-                                                    termStates.size());
-                                        }
-                                        termStates.push_back(CombineTermState {
-                                            .srcCoeffs = srcCoeffs,
-                                            .srcAddr = srcAddr,
-                                            .srcN = srcN,
-                                            .lower = termL,
-                                            .upper = termR,
-                                            .shift = shift,
-                                            .scale
-                                            = emitMintOperand(term.scale),
-                                            .sourceSymbol = sourceSymbol,
-                                            .reuseCandidate
-                                            = canBeReuseCandidate
-                                                && reuseCandidateIndex
-                                                    == static_cast<int>(
-                                                        termStates.size()),
-                                        });
-                                    }
-                                    if (termStates.empty()) {
-                                        emitPolyZeroTo(llvmValueName(sname));
-                                        return;
-                                    }
-                                    const std::string resultLen
-                                        = nextHelperName("combine_result_len");
-                                    output << "  " << resultLen << " = sub i32 "
-                                           << resultR << ", " << resultL
-                                           << "\n";
-                                    const std::string resultEmpty
-                                        = nextHelperName(
-                                            "combine_result_empty");
-                                    output << "  " << resultEmpty
-                                           << " = icmp sge i32 " << resultL
-                                           << ", " << resultR << "\n";
-                                    const std::string resultRawN
-                                        = nextHelperName(
-                                            "combine_result_n_raw");
-                                    output << "  " << resultRawN
-                                           << " = call i32 @__yesod_next_pow2("
-                                              "i32 "
-                                           << resultLen << ")\n";
-                                    const std::string resultN
-                                        = nextHelperName("combine_result_n");
-                                    output << "  " << resultN << " = select i1 "
-                                           << resultEmpty << ", i32 0, i32 "
-                                           << resultRawN << "\n";
-                                    auto emitZeroRange
-                                        = [&](const std::string& coeffs,
-                                              const std::string& begin,
-                                              const std::string& end)
-                                        -> std::string {
-                                        const std::string preheaderLabel
-                                            = nextLabelName(
-                                                "combine_zero_preheader");
-                                        const std::string condLabel
-                                            = nextLabelName(
-                                                "combine_zero_cond");
-                                        const std::string bodyLabel
-                                            = nextLabelName(
-                                                "combine_zero_body");
-                                        const std::string endLabel
-                                            = nextLabelName("combine_zero_end");
-                                        output << "  br label %"
-                                               << preheaderLabel << "\n";
-                                        output << preheaderLabel << ":\n";
-                                        output << "  br label %" << condLabel
-                                               << "\n";
-                                        output << condLabel << ":\n";
-                                        const std::string index
-                                            = nextHelperName("combine_zero_i");
-                                        const std::string next = nextHelperName(
-                                            "combine_zero_next");
-                                        output << "  " << index
-                                               << " = phi i32 [ " << begin
-                                               << ", %" << preheaderLabel
-                                               << " ], [ " << next << ", %"
-                                               << bodyLabel << " ]\n";
-                                        const std::string keep = nextHelperName(
-                                            "combine_zero_keep");
-                                        output << "  " << keep
-                                               << " = icmp slt i32 " << index
-                                               << ", " << end << "\n";
-                                        output << "  br i1 " << keep
-                                               << ", label %" << bodyLabel
-                                               << ", label %" << endLabel
-                                               << "\n";
-                                        output << bodyLabel << ":\n";
-                                        const std::string dstPtr
-                                            = nextHelperName(
-                                                "combine_zero_dst");
-                                        output << "  " << dstPtr
-                                               << " = getelementptr i32, ptr "
-                                               << coeffs << ", i32 " << index
-                                               << "\n";
-                                        output << "  store i32 0, ptr "
-                                               << dstPtr << "\n";
-                                        output << "  " << next << " = add i32 "
-                                               << index << ", 1\n";
-                                        output << "  br label %" << condLabel
-                                               << "\n";
-                                        output << endLabel << ":\n";
-                                        return endLabel;
-                                    };
-                                    std::string resultAddr;
-                                    std::string resultCoeffs;
-                                    std::string resultOwnedN;
-                                    std::string reusedCandidateFlag = "false";
-                                    if (reuseCandidateIndex >= 0) {
-                                        const CombineTermState& candidate
-                                            = termStates[static_cast<size_t>(
-                                                reuseCandidateIndex)];
-                                        movedValuesInStatement.insert(
-                                            candidate.sourceSymbol);
-                                        const std::string coeffsInt
-                                            = nextHelperName(
-                                                "combine_reuse_coeffs_i");
-                                        const std::string addrInt
-                                            = nextHelperName(
-                                                "combine_reuse_addr_i");
-                                        output << "  " << coeffsInt
-                                               << " = ptrtoint ptr "
-                                               << candidate.srcCoeffs
-                                               << " to i64\n";
-                                        output << "  " << addrInt
-                                               << " = ptrtoint ptr "
-                                               << candidate.srcAddr
-                                               << " to i64\n";
-                                        const std::string byteOffset
-                                            = nextHelperName(
-                                                "combine_reuse_byte_offset");
-                                        output << "  " << byteOffset
-                                               << " = sub i64 " << coeffsInt
-                                               << ", " << addrInt << "\n";
-                                        const std::string elemOffset
-                                            = nextHelperName(
-                                                "combine_reuse_elem_offset");
-                                        output << "  " << elemOffset
-                                               << " = sdiv i64 " << byteOffset
-                                               << ", 4\n";
-                                        const std::string resultL64
-                                            = nextHelperName(
-                                                "combine_reuse_l64");
-                                        output << "  " << resultL64
-                                               << " = sext i32 " << resultL
-                                               << " to i64\n";
-                                        const std::string resultR64
-                                            = nextHelperName(
-                                                "combine_reuse_r64");
-                                        output << "  " << resultR64
-                                               << " = sext i32 " << resultR
-                                               << " to i64\n";
-                                        const std::string resultBeginOffset
-                                            = nextHelperName(
-                                                "combine_reuse_begin");
-                                        output << "  " << resultBeginOffset
-                                               << " = add i64 " << elemOffset
-                                               << ", " << resultL64 << "\n";
-                                        const std::string resultEndOffset
-                                            = nextHelperName(
-                                                "combine_reuse_end");
-                                        output << "  " << resultEndOffset
-                                               << " = add i64 " << elemOffset
-                                               << ", " << resultR64 << "\n";
-                                        const std::string srcN64
-                                            = nextHelperName(
-                                                "combine_reuse_n64");
-                                        output << "  " << srcN64
-                                               << " = sext i32 "
-                                               << candidate.srcN << " to i64\n";
-                                        const std::string beginInBounds
-                                            = nextHelperName(
-                                                "combine_reuse_begin_ok");
-                                        output << "  " << beginInBounds
-                                               << " = icmp sge i64 "
-                                               << resultBeginOffset << ", 0\n";
-                                        const std::string endInBounds
-                                            = nextHelperName(
-                                                "combine_reuse_end_ok");
-                                        output << "  " << endInBounds
-                                               << " = icmp sle i64 "
-                                               << resultEndOffset << ", "
-                                               << srcN64 << "\n";
-                                        const std::string capacityOk
-                                            = nextHelperName(
-                                                "combine_reuse_capacity");
-                                        output << "  " << capacityOk
-                                               << " = and i1 " << beginInBounds
-                                               << ", " << endInBounds << "\n";
-                                        const std::string notEmpty
-                                            = nextHelperName(
-                                                "combine_reuse_not_empty");
-                                        output << "  " << notEmpty
-                                               << " = icmp slt i32 " << resultL
-                                               << ", " << resultR << "\n";
-                                        const std::string canReuse
-                                            = nextHelperName(
-                                                "combine_can_reuse");
-                                        output << "  " << canReuse
-                                               << " = and i1 " << capacityOk
-                                               << ", " << notEmpty << "\n";
-                                        const std::string reuseLabel
-                                            = nextLabelName("combine_reuse");
-                                        const std::string allocLabel
-                                            = nextLabelName("combine_alloc");
-                                        const std::string afterLabel
-                                            = nextLabelName(
-                                                "combine_after_alloc");
-                                        output << "  br i1 " << canReuse
-                                               << ", label %" << reuseLabel
-                                               << ", label %" << allocLabel
-                                               << "\n";
-                                        output << reuseLabel << ":\n";
-                                        std::string reuseExitLabel
-                                            = emitZeroRange(candidate.srcCoeffs,
-                                                resultL, candidate.lower);
-                                        reuseExitLabel
-                                            = emitZeroRange(candidate.srcCoeffs,
-                                                candidate.upper, resultR);
-                                        output << "  br label %" << afterLabel
-                                               << "\n";
-                                        output << allocLabel << ":\n";
-                                        const std::string allocAddr
-                                            = nextHelperName(
-                                                "combine_result_addr");
-                                        output << "  " << allocAddr
-                                               << " = call ptr "
-                                                  "@__yesod_poly_alloc_zero_"
-                                                  "data(i32 "
-                                               << resultL << ", i32 " << resultR
-                                               << ")\n";
-                                        const std::string allocCoeffs
-                                            = emitPolyCoeffPtrForAddr(allocAddr,
-                                                resultL, resultEmpty);
-                                        output << "  br label %" << afterLabel
-                                               << "\n";
-                                        output << afterLabel << ":\n";
-                                        resultAddr = nextHelperName(
-                                            "combine_result_addr_phi");
-                                        resultCoeffs = nextHelperName(
-                                            "combine_result_coeffs_phi");
-                                        resultOwnedN = nextHelperName(
-                                            "combine_result_n_phi");
-                                        reusedCandidateFlag = nextHelperName(
-                                            "combine_reused_phi");
-                                        output << "  " << resultAddr
-                                               << " = phi ptr [ "
-                                               << candidate.srcAddr << ", %"
-                                               << reuseExitLabel << " ], [ "
-                                               << allocAddr << ", %"
-                                               << allocLabel << " ]\n";
-                                        output << "  " << resultCoeffs
-                                               << " = phi ptr [ "
-                                               << candidate.srcCoeffs << ", %"
-                                               << reuseExitLabel << " ], [ "
-                                               << allocCoeffs << ", %"
-                                               << allocLabel << " ]\n";
-                                        output << "  " << resultOwnedN
-                                               << " = phi i32 [ "
-                                               << candidate.srcN << ", %"
-                                               << reuseExitLabel << " ], [ "
-                                               << resultN << ", %" << allocLabel
-                                               << " ]\n";
-                                        output << "  " << reusedCandidateFlag
-                                               << " = phi i1 [ true, %"
-                                               << reuseExitLabel
-                                               << " ], [ false, %" << allocLabel
-                                               << " ]\n";
-                                    } else {
-                                        resultAddr = nextHelperName(
-                                            "combine_result_addr");
-                                        output
-                                            << "  " << resultAddr
-                                            << " = call ptr "
-                                               "@__yesod_poly_alloc_zero_data("
-                                               "i32 "
-                                            << resultL << ", i32 " << resultR
-                                            << ")\n";
-                                        resultCoeffs = emitPolyCoeffPtrForAddr(
-                                            resultAddr, resultL, resultEmpty);
-                                        resultOwnedN = resultN;
-                                    }
-                                    emitPolyFromFields(llvmValueName(sname),
-                                        PolyFields { .coeffs = resultCoeffs,
-                                            .addr = resultAddr,
-                                            .n = resultOwnedN,
-                                            .l = resultL,
-                                            .r = resultR });
-                                    const std::string montOne = std::to_string(
-                                        intToMontgomeryConst(1));
-                                    const std::string montMinusOne
-                                        = std::to_string(
-                                            intToMontgomeryConst(-1));
-                                    for (const auto& term : termStates) {
-                                        const std::string loopStartIsNegative
-                                            = nextHelperName(
-                                                "combine_start_neg");
-                                        output << "  " << loopStartIsNegative
-                                               << " = icmp slt i32 "
-                                               << term.lower << ", 0\n";
-                                        const std::string loopStart
-                                            = nextHelperName(
-                                                "combine_loop_start");
-                                        output << "  " << loopStart
-                                               << " = select i1 "
-                                               << loopStartIsNegative
-                                               << ", i32 0, i32 " << term.lower
-                                               << "\n";
-                                        const std::string preheaderLabel
-                                            = nextLabelName(
-                                                "combine_preheader");
-                                        const std::string condLabel
-                                            = nextLabelName("combine_cond");
-                                        const std::string bodyLabel
-                                            = nextLabelName("combine_body");
-                                        const std::string endLabel
-                                            = nextLabelName("combine_end");
-                                        if (term.reuseCandidate) {
-                                            output << "  br i1 "
-                                                   << reusedCandidateFlag
-                                                   << ", label %" << endLabel
-                                                   << ", label %"
-                                                   << preheaderLabel << "\n";
-                                        } else {
-                                            output << "  br label %"
-                                                   << preheaderLabel << "\n";
-                                        }
-                                        output << preheaderLabel << ":\n";
-                                        output << "  br label %" << condLabel
-                                               << "\n";
-                                        output << condLabel << ":\n";
-                                        const std::string index
-                                            = nextHelperName("combine_i");
-                                        const std::string next
-                                            = nextHelperName("combine_next");
-                                        output << "  " << index
-                                               << " = phi i32 [ " << loopStart
-                                               << ", %" << preheaderLabel
-                                               << " ], [ " << next << ", %"
-                                               << bodyLabel << " ]\n";
-                                        const std::string keep
-                                            = nextHelperName("combine_keep");
-                                        output << "  " << keep
-                                               << " = icmp slt i32 " << index
-                                               << ", " << term.upper << "\n";
-                                        output << "  br i1 " << keep
-                                               << ", label %" << bodyLabel
-                                               << ", label %" << endLabel
-                                               << "\n";
-                                        output << bodyLabel << ":\n";
-                                        const std::string dstPtr
-                                            = nextHelperName("combine_dst");
-                                        output << "  " << dstPtr
-                                               << " = getelementptr i32, ptr "
-                                               << resultCoeffs << ", i32 "
-                                               << index << "\n";
-                                        const std::string oldValue
-                                            = nextHelperName("combine_old");
-                                        output << "  " << oldValue
-                                               << " = load i32, ptr " << dstPtr
-                                               << "\n";
-                                        const std::string srcIndex
-                                            = nextHelperName(
-                                                "combine_src_index");
-                                        output << "  " << srcIndex
-                                               << " = add i32 " << index << ", "
-                                               << term.shift << "\n";
-                                        const std::string srcPtr
-                                            = nextHelperName("combine_src");
-                                        output << "  " << srcPtr
-                                               << " = getelementptr i32, ptr "
-                                               << term.srcCoeffs << ", i32 "
-                                               << srcIndex << "\n";
-                                        const std::string srcValue
-                                            = nextHelperName("combine_src_val");
-                                        output << "  " << srcValue
-                                               << " = load i32, ptr " << srcPtr
-                                               << "\n";
-                                        std::string combined;
-                                        if (term.scale == montOne) {
-                                            combined = emitMintAddSub(
-                                                oldValue, srcValue, false);
-                                        } else if (term.scale == montMinusOne) {
-                                            combined = emitMintAddSub(
-                                                oldValue, srcValue, true);
-                                        } else {
-                                            const std::string scaled
-                                                = emitMintMul(
-                                                    srcValue, term.scale);
-                                            combined = emitMintAddSub(
-                                                oldValue, scaled, false);
-                                        }
-                                        output << "  store i32 " << combined
-                                               << ", ptr " << dstPtr << "\n";
-                                        output << "  " << next << " = add i32 "
-                                               << index << ", 1\n";
-                                        output << "  br label %" << condLabel
-                                               << "\n";
-                                        output << endLabel << ":\n";
-                                    }
-                                    if (reuseCandidateIndex >= 0) {
-                                        const CombineTermState& candidate
-                                            = termStates[static_cast<size_t>(
-                                                reuseCandidateIndex)];
-                                        const std::string dropOldLabel
-                                            = nextLabelName("combine_drop_old");
-                                        const std::string doneLabel
-                                            = nextLabelName(
-                                                "combine_drop_done");
-                                        output << "  br i1 "
-                                               << reusedCandidateFlag
-                                               << ", label %" << doneLabel
-                                               << ", label %" << dropOldLabel
-                                               << "\n";
-                                        output << dropOldLabel << ":\n";
-                                        output << "  call void "
-                                                  "@__yesod_rt_free_ints(ptr "
-                                               << candidate.srcAddr << ")\n";
-                                        output << "  br label %" << doneLabel
-                                               << "\n";
-                                        output << doneLabel << ":\n";
-                                    }
-                                },
-                                [&](const yesod::Ref<koopa_ir::GetCoeffExpr>&
-                                        getCoeffRef) {
-                                    const auto& getCoeff = program[getCoeffRef];
-                                    const PolyFields input
-                                        = emitPolyFields(emitValueOperand(
-                                            getCoeff.value, program));
-                                    output << "  " << llvmValueName(sname)
-                                           << " = call i32 "
-                                              "@__yesod_poly_getcoeff_data(ptr "
-                                           << input.coeffs << ", i32 "
-                                           << input.l << ", i32 " << input.r
-                                           << ", i32 "
-                                           << emitValueOperand(
-                                                  getCoeff.index, program)
-                                           << ")\n";
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::PolyConstructExpr>&
-                                        constructRef) {
-                                    const auto& construct
-                                        = program[constructRef];
-                                    if (construct.elements.empty()) {
-                                        emitPolyZeroTo(llvmValueName(sname));
-                                        return;
-                                    }
-                                    const std::string count = std::to_string(
-                                        construct.elements.size());
-                                    const std::string addr
-                                        = nextHelperName("poly_construct_addr");
-                                    output << "  " << addr
-                                           << " = call ptr "
-                                              "@__yesod_poly_alloc_zero_data("
-                                              "i32 0, i32 "
-                                           << count << ")\n";
-                                    for (size_t i = 0;
-                                        i < construct.elements.size(); ++i) {
-                                        const std::string elementPtr
-                                            = nextHelperName("poly_coeff_ptr");
-                                        output << "  " << elementPtr
-                                               << " = getelementptr i32, ptr "
-                                               << addr << ", i32 " << i << "\n";
-                                        const std::string element
-                                            = emitMintOperand(
-                                                construct.elements[i]);
-                                        output << "  store i32 " << element
-                                               << ", ptr " << elementPtr
-                                               << "\n";
-                                    }
-                                    size_t constructN = 1;
-                                    while (constructN
-                                        < construct.elements.size()) {
-                                        constructN <<= 1;
-                                    }
-                                    emitPolyFromFields(llvmValueName(sname),
-                                        PolyFields { .coeffs = addr,
-                                            .addr = addr,
-                                            .n = std::to_string(constructN),
-                                            .l = "0",
-                                            .r = count });
-                                },
-                                [&](const auto&) {
-                                    throw std::runtime_error(
-                                        "LLVM backend does not support native "
-                                        "poly/pv pseudo-instructions");
-                                });
+                            emitSymbolDefRhs(sd, sname, blockIndex, stmtIndex,
+                                movedValuesInStatement);
                         } else if constexpr (std::same_as<StmtNode,
                                                  koopa_ir::StoreStmt>) {
-                            const auto& store = program[stmtRef];
-                            const auto ptIt
-                                = pointees.find(store.destination.spelling);
-                            const std::string elemTy = (ptIt != pointees.end())
-                                ? ptIt->second
-                                : "i32";
-                            std::string storeValue;
-                            std::string storeLogicalType = "int";
-                            MATCH(store.value)
-                            WITH(
-                                [&](const koopa_ir::Symbol& sv) {
-                                    storeValue = llvmValueName(sv.spelling);
-                                    const auto logicalIt
-                                        = logicalTypes.find(sv.spelling);
-                                    storeLogicalType
-                                        = logicalIt == logicalTypes.end()
-                                        ? "int"
-                                        : logicalIt->second;
-                                },
-                                [&](const koopa_ir::IntegerLiteral& sv) {
-                                    storeValue = std::to_string(sv.value);
-                                },
-                                [&](const koopa_ir::UndefValue&) {
-                                    storeValue = "undef";
-                                },
-                                [&](const koopa_ir::ZeroInit&) {
-                                    storeValue = "zeroinitializer";
-                                },
-                                [&](const yesod::Ref<
-                                    koopa_ir::AggregateInitializer>&) {
-                                    storeValue = "zeroinitializer";
-                                });
-                            if (elemTy == POLY_TYPE) {
-                                const std::string oldValue
-                                    = nextHelperName("poly_store_old");
-                                output
-                                    << "  " << oldValue << " = load "
-                                    << POLY_TYPE << ", ptr "
-                                    << llvmValueName(store.destination.spelling)
-                                    << "\n";
-                                emitOwnedValueDropByType(
-                                    std::string(POLY_TYPE), oldValue);
-                                storeValue = emitPolyCloneValue(storeValue);
-                            } else {
-                                const auto logicalPtIt = logicalPointees.find(
-                                    store.destination.spelling);
-                                const std::string logicalElemTy
-                                    = logicalPtIt == logicalPointees.end()
-                                    ? "int"
-                                    : logicalPtIt->second;
-                                if (elemTy == "i32" && logicalElemTy == "mint"
-                                    && storeLogicalType != "mint") {
-                                    if (storeValue != "undef"
-                                        && storeValue != "zeroinitializer") {
-                                        storeValue = emitIntToMint(storeValue);
-                                    }
-                                }
-                            }
-                            output << "  store " << elemTy << " " << storeValue
-                                   << ", ptr "
-                                   << llvmValueName(store.destination.spelling)
-                                   << "\n";
+                            emitStoreStmtImpl(m_program[stmtRef]);
                         } else if constexpr (std::same_as<StmtNode,
                                                  koopa_ir::CallExpr>) {
-                            const auto& call = program[stmtRef];
-                            const std::string callee
-                                = stripPrefix(call.callee.spelling);
-                            const auto sigIt = sigs.find(call.callee.spelling);
-                            const std::string callRetTy = (sigIt != sigs.end())
-                                ? sigIt->second.retType
-                                : "void";
-                            std::vector<std::string> argTypes;
-                            argTypes.reserve(call.args.size());
-                            for (size_t ai = 0; ai < call.args.size(); ++ai) {
-                                argTypes.push_back(
-                                    (sigIt != sigs.end()
-                                        && ai < sigIt->second.paramTypes.size())
-                                        ? sigIt->second.paramTypes[ai]
-                                        : "i32");
-                            }
-                            const ArgumentPlan argPlan = planOwnedArguments(
-                                call.args, argTypes,
-                                ownership.liveAfterStmt[blockIndex][stmtIndex],
-                                "call_arg");
-                            emitArgumentPlanClones(argPlan);
-                            movedValuesInStatement.insert(
-                                argPlan.movedValues.begin(),
-                                argPlan.movedValues.end());
-                            output << "  call " << callRetTy << " @" << callee
-                                   << "(";
-                            for (size_t ai = 0; ai < argPlan.operands.size();
-                                ++ai) {
-                                if (ai != 0) {
-                                    output << ", ";
-                                }
-                                output << argTypes[ai] << " "
-                                       << argPlan.operands[ai];
-                            }
-                            output << ")\n";
+                            emitCallStmtImpl(m_program[stmtRef], blockIndex,
+                                stmtIndex, movedValuesInStatement);
                         }
                     },
                     stmt);
-                const auto uses
-                    = statementUses(stmt, program, sigs, pointees, valueTypes);
+                const auto uses = statementUses(
+                    stmt, m_program, m_sigs, m_pointees, m_valueTypes);
                 SymbolSet valuesToDrop;
                 for (const auto& use : uses) {
-                    if (!ownership.liveAfterStmt[blockIndex][stmtIndex]
+                    if (!m_ownership.liveAfterStmt[blockIndex][stmtIndex]
                             .contains(use)
                         && !movedValuesInStatement.contains(use)) {
                         valuesToDrop.insert(use);
                     }
                 }
-                const auto def = statementDef(stmt, program, valueTypes);
+                const auto def = statementDef(stmt, m_program, m_valueTypes);
                 if (def.has_value()
-                    && !ownership.liveAfterStmt[blockIndex][stmtIndex].contains(
-                        *def)) {
+                    && !m_ownership.liveAfterStmt[blockIndex][stmtIndex]
+                        .contains(*def)) {
                     valuesToDrop.insert(*def);
                 }
                 emitOwnedValueDrops(valuesToDrop);
             }
+        }
 
-            // ── Terminator ─────────────────────────────────────────────
-            MATCH(block.terminator)
+        // ── SymbolDef rhs handler ─────────────────────────────────────
+        void emitSymbolDefRhs(const koopa_ir::SymbolDef& sd,
+            const std::string& sname, size_t blockIndex, size_t stmtIndex,
+            SymbolSet& movedValuesInStatement)
+        {
+            MATCH(sd.rhs)
             WITH(
-                [&](const yesod::Ref<koopa_ir::JumpTerminator>& jumpRef) {
-                    const auto& jump = program[jumpRef];
-                    const auto planIt = edgePlans.find({ blockIndex,
-                        jump.args.empty() ? std::string("") : "jump" });
-                    const bool splitJump = planIt != edgePlans.end()
-                        && planIt->second.label != llvmLabel;
-                    if (!splitJump && planIt != edgePlans.end()) {
-                        emitArgumentPlanClones(planIt->second.args);
-                        emitOwnedValueDrops(planIt->second.releases);
+                [&](const yesod::Ref<koopa_ir::MemoryDeclaration>& memRef) {
+                    const auto& mem = m_program[memRef];
+                    m_output << "  " << llvmValueName(sname) << " = alloca "
+                             << emitType(mem.allocType, m_program) << "\n";
+                    if (typeContainsPoly(mem.allocType, m_program)) {
+                        m_output
+                            << "  store " << emitType(mem.allocType, m_program)
+                            << " zeroinitializer, ptr " << llvmValueName(sname)
+                            << "\n";
                     }
-                    if (splitJump) {
-                        output << "  br label %" << planIt->second.label
-                               << "\n";
-                        output << planIt->second.label << ":\n";
-                        emitArgumentPlanClones(planIt->second.args);
-                        emitOwnedValueDrops(planIt->second.releases);
-                    }
-                    output << "  br label %"
-                           << blockLabels[jump.target.spelling] << "\n";
                 },
-                [&](const yesod::Ref<koopa_ir::BranchTerminator>& brRef) {
-                    const auto& br = program[brRef];
-                    const std::string condName
-                        = "_cond_bool_" + stripPrefix(block.label.spelling);
-                    output << "  %" << condName << " = icmp ne i32 "
-                           << emitValueOperand(br.condition, program)
-                           << ", 0\n";
-                    const auto truePlanIt
-                        = edgePlans.find({ blockIndex, "true" });
-                    const auto falsePlanIt
-                        = edgePlans.find({ blockIndex, "false" });
-                    const SymbolSet trueReleases = truePlanIt == edgePlans.end()
-                        ? SymbolSet { }
-                        : truePlanIt->second.releases;
-                    const SymbolSet falseReleases
-                        = falsePlanIt == edgePlans.end()
-                        ? SymbolSet { }
-                        : falsePlanIt->second.releases;
-                    const bool trueHasClones = truePlanIt != edgePlans.end()
-                        && !truePlanIt->second.args.clones.empty();
-                    const bool falseHasClones = falsePlanIt != edgePlans.end()
-                        && !falsePlanIt->second.args.clones.empty();
-                    const bool splitTrue = !br.trueArgs.empty()
-                        || !trueReleases.empty() || trueHasClones;
-                    const bool splitFalse = !br.falseArgs.empty()
-                        || !falseReleases.empty() || falseHasClones;
-                    if (splitTrue || splitFalse
-                        || needsSameTargetBranchSplit(br)) {
-                        const std::string trueEdgeLabel
-                            = edgeBlockLabel(llvmLabel, "true");
-                        const std::string falseEdgeLabel
-                            = edgeBlockLabel(llvmLabel, "false");
-                        output << "  br i1 %" << condName << ", label %";
-                        output << (splitTrue
-                                ? trueEdgeLabel
-                                : blockLabels[br.trueTarget.spelling]);
-                        output << ", label %";
-                        output << (splitFalse
-                                ? falseEdgeLabel
-                                : blockLabels[br.falseTarget.spelling])
-                               << "\n";
-                        if (splitTrue) {
-                            output << trueEdgeLabel << ":\n";
-                            if (truePlanIt != edgePlans.end()) {
-                                emitArgumentPlanClones(truePlanIt->second.args);
-                            }
-                            emitOwnedValueDrops(trueReleases);
-                            output << "  br label %"
-                                   << blockLabels[br.trueTarget.spelling]
-                                   << "\n";
+                [&](const yesod::Ref<koopa_ir::LoadExpr>& loadRef) {
+                    const auto& ld = m_program[loadRef];
+                    const auto ptIt = m_pointees.find(ld.source.spelling);
+                    const std::string elemTy
+                        = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
+                    if (elemTy == POLY_TYPE) {
+                        const std::string rawName
+                            = llvmValueName(sname) + "_raw";
+                        m_output << "  " << rawName << " = load " << elemTy
+                                 << ", ptr "
+                                 << llvmValueName(ld.source.spelling) << "\n";
+                        emitPolyCloneTo(llvmValueName(sname), rawName);
+                    } else {
+                        m_output << "  " << llvmValueName(sname) << " = load "
+                                 << elemTy << ", ptr "
+                                 << llvmValueName(ld.source.spelling) << "\n";
+                    }
+                },
+                [&](const yesod::Ref<koopa_ir::GetPointerExpr>& getptrRef) {
+                    const auto& gp = m_program[getptrRef];
+                    const auto ptIt = m_pointees.find(gp.source.spelling);
+                    const std::string gepElemTy
+                        = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
+                    m_output << "  " << llvmValueName(sname)
+                             << " = getelementptr " << gepElemTy << ", ptr "
+                             << llvmValueName(gp.source.spelling) << ", i32 "
+                             << emitValueOperand(gp.index, m_program) << "\n";
+                },
+                [&](const yesod::Ref<koopa_ir::GetElementPointerExpr>&
+                        gelemRef) {
+                    const auto& ge = m_program[gelemRef];
+                    const auto ptIt = m_pointees.find(ge.source.spelling);
+                    const std::string gepTy = (ptIt != m_pointees.end())
+                        ? ptIt->second
+                        : "[0 x i32]";
+                    m_output << "  " << llvmValueName(sname)
+                             << " = getelementptr " << gepTy << ", ptr "
+                             << llvmValueName(ge.source.spelling)
+                             << ", i32 0, i32 "
+                             << emitValueOperand(ge.index, m_program) << "\n";
+                },
+                [&](const yesod::Ref<koopa_ir::BinaryExpr>& binRef) {
+                    emitBinaryExprImpl(m_program[binRef], sname);
+                },
+                [&](const yesod::Ref<koopa_ir::CallExpr>& callRef) {
+                    const auto& call = m_program[callRef];
+                    const std::string callee
+                        = stripPrefix(call.callee.spelling);
+                    const auto sigIt = m_sigs.find(call.callee.spelling);
+                    const std::string callRetTy = (sigIt != m_sigs.end())
+                        ? sigIt->second.retType
+                        : "void";
+                    if (callRetTy != "void") {
+                        m_valueTypes[sname] = callRetTy;
+                    }
+                    std::vector<std::string> argTypes;
+                    argTypes.reserve(call.args.size());
+                    for (size_t ai = 0; ai < call.args.size(); ++ai) {
+                        argTypes.push_back(
+                            (sigIt != m_sigs.end()
+                                && ai < sigIt->second.paramTypes.size())
+                                ? sigIt->second.paramTypes[ai]
+                                : "i32");
+                    }
+                    const ArgumentPlan argPlan
+                        = planOwnedArguments(call.args, argTypes,
+                            m_ownership.liveAfterStmt[blockIndex][stmtIndex],
+                            "call_arg");
+                    emitArgumentPlanClones(argPlan);
+                    movedValuesInStatement.insert(
+                        argPlan.movedValues.begin(), argPlan.movedValues.end());
+                    m_output << "  " << llvmValueName(sname) << " = call "
+                             << callRetTy << " @" << callee << "(";
+                    for (size_t ai = 0; ai < argPlan.operands.size(); ++ai) {
+                        if (ai != 0) {
+                            m_output << ", ";
                         }
-                        if (splitFalse) {
-                            output << falseEdgeLabel << ":\n";
-                            if (falsePlanIt != edgePlans.end()) {
-                                emitArgumentPlanClones(
-                                    falsePlanIt->second.args);
-                            }
-                            emitOwnedValueDrops(falseReleases);
-                            output << "  br label %"
-                                   << blockLabels[br.falseTarget.spelling]
-                                   << "\n";
-                        }
+                        m_output << argTypes[ai] << " " << argPlan.operands[ai];
+                    }
+                    m_output << ")\n";
+                },
+                [&](const yesod::Ref<koopa_ir::ConversionExpr>& convRef) {
+                    const auto& conv = m_program[convRef];
+                    const std::string input
+                        = emitValueOperand(conv.value, m_program);
+                    const std::string converted
+                        = conv.op == koopa_ir::ConversionOp::int2mint
+                        ? emitIntToMint(input)
+                        : emitMintToInt(input);
+                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                             << converted << ", 0\n";
+                },
+                [&](const yesod::Ref<koopa_ir::CopyExpr>& copyRef) {
+                    const auto& copy = m_program[copyRef];
+                    const std::string copyValueType = valueTypeOf(copy.value);
+                    if (copyValueType == POLY_TYPE) {
+                        emitPolyCloneTo(llvmValueName(sname),
+                            emitValueOperand(copy.value, m_program));
+                    } else {
+                        m_output << "  " << llvmValueName(sname)
+                                 << " = add i32 "
+                                 << emitValueOperand(copy.value, m_program)
+                                 << ", 0\n";
+                    }
+                },
+                [&](const yesod::Ref<koopa_ir::GetAttrExpr>& getAttrRef) {
+                    const auto& getAttr = m_program[getAttrRef];
+                    const int32_t index
+                        = getAttr.attr == koopa_ir::PolyAttr::base ? 0
+                        : getAttr.attr == koopa_ir::PolyAttr::addr ? 1
+                        : getAttr.attr == koopa_ir::PolyAttr::l    ? 3
+                                                                   : 4;
+                    m_output << "  " << llvmValueName(sname)
+                             << " = extractvalue " << POLY_TYPE << " "
+                             << emitValueOperand(getAttr.value, m_program)
+                             << ", " << index << "\n";
+                },
+                [&](const yesod::Ref<koopa_ir::SetAttrExpr>& setAttrRef) {
+                    const auto& setAttr = m_program[setAttrRef];
+                    if (const auto* symbol
+                        = std::get_if<koopa_ir::Symbol>(&setAttr.value)) {
+                        movedValuesInStatement.insert(symbol->spelling);
+                    }
+                    const std::string input
+                        = emitValueOperand(setAttr.value, m_program);
+                    const std::string value
+                        = emitValueOperand(setAttr.attrValue, m_program);
+                    const int32_t index
+                        = setAttr.attr == koopa_ir::PolyAttr::base ? 0
+                        : setAttr.attr == koopa_ir::PolyAttr::addr ? 1
+                        : setAttr.attr == koopa_ir::PolyAttr::l    ? 3
+                                                                   : 4;
+                    const std::string valueType
+                        = (setAttr.attr == koopa_ir::PolyAttr::base
+                              || setAttr.attr == koopa_ir::PolyAttr::addr)
+                        ? "ptr"
+                        : "i32";
+                    m_output << "  " << llvmValueName(sname)
+                             << " = insertvalue " << POLY_TYPE << " " << input
+                             << ", " << valueType << " " << value << ", "
+                             << index << "\n";
+                },
+                [&](const yesod::Ref<koopa_ir::SelectExpr>& selectRef) {
+                    const auto& select = m_program[selectRef];
+                    const std::string resultType
+                        = valueTypeOf(select.trueValue);
+                    const std::string cond = nextHelperName("select_cond");
+                    m_output << "  " << cond << " = icmp ne i32 "
+                             << emitValueOperand(select.condition, m_program)
+                             << ", 0\n";
+                    const std::string raw = resultType == POLY_TYPE
+                        ? nextHelperName("select_poly")
+                        : llvmValueName(sname);
+                    m_output << "  " << raw << " = select i1 " << cond << ", "
+                             << resultType << " "
+                             << emitValueOperand(select.trueValue, m_program)
+                             << ", " << resultType << " "
+                             << emitValueOperand(select.falseValue, m_program)
+                             << "\n";
+                    if (resultType == POLY_TYPE) {
+                        emitPolyCloneTo(llvmValueName(sname), raw);
+                    }
+                },
+                [&](const yesod::Ref<koopa_ir::NextPow2Expr>& nextPow2Ref) {
+                    const auto& nextPow2 = m_program[nextPow2Ref];
+                    m_output << "  " << llvmValueName(sname)
+                             << " = call i32 @__yesod_next_pow2(i32 "
+                             << emitValueOperand(nextPow2.value, m_program)
+                             << ")\n";
+                },
+                [&](const yesod::Ref<koopa_ir::NttExpr>& nttRef) {
+                    const auto& ntt = m_program[nttRef];
+                    const PolyFields input = emitPolyFields(
+                        emitValueOperand(ntt.value, m_program));
+                    const std::string length
+                        = emitValueOperand(ntt.length, m_program);
+                    const std::string values = nextHelperName("pv_ntt_values");
+                    m_output << "  " << values
+                             << " = call ptr @__yesod_poly_ntt_data(ptr "
+                             << input.coeffs << ", i32 " << input.l << ", i32 "
+                             << input.r << ", i32 " << length << ")\n";
+                    emitPvFromFields(llvmValueName(sname),
+                        PvFields { .values = values, .len = length });
+                },
+                [&](const yesod::Ref<koopa_ir::PointwiseExpr>& pointwiseRef) {
+                    const auto& pointwise = m_program[pointwiseRef];
+                    const std::string length
+                        = emitValueOperand(pointwise.length, m_program);
+                    const std::string outputPv = nextHelperName("pv_fused");
+                    const std::string outputValues
+                        = nextHelperName("pv_values");
+                    m_output << "  " << outputValues
+                             << " = call ptr @__yesod_rt_alloc_ints(i32 "
+                             << length << ")\n";
+                    emitPvFromFields(outputPv,
+                        PvFields { .values = outputValues, .len = length });
+                    const std::string preheaderLabel
+                        = nextLabelName("pointwise_preheader");
+                    const std::string condLabel
+                        = nextLabelName("pointwise_cond");
+                    const std::string bodyLabel
+                        = nextLabelName("pointwise_body");
+                    const std::string endLabel = nextLabelName("pointwise_end");
+                    m_output << "  br label %" << preheaderLabel << "\n";
+                    m_output << preheaderLabel << ":\n";
+                    m_output << "  br label %" << condLabel << "\n";
+                    m_output << condLabel << ":\n";
+                    const std::string index = nextHelperName("pointwise_i");
+                    const std::string next = nextHelperName("pointwise_next");
+                    m_output << "  " << index << " = phi i32 [ 0, %"
+                             << preheaderLabel << " ], [ " << next << ", %"
+                             << bodyLabel << " ]\n";
+                    const std::string keep = nextHelperName("pointwise_keep");
+                    m_output << "  " << keep << " = icmp slt i32 " << index
+                             << ", " << length << "\n";
+                    m_output << "  br i1 " << keep << ", label %" << bodyLabel
+                             << ", label %" << endLabel << "\n";
+                    m_output << bodyLabel << ":\n";
+                    const std::string value
+                        = emitPointwiseScalar(pointwise.root, index);
+                    const std::string outputElement
+                        = nextHelperName("pv_out_elem");
+                    m_output << "  " << outputElement
+                             << " = getelementptr i32, ptr " << outputValues
+                             << ", i32 " << index << "\n";
+                    m_output << "  store i32 " << value << ", ptr "
+                             << outputElement << "\n";
+                    m_output << "  " << next << " = add i32 " << index
+                             << ", 1\n";
+                    m_output << "  br label %" << condLabel << "\n";
+                    m_output << endLabel << ":\n";
+                    const std::string activeL
+                        = emitValueOperand(pointwise.activeL, m_program);
+                    const std::string activeR
+                        = emitValueOperand(pointwise.activeR, m_program);
+                    const std::string resultAddr
+                        = nextHelperName("poly_from_pv_addr");
+                    m_output
+                        << "  " << resultAddr
+                        << " = call ptr @__yesod_poly_from_pointwise_data(ptr "
+                        << outputValues << ", i32 " << length << ", i32 "
+                        << activeL << ", i32 " << activeR << ")\n";
+                    const std::string activeLen
+                        = nextHelperName("poly_from_pv_len");
+                    m_output << "  " << activeLen << " = sub i32 " << activeR
+                             << ", " << activeL << "\n";
+                    const std::string isEmpty
+                        = nextHelperName("poly_from_pv_empty");
+                    m_output << "  " << isEmpty << " = icmp sge i32 " << activeL
+                             << ", " << activeR << "\n";
+                    const std::string rawN
+                        = nextHelperName("poly_from_pv_n_raw");
+                    m_output << "  " << rawN
+                             << " = call i32 @__yesod_next_pow2(i32 "
+                             << activeLen << ")\n";
+                    const std::string resultN
+                        = nextHelperName("poly_from_pv_n");
+                    m_output << "  " << resultN << " = select i1 " << isEmpty
+                             << ", i32 0, i32 " << rawN << "\n";
+                    const std::string resultCoeffs
+                        = emitPolyCoeffPtrForAddr(resultAddr, activeL, isEmpty);
+                    emitPolyFromFields(llvmValueName(sname),
+                        PolyFields { .coeffs = resultCoeffs,
+                            .addr = resultAddr,
+                            .n = resultN,
+                            .l = activeL,
+                            .r = activeR });
+                    m_output << "  call void @__yesod_rt_free_ints(ptr "
+                             << outputValues << ")\n";
+                },
+                [&](const yesod::Ref<koopa_ir::CombineExpr>& combineRef) {
+                    emitCombineExprImpl(m_program[combineRef], sname,
+                        blockIndex, stmtIndex, movedValuesInStatement);
+                },
+                [&](const yesod::Ref<koopa_ir::GetCoeffExpr>& getCoeffRef) {
+                    const auto& getCoeff = m_program[getCoeffRef];
+                    const PolyFields input = emitPolyFields(
+                        emitValueOperand(getCoeff.value, m_program));
+                    m_output << "  " << llvmValueName(sname)
+                             << " = call i32 @__yesod_poly_getcoeff_data(ptr "
+                             << input.coeffs << ", i32 " << input.l << ", i32 "
+                             << input.r << ", i32 "
+                             << emitValueOperand(getCoeff.index, m_program)
+                             << ")\n";
+                },
+                [&](const yesod::Ref<koopa_ir::PolyConstructExpr>&
+                        constructRef) {
+                    const auto& construct = m_program[constructRef];
+                    if (construct.elements.empty()) {
+                        emitPolyZeroTo(llvmValueName(sname));
                         return;
                     }
-                    output << "  br i1 %" << condName << ", label %"
-                           << blockLabels[br.trueTarget.spelling] << ", label %"
-                           << blockLabels[br.falseTarget.spelling] << "\n";
+                    const std::string count
+                        = std::to_string(construct.elements.size());
+                    const std::string addr
+                        = nextHelperName("poly_construct_addr");
+                    m_output << "  " << addr
+                             << " = call ptr @__yesod_poly_alloc_zero_data(i32 "
+                                "0, i32 "
+                             << count << ")\n";
+                    for (size_t i = 0; i < construct.elements.size(); ++i) {
+                        const std::string elementPtr
+                            = nextHelperName("poly_coeff_ptr");
+                        m_output << "  " << elementPtr
+                                 << " = getelementptr i32, ptr " << addr
+                                 << ", i32 " << i << "\n";
+                        const std::string element
+                            = emitMintOperand(construct.elements[i]);
+                        m_output << "  store i32 " << element << ", ptr "
+                                 << elementPtr << "\n";
+                    }
+                    size_t constructN = 1;
+                    while (constructN < construct.elements.size()) {
+                        constructN <<= 1;
+                    }
+                    emitPolyFromFields(llvmValueName(sname),
+                        PolyFields { .coeffs = addr,
+                            .addr = addr,
+                            .n = std::to_string(constructN),
+                            .l = "0",
+                            .r = count });
                 },
-                [&](const yesod::Ref<koopa_ir::ReturnTerminator>& retRef) {
-                    const auto& ret = program[retRef];
-                    SymbolSet beforeReturn;
-                    if (ret.value.has_value()) {
-                        addOwnedValueUse(*ret.value, valueTypes, beforeReturn);
-                    }
-                    SymbolSet returnReleases = beforeReturn;
-                    if (ret.value.has_value()) {
-                        if (const auto* symbol
-                            = std::get_if<koopa_ir::Symbol>(&*ret.value)) {
-                            returnReleases.erase(symbol->spelling);
-                        }
-                    }
-                    emitOwnedValueDrops(returnReleases);
-                    emitFunctionStorageCleanup();
-                    if (ret.value.has_value()) {
-                        const std::string valueType = valueTypeOf(*ret.value);
-                        output << "  ret " << valueType << " "
-                               << emitValueOperand(*ret.value, program) << "\n";
-                    } else {
-                        output << "  ret void\n";
-                    }
+                [&](const auto&) {
+                    throw std::runtime_error(
+                        "LLVM backend does not support native poly/pv "
+                        "pseudo-instructions");
                 });
         }
 
-        output << "}\n\n";
+        // ── Statement implementations ─────────────────────────────────
+        void emitStoreStmtImpl(const koopa_ir::StoreStmt& store)
+        {
+            const auto ptIt = m_pointees.find(store.destination.spelling);
+            const std::string elemTy
+                = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
+            std::string storeValue;
+            std::string storeLogicalType = "int";
+            MATCH(store.value)
+            WITH(
+                [&](const koopa_ir::Symbol& sv) {
+                    storeValue = llvmValueName(sv.spelling);
+                    const auto logicalIt = m_logicalTypes.find(sv.spelling);
+                    storeLogicalType = logicalIt == m_logicalTypes.end()
+                        ? "int"
+                        : logicalIt->second;
+                },
+                [&](const koopa_ir::IntegerLiteral& sv) {
+                    storeValue = std::to_string(sv.value);
+                },
+                [&](const koopa_ir::UndefValue&) { storeValue = "undef"; },
+                [&](const koopa_ir::ZeroInit&) {
+                    storeValue = "zeroinitializer";
+                },
+                [&](const yesod::Ref<koopa_ir::AggregateInitializer>&) {
+                    storeValue = "zeroinitializer";
+                });
+            if (elemTy == POLY_TYPE) {
+                const std::string oldValue = nextHelperName("poly_store_old");
+                m_output << "  " << oldValue << " = load " << POLY_TYPE
+                         << ", ptr "
+                         << llvmValueName(store.destination.spelling) << "\n";
+                emitOwnedValueDropByType(std::string(POLY_TYPE), oldValue);
+                storeValue = emitPolyCloneValue(storeValue);
+            } else {
+                const auto logicalPtIt
+                    = m_logicalPointees.find(store.destination.spelling);
+                const std::string logicalElemTy
+                    = logicalPtIt == m_logicalPointees.end()
+                    ? "int"
+                    : logicalPtIt->second;
+                if (elemTy == "i32" && logicalElemTy == "mint"
+                    && storeLogicalType != "mint") {
+                    if (storeValue != "undef"
+                        && storeValue != "zeroinitializer") {
+                        storeValue = emitIntToMint(storeValue);
+                    }
+                }
+            }
+            m_output << "  store " << elemTy << " " << storeValue << ", ptr "
+                     << llvmValueName(store.destination.spelling) << "\n";
+        }
+
+        void emitCallStmtImpl(const koopa_ir::CallExpr& call, size_t blockIndex,
+            size_t stmtIndex, SymbolSet& movedValuesInStatement)
+        {
+            const std::string callee = stripPrefix(call.callee.spelling);
+            const auto sigIt = m_sigs.find(call.callee.spelling);
+            const std::string callRetTy
+                = (sigIt != m_sigs.end()) ? sigIt->second.retType : "void";
+            std::vector<std::string> argTypes;
+            argTypes.reserve(call.args.size());
+            for (size_t ai = 0; ai < call.args.size(); ++ai) {
+                argTypes.push_back((sigIt != m_sigs.end()
+                                       && ai < sigIt->second.paramTypes.size())
+                        ? sigIt->second.paramTypes[ai]
+                        : "i32");
+            }
+            const ArgumentPlan argPlan = planOwnedArguments(call.args, argTypes,
+                m_ownership.liveAfterStmt[blockIndex][stmtIndex], "call_arg");
+            emitArgumentPlanClones(argPlan);
+            movedValuesInStatement.insert(
+                argPlan.movedValues.begin(), argPlan.movedValues.end());
+            m_output << "  call " << callRetTy << " @" << callee << "(";
+            for (size_t ai = 0; ai < argPlan.operands.size(); ++ai) {
+                if (ai != 0) {
+                    m_output << ", ";
+                }
+                m_output << argTypes[ai] << " " << argPlan.operands[ai];
+            }
+            m_output << ")\n";
+        }
+
+        // ── Binary expression (the big switch) ────────────────────────
+        void emitBinaryExprImpl(
+            const koopa_ir::BinaryExpr& bin, const std::string& sname)
+        {
+            const std::string lhs_typed
+                = "i32 " + emitValueOperand(bin.lhs, m_program);
+            const std::string lhs_bare = emitValueOperand(bin.lhs, m_program);
+            const std::string rhs_bare = emitValueOperand(bin.rhs, m_program);
+            const bool lhsIsMint = logicalTypeOf(bin.lhs) == "mint";
+            const bool rhsIsMint = logicalTypeOf(bin.rhs) == "mint";
+            const bool isMintBinary = lhsIsMint || rhsIsMint;
+            const std::string lhs_mint = !isMintBinary || lhsIsMint
+                ? lhs_bare
+                : emitIntToMint(lhs_bare);
+            const std::string rhs_mint = !isMintBinary || rhsIsMint
+                ? rhs_bare
+                : emitIntToMint(rhs_bare);
+            using BOp = koopa_ir::BinaryOp;
+            switch (bin.op) {
+            case BOp::add:
+                if (isMintBinary) {
+                    const std::string result
+                        = emitMintAddSub(lhs_mint, rhs_mint, false);
+                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                             << result << ", 0\n";
+                } else {
+                    m_output << "  " << llvmValueName(sname) << " = add "
+                             << lhs_typed << ", " << rhs_bare << "\n";
+                }
+                break;
+            case BOp::sub:
+                if (isMintBinary) {
+                    const std::string result
+                        = emitMintAddSub(lhs_mint, rhs_mint, true);
+                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                             << result << ", 0\n";
+                } else {
+                    m_output << "  " << llvmValueName(sname) << " = sub "
+                             << lhs_typed << ", " << rhs_bare << "\n";
+                }
+                break;
+            case BOp::mul:
+                if (isMintBinary) {
+                    const std::string result = emitMintMul(lhs_mint, rhs_mint);
+                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                             << result << ", 0\n";
+                } else {
+                    m_output << "  " << llvmValueName(sname) << " = mul "
+                             << lhs_typed << ", " << rhs_bare << "\n";
+                }
+                break;
+            case BOp::div:
+                if (isMintBinary) {
+                    const std::string inverse
+                        = emitMintPowConst(rhs_mint, MINT_MOD - 2);
+                    const std::string result = emitMintMul(lhs_mint, inverse);
+                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                             << result << ", 0\n";
+                } else {
+                    m_output << "  " << llvmValueName(sname) << " = sdiv "
+                             << lhs_typed << ", " << rhs_bare << "\n";
+                }
+                break;
+            case BOp::mod:
+                m_output << "  " << llvmValueName(sname) << " = srem "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::bitAnd:
+                m_output << "  " << llvmValueName(sname) << " = and "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::bitOr:
+                m_output << "  " << llvmValueName(sname) << " = or "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::bitXor:
+                m_output << "  " << llvmValueName(sname) << " = xor "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::shl:
+                m_output << "  " << llvmValueName(sname) << " = shl "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::shr:
+                m_output << "  " << llvmValueName(sname) << " = lshr "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::sar:
+                m_output << "  " << llvmValueName(sname) << " = ashr "
+                         << lhs_typed << ", " << rhs_bare << "\n";
+                break;
+            case BOp::eq: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp eq " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            case BOp::ne: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp ne " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            case BOp::gt: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp sgt " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            case BOp::lt: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp slt " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            case BOp::ge: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp sge " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            case BOp::le: {
+                const std::string cn = sname + "_cmp";
+                m_output << "  " << cn << " = icmp sle " << lhs_typed << ", "
+                         << rhs_bare << "\n";
+                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                         << " to i32\n";
+                break;
+            }
+            }
+        }
+
+        // ── Combine expression ───────────────────────────────────────
+        void emitCombineExprImpl(const koopa_ir::CombineExpr& combine,
+            const std::string& sname, size_t blockIndex, size_t stmtIndex,
+            SymbolSet& movedValuesInStatement)
+        {
+            struct CombineTermState {
+                std::string srcCoeffs;
+                std::string srcAddr;
+                std::string srcN;
+                std::string lower;
+                std::string upper;
+                std::string shift;
+                std::string scale;
+                std::string sourceSymbol;
+                bool reuseCandidate = false;
+            };
+            std::map<std::string, int> sourceUseCounts;
+            for (const auto& term : combine.terms) {
+                if (const auto* symbol
+                    = std::get_if<koopa_ir::Symbol>(&term.value)) {
+                    ++sourceUseCounts[symbol->spelling];
+                }
+            }
+            std::vector<CombineTermState> termStates;
+            termStates.reserve(combine.terms.size());
+            std::string resultL = "0";
+            std::string resultR = "0";
+            std::string hasAny = "false";
+            int reuseCandidateIndex = -1;
+            for (const auto& term : combine.terms) {
+                if (const auto* scaleLiteral
+                    = std::get_if<koopa_ir::IntegerLiteral>(&term.scale);
+                    scaleLiteral != nullptr && scaleLiteral->value == 0) {
+                    continue;
+                }
+                const std::string src = emitValueOperand(term.value, m_program);
+                const std::string srcCoeffs
+                    = nextHelperName("combine_src_coeffs");
+                m_output << "  " << srcCoeffs << " = extractvalue " << POLY_TYPE
+                         << " " << src << ", 0\n";
+                const std::string srcAddr = nextHelperName("combine_src_addr");
+                m_output << "  " << srcAddr << " = extractvalue " << POLY_TYPE
+                         << " " << src << ", 1\n";
+                const std::string srcN = nextHelperName("combine_src_n");
+                m_output << "  " << srcN << " = extractvalue " << POLY_TYPE
+                         << " " << src << ", 2\n";
+                const std::string srcL = nextHelperName("combine_src_l");
+                m_output << "  " << srcL << " = extractvalue " << POLY_TYPE
+                         << " " << src << ", 3\n";
+                const std::string srcR = nextHelperName("combine_src_r");
+                m_output << "  " << srcR << " = extractvalue " << POLY_TYPE
+                         << " " << src << ", 4\n";
+                const std::string start
+                    = emitValueOperand(term.start, m_program);
+                const std::string endValue = term.end.has_value()
+                    ? emitValueOperand(*term.end, m_program)
+                    : std::to_string(INF_END);
+                const std::string endBeforeSrcR
+                    = nextHelperName("combine_end_before_src_r");
+                m_output << "  " << endBeforeSrcR << " = icmp slt i32 "
+                         << endValue << ", " << srcR << "\n";
+                const std::string upper = nextHelperName("combine_upper");
+                m_output << "  " << upper << " = select i1 " << endBeforeSrcR
+                         << ", i32 " << endValue << ", i32 " << srcR << "\n";
+                const std::string startAfterSrcL
+                    = nextHelperName("combine_start_after_src_l");
+                m_output << "  " << startAfterSrcL << " = icmp sgt i32 "
+                         << start << ", " << srcL << "\n";
+                const std::string lower = nextHelperName("combine_lower");
+                m_output << "  " << lower << " = select i1 " << startAfterSrcL
+                         << ", i32 " << start << ", i32 " << srcL << "\n";
+                const std::string hasTerm = nextHelperName("combine_has_term");
+                m_output << "  " << hasTerm << " = icmp slt i32 " << lower
+                         << ", " << upper << "\n";
+                const std::string shift
+                    = emitValueOperand(term.shift, m_program);
+                const std::string termL = nextHelperName("combine_term_l");
+                m_output << "  " << termL << " = sub i32 " << lower << ", "
+                         << shift << "\n";
+                const std::string termR = nextHelperName("combine_term_r");
+                m_output << "  " << termR << " = sub i32 " << upper << ", "
+                         << shift << "\n";
+                const std::string isSmallerL
+                    = nextHelperName("combine_l_smaller");
+                m_output << "  " << isSmallerL << " = icmp slt i32 " << termL
+                         << ", " << resultL << "\n";
+                const std::string minL = nextHelperName("combine_min_l");
+                m_output << "  " << minL << " = select i1 " << isSmallerL
+                         << ", i32 " << termL << ", i32 " << resultL << "\n";
+                const std::string isLargerR
+                    = nextHelperName("combine_r_larger");
+                m_output << "  " << isLargerR << " = icmp sgt i32 " << termR
+                         << ", " << resultR << "\n";
+                const std::string maxR = nextHelperName("combine_max_r");
+                m_output << "  " << maxR << " = select i1 " << isLargerR
+                         << ", i32 " << termR << ", i32 " << resultR << "\n";
+                const std::string mergedL = nextHelperName("combine_merged_l");
+                m_output << "  " << mergedL << " = select i1 " << hasAny
+                         << ", i32 " << minL << ", i32 " << termL << "\n";
+                const std::string mergedR = nextHelperName("combine_merged_r");
+                m_output << "  " << mergedR << " = select i1 " << hasAny
+                         << ", i32 " << maxR << ", i32 " << termR << "\n";
+                const std::string nextResultL
+                    = nextHelperName("combine_result_l");
+                m_output << "  " << nextResultL << " = select i1 " << hasTerm
+                         << ", i32 " << mergedL << ", i32 " << resultL << "\n";
+                const std::string nextResultR
+                    = nextHelperName("combine_result_r");
+                m_output << "  " << nextResultR << " = select i1 " << hasTerm
+                         << ", i32 " << mergedR << ", i32 " << resultR << "\n";
+                const std::string nextHasAny = nextHelperName("combine_any");
+                m_output << "  " << nextHasAny << " = or i1 " << hasAny << ", "
+                         << hasTerm << "\n";
+                resultL = nextResultL;
+                resultR = nextResultR;
+                hasAny = nextHasAny;
+                std::string sourceSymbol;
+                bool canBeReuseCandidate = false;
+                if (const auto* symbol
+                    = std::get_if<koopa_ir::Symbol>(&term.value)) {
+                    sourceSymbol = symbol->spelling;
+                    const auto typeIt = m_valueTypes.find(sourceSymbol);
+                    const auto useCountIt = sourceUseCounts.find(sourceSymbol);
+                    const auto* scaleLiteral
+                        = std::get_if<koopa_ir::IntegerLiteral>(&term.scale);
+                    const auto* shiftLiteral
+                        = std::get_if<koopa_ir::IntegerLiteral>(&term.shift);
+                    canBeReuseCandidate = typeIt != m_valueTypes.end()
+                        && typeIt->second == POLY_TYPE
+                        && useCountIt != sourceUseCounts.end()
+                        && useCountIt->second == 1 && scaleLiteral != nullptr
+                        && scaleLiteral->value == 1 && shiftLiteral != nullptr
+                        && shiftLiteral->value == 0
+                        && !m_ownership.liveAfterStmt[blockIndex][stmtIndex]
+                                .contains(sourceSymbol);
+                }
+                if (canBeReuseCandidate && reuseCandidateIndex < 0) {
+                    reuseCandidateIndex = static_cast<int>(termStates.size());
+                }
+                termStates.push_back(CombineTermState {
+                    .srcCoeffs = srcCoeffs,
+                    .srcAddr = srcAddr,
+                    .srcN = srcN,
+                    .lower = termL,
+                    .upper = termR,
+                    .shift = shift,
+                    .scale = emitMintOperand(term.scale),
+                    .sourceSymbol = sourceSymbol,
+                    .reuseCandidate = canBeReuseCandidate
+                        && reuseCandidateIndex
+                            == static_cast<int>(termStates.size()),
+                });
+            }
+            if (termStates.empty()) {
+                emitPolyZeroTo(llvmValueName(sname));
+                return;
+            }
+            const std::string resultLen = nextHelperName("combine_result_len");
+            m_output << "  " << resultLen << " = sub i32 " << resultR << ", "
+                     << resultL << "\n";
+            const std::string resultEmpty
+                = nextHelperName("combine_result_empty");
+            m_output << "  " << resultEmpty << " = icmp sge i32 " << resultL
+                     << ", " << resultR << "\n";
+            const std::string resultRawN
+                = nextHelperName("combine_result_n_raw");
+            m_output << "  " << resultRawN
+                     << " = call i32 @__yesod_next_pow2(i32 " << resultLen
+                     << ")\n";
+            const std::string resultN = nextHelperName("combine_result_n");
+            m_output << "  " << resultN << " = select i1 " << resultEmpty
+                     << ", i32 0, i32 " << resultRawN << "\n";
+            auto emitZeroRange
+                = [&](const std::string& coeffs, const std::string& begin,
+                      const std::string& end) -> std::string {
+                const std::string preheaderLabel
+                    = nextLabelName("combine_zero_preheader");
+                const std::string condLabel
+                    = nextLabelName("combine_zero_cond");
+                const std::string bodyLabel
+                    = nextLabelName("combine_zero_body");
+                const std::string endLabel = nextLabelName("combine_zero_end");
+                m_output << "  br label %" << preheaderLabel << "\n";
+                m_output << preheaderLabel << ":\n";
+                m_output << "  br label %" << condLabel << "\n";
+                m_output << condLabel << ":\n";
+                const std::string index = nextHelperName("combine_zero_i");
+                const std::string next = nextHelperName("combine_zero_next");
+                m_output << "  " << index << " = phi i32 [ " << begin << ", %"
+                         << preheaderLabel << " ], [ " << next << ", %"
+                         << bodyLabel << " ]\n";
+                const std::string keep = nextHelperName("combine_zero_keep");
+                m_output << "  " << keep << " = icmp slt i32 " << index << ", "
+                         << end << "\n";
+                m_output << "  br i1 " << keep << ", label %" << bodyLabel
+                         << ", label %" << endLabel << "\n";
+                m_output << bodyLabel << ":\n";
+                const std::string dstPtr = nextHelperName("combine_zero_dst");
+                m_output << "  " << dstPtr << " = getelementptr i32, ptr "
+                         << coeffs << ", i32 " << index << "\n";
+                m_output << "  store i32 0, ptr " << dstPtr << "\n";
+                m_output << "  " << next << " = add i32 " << index << ", 1\n";
+                m_output << "  br label %" << condLabel << "\n";
+                m_output << endLabel << ":\n";
+                return endLabel;
+            };
+            std::string resultAddr;
+            std::string resultCoeffs;
+            std::string resultOwnedN;
+            std::string reusedCandidateFlag = "false";
+            if (reuseCandidateIndex >= 0) {
+                const CombineTermState& candidate
+                    = termStates[static_cast<size_t>(reuseCandidateIndex)];
+                movedValuesInStatement.insert(candidate.sourceSymbol);
+                const std::string coeffsInt
+                    = nextHelperName("combine_reuse_coeffs_i");
+                const std::string addrInt
+                    = nextHelperName("combine_reuse_addr_i");
+                m_output << "  " << coeffsInt << " = ptrtoint ptr "
+                         << candidate.srcCoeffs << " to i64\n";
+                m_output << "  " << addrInt << " = ptrtoint ptr "
+                         << candidate.srcAddr << " to i64\n";
+                const std::string byteOffset
+                    = nextHelperName("combine_reuse_byte_offset");
+                m_output << "  " << byteOffset << " = sub i64 " << coeffsInt
+                         << ", " << addrInt << "\n";
+                const std::string elemOffset
+                    = nextHelperName("combine_reuse_elem_offset");
+                m_output << "  " << elemOffset << " = sdiv i64 " << byteOffset
+                         << ", 4\n";
+                const std::string resultL64
+                    = nextHelperName("combine_reuse_l64");
+                m_output << "  " << resultL64 << " = sext i32 " << resultL
+                         << " to i64\n";
+                const std::string resultR64
+                    = nextHelperName("combine_reuse_r64");
+                m_output << "  " << resultR64 << " = sext i32 " << resultR
+                         << " to i64\n";
+                const std::string resultBeginOffset
+                    = nextHelperName("combine_reuse_begin");
+                m_output << "  " << resultBeginOffset << " = add i64 "
+                         << elemOffset << ", " << resultL64 << "\n";
+                const std::string resultEndOffset
+                    = nextHelperName("combine_reuse_end");
+                m_output << "  " << resultEndOffset << " = add i64 "
+                         << elemOffset << ", " << resultR64 << "\n";
+                const std::string srcN64 = nextHelperName("combine_reuse_n64");
+                m_output << "  " << srcN64 << " = sext i32 " << candidate.srcN
+                         << " to i64\n";
+                const std::string beginInBounds
+                    = nextHelperName("combine_reuse_begin_ok");
+                m_output << "  " << beginInBounds << " = icmp sge i64 "
+                         << resultBeginOffset << ", 0\n";
+                const std::string endInBounds
+                    = nextHelperName("combine_reuse_end_ok");
+                m_output << "  " << endInBounds << " = icmp sle i64 "
+                         << resultEndOffset << ", " << srcN64 << "\n";
+                const std::string capacityOk
+                    = nextHelperName("combine_reuse_capacity");
+                m_output << "  " << capacityOk << " = and i1 " << beginInBounds
+                         << ", " << endInBounds << "\n";
+                const std::string notEmpty
+                    = nextHelperName("combine_reuse_not_empty");
+                m_output << "  " << notEmpty << " = icmp slt i32 " << resultL
+                         << ", " << resultR << "\n";
+                const std::string canReuse
+                    = nextHelperName("combine_can_reuse");
+                m_output << "  " << canReuse << " = and i1 " << capacityOk
+                         << ", " << notEmpty << "\n";
+                const std::string reuseLabel = nextLabelName("combine_reuse");
+                const std::string allocLabel = nextLabelName("combine_alloc");
+                const std::string afterLabel
+                    = nextLabelName("combine_after_alloc");
+                m_output << "  br i1 " << canReuse << ", label %" << reuseLabel
+                         << ", label %" << allocLabel << "\n";
+                m_output << reuseLabel << ":\n";
+                std::string reuseExitLabel = emitZeroRange(
+                    candidate.srcCoeffs, resultL, candidate.lower);
+                reuseExitLabel = emitZeroRange(
+                    candidate.srcCoeffs, candidate.upper, resultR);
+                m_output << "  br label %" << afterLabel << "\n";
+                m_output << allocLabel << ":\n";
+                const std::string allocAddr
+                    = nextHelperName("combine_result_addr");
+                m_output << "  " << allocAddr
+                         << " = call ptr @__yesod_poly_alloc_zero_data(i32 "
+                         << resultL << ", i32 " << resultR << ")\n";
+                const std::string allocCoeffs
+                    = emitPolyCoeffPtrForAddr(allocAddr, resultL, resultEmpty);
+                m_output << "  br label %" << afterLabel << "\n";
+                m_output << afterLabel << ":\n";
+                resultAddr = nextHelperName("combine_result_addr_phi");
+                resultCoeffs = nextHelperName("combine_result_coeffs_phi");
+                resultOwnedN = nextHelperName("combine_result_n_phi");
+                reusedCandidateFlag = nextHelperName("combine_reused_phi");
+                m_output << "  " << resultAddr << " = phi ptr [ "
+                         << candidate.srcAddr << ", %" << reuseExitLabel
+                         << " ], [ " << allocAddr << ", %" << allocLabel
+                         << " ]\n";
+                m_output << "  " << resultCoeffs << " = phi ptr [ "
+                         << candidate.srcCoeffs << ", %" << reuseExitLabel
+                         << " ], [ " << allocCoeffs << ", %" << allocLabel
+                         << " ]\n";
+                m_output << "  " << resultOwnedN << " = phi i32 [ "
+                         << candidate.srcN << ", %" << reuseExitLabel
+                         << " ], [ " << resultN << ", %" << allocLabel
+                         << " ]\n";
+                m_output << "  " << reusedCandidateFlag << " = phi i1 [ true, %"
+                         << reuseExitLabel << " ], [ false, %" << allocLabel
+                         << " ]\n";
+            } else {
+                resultAddr = nextHelperName("combine_result_addr");
+                m_output << "  " << resultAddr
+                         << " = call ptr @__yesod_poly_alloc_zero_data(i32 "
+                         << resultL << ", i32 " << resultR << ")\n";
+                resultCoeffs
+                    = emitPolyCoeffPtrForAddr(resultAddr, resultL, resultEmpty);
+                resultOwnedN = resultN;
+            }
+            emitPolyFromFields(llvmValueName(sname),
+                PolyFields { .coeffs = resultCoeffs,
+                    .addr = resultAddr,
+                    .n = resultOwnedN,
+                    .l = resultL,
+                    .r = resultR });
+            const std::string montOne = std::to_string(intToMontgomeryConst(1));
+            const std::string montMinusOne
+                = std::to_string(intToMontgomeryConst(-1));
+            for (const auto& term : termStates) {
+                const std::string loopStartIsNegative
+                    = nextHelperName("combine_start_neg");
+                m_output << "  " << loopStartIsNegative << " = icmp slt i32 "
+                         << term.lower << ", 0\n";
+                const std::string loopStart
+                    = nextHelperName("combine_loop_start");
+                m_output << "  " << loopStart << " = select i1 "
+                         << loopStartIsNegative << ", i32 0, i32 " << term.lower
+                         << "\n";
+                const std::string preheaderLabel
+                    = nextLabelName("combine_preheader");
+                const std::string condLabel = nextLabelName("combine_cond");
+                const std::string bodyLabel = nextLabelName("combine_body");
+                const std::string endLabel = nextLabelName("combine_end");
+                if (term.reuseCandidate) {
+                    m_output << "  br i1 " << reusedCandidateFlag << ", label %"
+                             << endLabel << ", label %" << preheaderLabel
+                             << "\n";
+                } else {
+                    m_output << "  br label %" << preheaderLabel << "\n";
+                }
+                m_output << preheaderLabel << ":\n";
+                m_output << "  br label %" << condLabel << "\n";
+                m_output << condLabel << ":\n";
+                const std::string index = nextHelperName("combine_i");
+                const std::string next = nextHelperName("combine_next");
+                m_output << "  " << index << " = phi i32 [ " << loopStart
+                         << ", %" << preheaderLabel << " ], [ " << next << ", %"
+                         << bodyLabel << " ]\n";
+                const std::string keep = nextHelperName("combine_keep");
+                m_output << "  " << keep << " = icmp slt i32 " << index << ", "
+                         << term.upper << "\n";
+                m_output << "  br i1 " << keep << ", label %" << bodyLabel
+                         << ", label %" << endLabel << "\n";
+                m_output << bodyLabel << ":\n";
+                const std::string dstPtr = nextHelperName("combine_dst");
+                m_output << "  " << dstPtr << " = getelementptr i32, ptr "
+                         << resultCoeffs << ", i32 " << index << "\n";
+                const std::string oldValue = nextHelperName("combine_old");
+                m_output << "  " << oldValue << " = load i32, ptr " << dstPtr
+                         << "\n";
+                const std::string srcIndex
+                    = nextHelperName("combine_src_index");
+                m_output << "  " << srcIndex << " = add i32 " << index << ", "
+                         << term.shift << "\n";
+                const std::string srcPtr = nextHelperName("combine_src");
+                m_output << "  " << srcPtr << " = getelementptr i32, ptr "
+                         << term.srcCoeffs << ", i32 " << srcIndex << "\n";
+                const std::string srcValue = nextHelperName("combine_src_val");
+                m_output << "  " << srcValue << " = load i32, ptr " << srcPtr
+                         << "\n";
+                std::string combined;
+                if (term.scale == montOne) {
+                    combined = emitMintAddSub(oldValue, srcValue, false);
+                } else if (term.scale == montMinusOne) {
+                    combined = emitMintAddSub(oldValue, srcValue, true);
+                } else {
+                    const std::string scaled
+                        = emitMintMul(srcValue, term.scale);
+                    combined = emitMintAddSub(oldValue, scaled, false);
+                }
+                m_output << "  store i32 " << combined << ", ptr " << dstPtr
+                         << "\n";
+                m_output << "  " << next << " = add i32 " << index << ", 1\n";
+                m_output << "  br label %" << condLabel << "\n";
+                m_output << endLabel << ":\n";
+            }
+            if (reuseCandidateIndex >= 0) {
+                const CombineTermState& candidate
+                    = termStates[static_cast<size_t>(reuseCandidateIndex)];
+                const std::string dropOldLabel
+                    = nextLabelName("combine_drop_old");
+                const std::string doneLabel
+                    = nextLabelName("combine_drop_done");
+                m_output << "  br i1 " << reusedCandidateFlag << ", label %"
+                         << doneLabel << ", label %" << dropOldLabel << "\n";
+                m_output << dropOldLabel << ":\n";
+                m_output << "  call void @__yesod_rt_free_ints(ptr "
+                         << candidate.srcAddr << ")\n";
+                m_output << "  br label %" << doneLabel << "\n";
+                m_output << doneLabel << ":\n";
+            }
+        }
+
+        // ── Terminators ──────────────────────────────────────────────
+        void emitTerminatorJump(const koopa_ir::JumpTerminator& jump,
+            size_t blockIndex, const std::string& llvmLabel)
+        {
+            const auto planIt = m_edgePlans.find(
+                { blockIndex, jump.args.empty() ? std::string("") : "jump" });
+            const bool splitJump = planIt != m_edgePlans.end()
+                && planIt->second.label != llvmLabel;
+            if (!splitJump && planIt != m_edgePlans.end()) {
+                emitArgumentPlanClones(planIt->second.args);
+                emitOwnedValueDrops(planIt->second.releases);
+            }
+            if (splitJump) {
+                m_output << "  br label %" << planIt->second.label << "\n";
+                m_output << planIt->second.label << ":\n";
+                emitArgumentPlanClones(planIt->second.args);
+                emitOwnedValueDrops(planIt->second.releases);
+            }
+            m_output << "  br label %" << m_blockLabels[jump.target.spelling]
+                     << "\n";
+        }
+
+        void emitTerminatorBranch(const koopa_ir::BranchTerminator& br,
+            size_t blockIndex, const std::string& llvmLabel)
+        {
+            const auto& block = m_program[m_function.blocks[blockIndex]];
+            const std::string condName
+                = "_cond_bool_" + stripPrefix(block.label.spelling);
+            m_output << "  %" << condName << " = icmp ne i32 "
+                     << emitValueOperand(br.condition, m_program) << ", 0\n";
+            const auto truePlanIt = m_edgePlans.find({ blockIndex, "true" });
+            const auto falsePlanIt = m_edgePlans.find({ blockIndex, "false" });
+            const SymbolSet trueReleases = truePlanIt == m_edgePlans.end()
+                ? SymbolSet { }
+                : truePlanIt->second.releases;
+            const SymbolSet falseReleases = falsePlanIt == m_edgePlans.end()
+                ? SymbolSet { }
+                : falsePlanIt->second.releases;
+            const bool trueHasClones = truePlanIt != m_edgePlans.end()
+                && !truePlanIt->second.args.clones.empty();
+            const bool falseHasClones = falsePlanIt != m_edgePlans.end()
+                && !falsePlanIt->second.args.clones.empty();
+            const bool splitTrue = !br.trueArgs.empty() || !trueReleases.empty()
+                || trueHasClones;
+            const bool splitFalse = !br.falseArgs.empty()
+                || !falseReleases.empty() || falseHasClones;
+            if (splitTrue || splitFalse || needsSameTargetBranchSplit(br)) {
+                const std::string trueEdgeLabel
+                    = edgeBlockLabel(llvmLabel, "true");
+                const std::string falseEdgeLabel
+                    = edgeBlockLabel(llvmLabel, "false");
+                m_output << "  br i1 %" << condName << ", label %";
+                m_output << (splitTrue ? trueEdgeLabel
+                                       : m_blockLabels[br.trueTarget.spelling]);
+                m_output << ", label %";
+                m_output << (splitFalse
+                        ? falseEdgeLabel
+                        : m_blockLabels[br.falseTarget.spelling])
+                         << "\n";
+                if (splitTrue) {
+                    m_output << trueEdgeLabel << ":\n";
+                    if (truePlanIt != m_edgePlans.end()) {
+                        emitArgumentPlanClones(truePlanIt->second.args);
+                    }
+                    emitOwnedValueDrops(trueReleases);
+                    m_output << "  br label %"
+                             << m_blockLabels[br.trueTarget.spelling] << "\n";
+                }
+                if (splitFalse) {
+                    m_output << falseEdgeLabel << ":\n";
+                    if (falsePlanIt != m_edgePlans.end()) {
+                        emitArgumentPlanClones(falsePlanIt->second.args);
+                    }
+                    emitOwnedValueDrops(falseReleases);
+                    m_output << "  br label %"
+                             << m_blockLabels[br.falseTarget.spelling] << "\n";
+                }
+                return;
+            }
+            m_output << "  br i1 %" << condName << ", label %"
+                     << m_blockLabels[br.trueTarget.spelling] << ", label %"
+                     << m_blockLabels[br.falseTarget.spelling] << "\n";
+        }
+
+        void emitTerminatorReturn(const koopa_ir::ReturnTerminator& ret)
+        {
+            SymbolSet beforeReturn;
+            if (ret.value.has_value()) {
+                addOwnedValueUse(*ret.value, m_valueTypes, beforeReturn);
+            }
+            SymbolSet returnReleases = beforeReturn;
+            if (ret.value.has_value()) {
+                if (const auto* symbol
+                    = std::get_if<koopa_ir::Symbol>(&*ret.value)) {
+                    returnReleases.erase(symbol->spelling);
+                }
+            }
+            emitOwnedValueDrops(returnReleases);
+            emitFunctionStorageCleanup();
+            if (ret.value.has_value()) {
+                const std::string valueType = valueTypeOf(*ret.value);
+                m_output << "  ret " << valueType << " "
+                         << emitValueOperand(*ret.value, m_program) << "\n";
+            } else {
+                m_output << "  ret void\n";
+            }
+        }
+    };
+
+    void emitFunctionDef(const koopa_ir::FunctionDef& function,
+        const koopa_ir::Program& program, const FuncSigMap& sigs,
+        std::ostream& output)
+    {
+        FunctionEmitter emitter(function, program, sigs, output);
+        emitter.emit();
     }
 
 } // anonymous namespace
