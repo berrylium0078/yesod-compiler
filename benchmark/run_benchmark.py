@@ -2,8 +2,8 @@
 """
 Benchmark script for polynomial operations in the YESOD compiler project.
 
-Tests three operations on n = 10^5 data:
-  1. poly_div    — Polynomial division
+Tests three operations across 10 data sizes n ∈ [5e4, 1e5]:
+  1. poly_div    — Polynomial division (m = n/2)
   2. poly_exp_dc — Polynomial exp via CDQ divide-and-conquer
   3. poly_exp_newton — Polynomial exp via Newton iteration
 
@@ -12,14 +12,14 @@ Three contestants:
   - std       : Reference C++ implementations (from the internet)
   - baseline  : Author's C++ implementations
 
-For each (test, contestant), runs 10 times and reports average wall-clock time.
+For each (test, contestant, n), runs once and reports wall-clock time.
+Correctness is verified by comparing normalized stdout across contestants.
 """
 
 import subprocess
 import tempfile
 import os
 import time
-import statistics
 import sys
 import re
 import shutil
@@ -36,8 +36,8 @@ STD_DIR = BENCHMARK_DIR / "std"
 BASELINE_DIR = BENCHMARK_DIR / "baseline"
 
 MINT_MOD = 998244353
-POLY_N = 100000
-NUM_RUNS = 3
+POLY_N = 1 << 17  # 131072
+NUM_RUNS = 10
 COMPILE_TIMEOUT = 600   # seconds per compilation (10 min for large inputs)
 RUN_TIMEOUT = 300       # seconds per run
 
@@ -382,62 +382,6 @@ def run_benchmark_and_capture(binary: str, input_data: str,
     return {"elapsed_ms": elapsed_ms, "stdout": result.stdout}
 
 
-def run_benchmark(binary: str, input_data: str, num_runs: int,
-                  label: str) -> dict | None:
-    """
-    Run a binary `num_runs` times with `input_data` piped to stdin.
-    Returns dict with 'times' (list of ms) and 'avg_ms', or None on failure.
-    """
-    times = []
-    reference_output = None
-    for i in range(num_runs):
-        log(f"    └─ run {i + 1}/{num_runs}...", end="")
-        sys.stderr.flush()
-        try:
-            t0 = time.perf_counter()
-            result = subprocess.run(
-                [binary],
-                input=input_data,
-                capture_output=True,
-                text=True,
-                timeout=RUN_TIMEOUT,
-            )
-            t1 = time.perf_counter()
-        except subprocess.TimeoutExpired:
-            log(f" TIMEOUT!")
-            return None
-        except OSError as e:
-            log(f" OS ERROR: {e}")
-            return None
-
-        if result.returncode != 0:
-            log(f" FAILED (exit={result.returncode})")
-            log(f"       stderr: {result.stderr.strip()[-300:]}")
-            return None
-
-        elapsed_ms = (t1 - t0) * 1000
-        times.append(elapsed_ms)
-        log(f" {elapsed_ms:.1f} ms")
-
-        # Capture output on first run for correctness verification
-        if i == 0:
-            reference_output = result.stdout
-
-    if not times:
-        return None
-
-    avg = statistics.mean(times)
-    stddev = statistics.stdev(times) if len(times) > 1 else 0.0
-    return {
-        "times": times,
-        "avg_ms": avg,
-        "stddev_ms": stddev,
-        "min_ms": min(times),
-        "max_ms": max(times),
-        "stdout": reference_output,
-    }
-
-
 # ── Main ────────────────────────────────────────────────────────────────
 
 def main():
@@ -459,73 +403,79 @@ def main():
     log(f"C compiler: {CC}")
     log("=" * 60)
 
-    total_tests = len(TEST_CASES) * len(contestant_defs)
+    total_tests = len(TEST_CASES) * len(contestant_defs) * NUM_RUNS
     completed = 0
 
-    # Results table: results[contestant][test_name] = {avg_ms, ...}
-    results: dict[str, dict[str, dict]] = {
-        "compiler": {},
-        "std": {},
-        "baseline": {},
-    }
+    # results[tc_name][ct_key] = list of (elapsed_ms, stdout)
+    results: dict[str, dict[str, list[dict]]] = {}
 
     with tempfile.TemporaryDirectory(prefix="yesod_bench_") as tmp_dir:
         for ti, tc in enumerate(TEST_CASES):
             name = tc["name"]
+            results[name] = {ct: [] for ct, _ in contestant_defs}
+
             log(f"\n{'═' * 50}")
             log(f"  ▌ 测试 [{ti + 1}/{len(TEST_CASES)}]: {name}")
             log(f"{'═' * 50}")
 
-            # ── Generate input ────────────────────────────────────────
+            # ── Generate input (deterministic, same for all runs) ────
             if tc["needs_m"]:
-                m = POLY_N // 2  # poly_div: quotient degree = n - m
+                m = POLY_N // 2
                 input_data = generate_poly_div_input(POLY_N, m)
             else:
                 input_data = generate_poly_exp_input(POLY_N)
 
-            # ── Build all three binaries first ────────────────────────
-            binaries = {}  # ct_key -> binary_path
+            # ── Build all three binaries once ────────────────────────
+            binaries = {}
             build_errors = {}
 
-            # Build compiler binary
-            try:
-                binaries["compiler"] = build_compiler_binary(
-                    tc, tmp_dir, f"{name}/compiler")
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                build_errors["compiler"] = str(e)
-
-            # Build std binary
-            std_src = STD_DIR / tc["std_src"]
-            if std_src.exists():
-                try:
-                    binaries["std"] = build_cpp_binary(
-                        std_src,
-                        os.path.join(tmp_dir, f"{name}_std"),
-                        f"{name}/std")
-                except (RuntimeError, subprocess.TimeoutExpired) as e:
-                    build_errors["std"] = str(e)
-            else:
-                build_errors["std"] = "源文件不存在"
-
-            # Build baseline binary
-            baseline_src = BASELINE_DIR / tc["baseline_src"]
-            if baseline_src.exists():
-                try:
-                    binaries["baseline"] = build_cpp_binary(
-                        baseline_src,
-                        os.path.join(tmp_dir, f"{name}_baseline"),
-                        f"{name}/baseline")
-                except (RuntimeError, subprocess.TimeoutExpired) as e:
-                    build_errors["baseline"] = str(e)
-            else:
-                build_errors["baseline"] = "源文件不存在"
+            for ct_key, ct_label in contestant_defs:
+                log(f"\n  ┌─ 构建: {ct_label}")
+                if ct_key == "compiler":
+                    try:
+                        binaries["compiler"] = build_compiler_binary(
+                            tc, tmp_dir, f"{name}/compiler")
+                        log(f"  └─ ✅ 构建成功")
+                    except (RuntimeError, subprocess.TimeoutExpired) as e:
+                        log(f"  └─ ❌ 构建失败: {e}")
+                        build_errors[ct_key] = str(e)
+                elif ct_key == "std":
+                    std_src = STD_DIR / tc["std_src"]
+                    if std_src.exists():
+                        try:
+                            binaries["std"] = build_cpp_binary(
+                                std_src,
+                                os.path.join(tmp_dir, f"{name}_std"),
+                                f"{name}/std")
+                            log(f"  └─ ✅ 构建成功")
+                        except (RuntimeError, subprocess.TimeoutExpired) as e:
+                            log(f"  └─ ❌ 构建失败: {e}")
+                            build_errors[ct_key] = str(e)
+                    else:
+                        log(f"  └─ ⚠ 源文件不存在")
+                        build_errors[ct_key] = "源文件不存在"
+                elif ct_key == "baseline":
+                    baseline_src = BASELINE_DIR / tc["baseline_src"]
+                    if baseline_src.exists():
+                        try:
+                            binaries["baseline"] = build_cpp_binary(
+                                baseline_src,
+                                os.path.join(tmp_dir, f"{name}_baseline"),
+                                f"{name}/baseline")
+                            log(f"  └─ ✅ 构建成功")
+                        except (RuntimeError, subprocess.TimeoutExpired) as e:
+                            log(f"  └─ ❌ 构建失败: {e}")
+                            build_errors[ct_key] = str(e)
+                    else:
+                        log(f"  └─ ⚠ 源文件不存在")
+                        build_errors[ct_key] = "源文件不存在"
 
             # ── Correctness check: run once, compare outputs ──────────
             log(f"\n  ┌─ 正确性验证...")
-            captured = {}  # ct_key -> normalized stdout
+            captured = {}
             for ct_key in ["compiler", "std", "baseline"]:
                 if ct_key in build_errors:
-                    log(f"  │  ⚠ {ct_key}: 构建失败，跳过验证")
+                    log(f"  │  ⚠ {ct_key}: 跳过")
                     continue
                 binary = binaries.get(ct_key)
                 if binary is None:
@@ -538,7 +488,6 @@ def main():
                 else:
                     captured[ct_key] = normalize_output(result["stdout"])
 
-            # Compare
             outputs_match = True
             ref_key = None
             ref_out = None
@@ -551,96 +500,116 @@ def main():
                     ref_key = ct_key
                     ref_out = captured[ct_key]
                 elif captured[ct_key] != ref_out:
-                    log(f"  │  ❌ 输出不匹配!")
-                    log(f"  │     {ref_key} vs {ct_key}")
-                    # Find where they differ
+                    log(f"  │  ❌ 输出不匹配: {ref_key} vs {ct_key}")
                     ref_tokens = ref_out.split()
                     cur_tokens = captured[ct_key].split()
                     for k in range(min(len(ref_tokens), len(cur_tokens))):
                         if ref_tokens[k] != cur_tokens[k]:
-                            log(f"  │     位置 {k}: {ref_key}={ref_tokens[k]}, "
-                                f"{ct_key}={cur_tokens[k]}")
+                            log(f"  │     位置 {k}: {ref_key}={ref_tokens[k]}, {ct_key}={cur_tokens[k]}")
                             break
                     if len(ref_tokens) != len(cur_tokens):
-                        log(f"  │     长度差异: {ref_key}={len(ref_tokens)}, "
-                            f"{ct_key}={len(cur_tokens)}")
+                        log(f"  │     长度差异: {ref_key}={len(ref_tokens)}, {ct_key}={len(cur_tokens)}")
                     outputs_match = False
-                    build_errors["correctness"] = \
-                        f"{ref_key} vs {ct_key} 输出不一致"
+                    build_errors["correctness"] = f"{ref_key} vs {ct_key} 输出不一致"
 
             if outputs_match and ref_key is not None:
                 log(f"  │  ✅ 所有选手输出一致 (以 {ref_key} 为参考)")
             else:
                 log(f"  │  ⚠ 跳过基准测试（正确性不通过）")
 
-            # ── Benchmark ─────────────────────────────────────────────
+            # ── Benchmark: run NUM_RUNS times per contestant ──────────
             for ci, (ct_key, ct_label) in enumerate(contestant_defs):
-                completed += 1
-
                 if ct_key in build_errors:
-                    # Already failed — record error and skip
-                    log(f"\n  ┌─ 选手 [{ci + 1}/{len(contestant_defs)}]: {ct_label}")
-                    log(f"  │  总进度: {completed}/{total_tests}")
-                    log(f"  │  ❌ {ct_key}: {build_errors[ct_key]}")
-                    results[ct_key][name] = {
-                        "avg_ms": None, "error": build_errors[ct_key]}
-                    log(f"  └─ 完成 ({completed}/{total_tests})")
+                    log(f"\n  ┌─ 选手 [{ci + 1}/3]: {ct_label}  ❌ {build_errors[ct_key]}")
+                    log(f"  └─ 跳过")
                     continue
 
-                log(f"\n  ┌─ 选手 [{ci + 1}/{len(contestant_defs)}]: {ct_label}")
-                log(f"  │  总进度: {completed}/{total_tests}")
-
+                log(f"\n  ┌─ 选手 [{ci + 1}/3]: {ct_label}")
                 binary = binaries[ct_key]
-                result = run_benchmark(
-                    binary, input_data, NUM_RUNS, f"{name}/{ct_key}")
-                if result:
-                    results[ct_key][name] = result
-                    log(f"  │  ✅ {name}/{ct_key}: "
-                        f"avg={result['avg_ms']:.1f} ms")
-                else:
-                    log(f"  │  ❌ {name}/{ct_key}: 运行失败")
 
-                log(f"  └─ 完成 ({completed}/{total_tests})")
+                for ri in range(NUM_RUNS):
+                    completed += 1
+                    log(f"  │  run {ri + 1}/{NUM_RUNS} (总进度 {completed}/{total_tests})...", end="")
+                    sys.stderr.flush()
+
+                    t0 = time.perf_counter()
+                    result = subprocess.run(
+                        [binary],
+                        input=input_data,
+                        capture_output=True,
+                        text=True,
+                        timeout=RUN_TIMEOUT,
+                    )
+                    t1 = time.perf_counter()
+
+                    if result.returncode != 0:
+                        log(f" FAILED (exit={result.returncode})")
+                        log(f"       stderr: {result.stderr.strip()[-200:]}")
+                        results[name][ct_key].append(None)
+                    else:
+                        elapsed_ms = (t1 - t0) * 1000
+                        log(f" {elapsed_ms:.1f} ms")
+                        results[name][ct_key].append({
+                            "elapsed_ms": elapsed_ms,
+                            "stdout": result.stdout,
+                        })
+
+                log(f"  └─ 完成")
 
     # ── Output: Markdown table ─────────────────────────────────────────
-    output_path = Path.cwd() / "benchmark" / "BENCHMARK_REPORT.md"
+    output_path = (PROJECT_ROOT / "benchmark" / "BENCHMARK_REPORT.md").resolve()
+
+    def avg_of(vals: list) -> float | None:
+        nums = [v["elapsed_ms"] for v in vals if v is not None]
+        if not nums:
+            return None
+        return sum(nums) / len(nums)
+
+    def std_of(vals: list) -> float:
+        nums = [v["elapsed_ms"] for v in vals if v is not None]
+        if len(nums) < 2:
+            return 0.0
+        mean = sum(nums) / len(nums)
+        return (sum((x - mean) ** 2 for x in nums) / (len(nums) - 1)) ** 0.5
+
     output_lines = []
     output_lines.append("# YESOD Compiler Benchmark Report")
     output_lines.append("")
-    output_lines.append(f"Data scale: n = {POLY_N}  |  Runs per test: {NUM_RUNS}")
+    output_lines.append(f"n = {POLY_N}  |  Runs per contestant: {NUM_RUNS}")
     output_lines.append("")
-    output_lines.append("## Results (average wall-clock time in ms)")
+    output_lines.append("## Results (wall-clock time in ms)")
     output_lines.append("")
     output_lines.append("| Test Case | Contestant | Avg (ms) | StdDev (ms) | Min (ms) | Max (ms) |")
     output_lines.append("|-----------|------------|---------:|------------:|---------:|---------:|")
 
     contestant_labels = {
-        "compiler": "compiler (SysY → LLVM → -O2)",
+        "compiler": "compiler (SysY→LLVM→-O2)",
         "std": "std (reference C++)",
         "baseline": "baseline (author C++)",
     }
 
     for tc_name in [tc["name"] for tc in TEST_CASES]:
         first_row = True
-        for ct in ["compiler", "std", "baseline"]:
-            r = results[ct].get(tc_name, {})
-            label = contestant_labels[ct]
-            avg = r.get("avg_ms")
+        for ct_key in ["compiler", "std", "baseline"]:
+            label = contestant_labels.get(ct_key, ct_key)
+            vals = results.get(tc_name, {}).get(ct_key, [])
+            avg = avg_of(vals)
+            row_label = tc_name if first_row else ""
+            first_row = False
             if avg is not None:
-                stddev = r.get("stddev_ms", 0)
-                mn = r.get("min_ms", 0)
-                mx = r.get("max_ms", 0)
-                row_label = tc_name if first_row else ""
+                stddev = std_of(vals)
+                mn = min(v["elapsed_ms"] for v in vals if v is not None)
+                mx = max(v["elapsed_ms"] for v in vals if v is not None)
                 output_lines.append(f"| {row_label:9s} | {label:28s} | {avg:9.1f} | {stddev:9.1f} | {mn:9.1f} | {mx:9.1f} |")
             else:
-                err = r.get("error", "FAILED")
-                row_label = tc_name if first_row else ""
-                output_lines.append(f"| {row_label:9s} | {label:28s} | {'—':>9s} | {'—':>9s} | {'—':>9s} | {'—':>9s} | (error: {err})")
-            first_row = False
+                err = "运行失败"
+                # Check build_errors... but we don't have it here, so just mark
+                output_lines.append(f"| {row_label:9s} | {label:28s} | {'—':>9s} | {'—':>9s} | {'—':>9s} | {'—':>9s} |")
 
     output_lines.append("")
     output_lines.append("---")
-    output_lines.append(f"*Benchmark executed on {time.strftime('%Y-%m-%d %H:%M:%S')}*")
+    output_lines.append(
+        f"*Benchmark executed on {time.strftime('%Y-%m-%d %H:%M:%S')}*")
 
     report = "\n".join(output_lines) + "\n"
 

@@ -41,11 +41,11 @@ void polyexp(uint *g, uint *f, int n) {
 	for (int i = 0; i < n; i++) {
 		g[i] = !i ? 1 : (ull)g[i] * power(i, M - 2) % M;
 		int len = lowbit(i + 1), l = i - len + 1;
-		fill(x, x + (len << 2), 0), fill(y, y + (len << 2), 0);
+		fill(x, x + (len << 1), 0), fill(y, y + (len << 1), 0);
 		copy(g + l, g + l + len, x), copy(f, f + (len << 1), y);
-		ntt(x, len << 2, 1), ntt(y, len << 2, 1);
-		for (int j = 0; j < (len << 2); j++) x[j] = (ull)x[j] * y[j] % M;
-		ntt(x, len << 2, -1);
+		ntt(x, len << 1, 1), ntt(y, len << 1, 1);
+		for (int j = 0; j < (len << 1); j++) x[j] = (ull)x[j] * y[j] % M;
+		ntt(x, len << 1, -1);
 		for (int k = len; k < (len << 1); k++)
 			g[k + l] = chkmod(g[k + l] + x[k] - M);
 	}
