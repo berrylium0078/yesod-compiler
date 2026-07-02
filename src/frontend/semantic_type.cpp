@@ -585,7 +585,7 @@ namespace detail {
                 if (targetType.isArray()) {
                     return;
                 }
-                if (targetType != analyzedExp.m_type) {
+                if (!typesMatchForAssignment(targetType, analyzedExp)) {
                     recordDiagnostic<TypeMismatchDiagnostic>(
                         assignStmt(m_ast).sourcePos.m_offset,
                         "assignment rhs type does not match lhs type; use an "
@@ -1630,6 +1630,19 @@ namespace detail {
         const SemanticType& paramType, const SemanticType& argType) const
     {
         return typesMatchForCallImpl(paramType, argType);
+    }
+
+    bool SemanticTypeAnalyzerImpl::typesMatchForAssignment(
+        const SemanticType& targetType, const AnalyzedExp& rhs) const
+    {
+        if (typesMatchExactly(targetType, rhs.m_type)) {
+            return true;
+        }
+        // Keep general int/mint conversions explicit, but accept integer
+        // constants in mint stores.  This matches existing poly tests that use
+        // `fac[0] = 1` while still rejecting non-constant int values.
+        return targetType.kind == SemanticTypeKind::mint
+            && rhs.m_type.kind == SemanticTypeKind::integer && rhs.m_isConstant;
     }
 
     std::optional<int32_t> SemanticTypeAnalyzerImpl::resolvedSymbolId(

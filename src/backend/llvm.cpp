@@ -357,6 +357,12 @@ namespace {
         if (std::holds_alternative<koopa_ir::I32Type>(type)) {
             return "int";
         }
+        if (const auto* arrayRef
+            = std::get_if<yesod::Ref<koopa_ir::ArrayType>>(&type)) {
+            const auto& array = program[*arrayRef];
+            return "[" + std::to_string(array.length) + " x "
+                + logicalTypeOfIrType(array.elementType, program) + "]";
+        }
         if (std::holds_alternative<yesod::Ref<koopa_ir::PointerType>>(type)) {
             return "ptr";
         }

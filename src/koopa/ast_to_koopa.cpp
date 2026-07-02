@@ -1229,6 +1229,15 @@ namespace {
                 koopa_ir::BinaryOp::mul, std::move(lhs), std::move(rhs));
         }
 
+        [[nodiscard]] koopa_ir::Value mintBinaryOperand(koopa_ir::Value value)
+        {
+            if (std::holds_alternative<koopa_ir::IntegerLiteral>(value)) {
+                return emitConversion(
+                    koopa_ir::ConversionOp::int2mint, std::move(value));
+            }
+            return value;
+        }
+
         [[nodiscard]] koopa_ir::Symbol requireSymbolValue(
             const koopa_ir::Value& value, const char* message) const
         {
@@ -1262,7 +1271,7 @@ namespace {
 
         [[nodiscard]] std::vector<koopa_ir::Value> edgeArgs(
             Ref<frontend::SemanticBasicBlock> source,
-            Ref<frontend::SemanticBasicBlock> target) const
+            Ref<frontend::SemanticBasicBlock> target)
         {
             const auto sourceIt = m_ssa->m_blockInfoByBlock.find(source);
             if (sourceIt == m_ssa->m_blockInfoByBlock.end()) {
@@ -1275,13 +1284,29 @@ namespace {
             }
             std::vector<koopa_ir::Value> values;
             values.reserve(argsIt->second.size());
-            for (const auto& alias : argsIt->second) {
+            const auto targetBlockIt = m_basicBlockBySemanticBlock.find(target);
+            if (targetBlockIt == m_basicBlockBySemanticBlock.end()) {
+                throw std::runtime_error("target block is missing IR binding");
+            }
+            const auto& targetBlock = (*m_program)[targetBlockIt->second];
+            for (size_t i = 0; i < argsIt->second.size(); ++i) {
+                const auto& alias = argsIt->second[i];
                 const auto valueIt = m_valueByAliasKey.find(aliasKey(alias));
                 if (valueIt == m_valueByAliasKey.end()) {
                     throw std::runtime_error(
                         "SSA edge argument is missing a value binding");
                 }
-                values.push_back(valueIt->second);
+                koopa_ir::Value value = valueIt->second;
+                if (i < targetBlock.params.size()) {
+                    const auto& param = (*m_program)[targetBlock.params[i]];
+                    if (std::holds_alternative<koopa_ir::MintType>(param.type)
+                        && std::holds_alternative<koopa_ir::IntegerLiteral>(
+                            value)) {
+                        value = emitConversion(
+                            koopa_ir::ConversionOp::int2mint, std::move(value));
+                    }
+                }
+                values.push_back(std::move(value));
             }
             return values;
         }
@@ -1435,7 +1460,9 @@ namespace {
                                 [&](Ref<Exp> initAlt) {
                                     (void)state.bindAlias(
                                         parsedConstDef.identifier,
-                                        state.generateExp(initAlt));
+                                        type.kind == SemanticTypeKind::mint
+                                            ? state.mintValueForExp(initAlt)
+                                            : state.generateExp(initAlt));
                                 },
                                 [&](const auto&) {
                                     throw std::runtime_error(
@@ -1466,11 +1493,14 @@ namespace {
                         MATCH(constInitVal.kind)
                         WITH(
                             [&](Ref<Exp> initAlt) {
+                                auto initValue
+                                    = type.kind == SemanticTypeKind::mint
+                                    ? state.mintValueForExp(initAlt)
+                                    : state.generateExp(initAlt);
                                 auto storeRef = state.m_program->alloc<
                                     koopa_ir::StoreStmt>(koopa_ir::StoreStmt {
                                     .sourcePos = { },
-                                    .value
-                                    = toStoreValue(state.generateExp(initAlt)),
+                                    .value = toStoreValue(std::move(initValue)),
                                     .destination = makeIrSymbol(allocName),
                                     .annotations = { },
                                 });
@@ -1499,7 +1529,9 @@ namespace {
                                     [&](Ref<Exp> initAlt) {
                                         (void)state.bindAlias(
                                             resolvedVarDef.identifier,
-                                            state.generateExp(initAlt));
+                                            type.kind == SemanticTypeKind::mint
+                                                ? state.mintValueForExp(initAlt)
+                                                : state.generateExp(initAlt));
                                     },
                                     [&](const auto&) {
                                         throw std::runtime_error(
@@ -1556,7 +1588,10 @@ namespace {
                         MATCH(initVal.kind)
                         WITH(
                             [&](Ref<Exp> initAlt) {
-                                auto initValue = state.generateExp(initAlt);
+                                auto initValue
+                                    = type.kind == SemanticTypeKind::mint
+                                    ? state.mintValueForExp(initAlt)
+                                    : state.generateExp(initAlt);
                                 if (type.isPoly()
                                     && state.m_semanticInfo
                                         ->findAlias(resolvedVarDef.identifier)
@@ -1587,16 +1622,22 @@ namespace {
                 [&](Exp::LVal expAlt) {
                     if (m_semanticInfo->findAlias(expAlt.identifier).has_value()
                         && expAlt.indices.empty()) {
-                        auto value = generateExp(parsedAssignStmt.exp);
+                        const auto targetType = lValueType(expAlt);
+                        auto value = targetType.kind == SemanticTypeKind::mint
+                            ? mintValueForExp(parsedAssignStmt.exp)
+                            : generateExp(parsedAssignStmt.exp);
                         (void)bindAlias(expAlt.identifier, value);
                         return;
                     }
                     const auto address = generateLValueAddress(expAlt);
+                    const auto targetType = lValueType(expAlt);
+                    auto value = targetType.kind == SemanticTypeKind::mint
+                        ? mintValueForExp(parsedAssignStmt.exp)
+                        : generateExp(parsedAssignStmt.exp);
                     auto storeRef = m_program->alloc<koopa_ir::StoreStmt>(
                         koopa_ir::StoreStmt {
                             .sourcePos = { },
-                            .value
-                            = toStoreValue(generateExp(parsedAssignStmt.exp)),
+                            .value = toStoreValue(std::move(value)),
                             .destination = address.symbol,
                             .annotations = { },
                         });
@@ -1622,15 +1663,52 @@ namespace {
             return type.has_value() && type->kind == kind;
         }
 
+        [[nodiscard]] SemanticType lValueType(const Exp::LVal& lVal) const
+        {
+            const auto& symbol = requireSymbolForIdentifier(lVal.identifier,
+                *m_semanticInfo, "lvalue is missing a symbol binding");
+            auto currentType = symbol.object().m_type;
+            for (size_t i = 0; i < lVal.indices.size(); ++i) {
+                if (currentType.isPoly()) {
+                    return SemanticType::makeMint();
+                }
+                if (!currentType.isArray()
+                    || currentType.m_elementType == nullptr) {
+                    return currentType;
+                }
+                currentType = *currentType.m_elementType;
+            }
+            return currentType;
+        }
+
         [[nodiscard]] koopa_ir::Value mintValueForExp(Ref<Exp> exp)
         {
             auto value = generateExp(exp);
             const auto type = m_semanticInfo->findExpType(exp);
-            if (type.has_value() && type->kind == SemanticTypeKind::integer) {
+            if ((type.has_value() && type->kind == SemanticTypeKind::integer)
+                || std::holds_alternative<koopa_ir::IntegerLiteral>(value)) {
                 return emitConversion(
                     koopa_ir::ConversionOp::int2mint, std::move(value));
             }
             return value;
+        }
+
+        [[nodiscard]] std::vector<koopa_ir::Value> generateCallArgs(
+            const SemanticSymbol::FunctionInfo& function,
+            const std::vector<Ref<Exp>>& params)
+        {
+            std::vector<koopa_ir::Value> args;
+            args.reserve(params.size());
+            for (size_t i = 0; i < params.size(); ++i) {
+                if (i < function.m_paramTypes.size()
+                    && function.m_paramTypes[i].kind
+                        == SemanticTypeKind::mint) {
+                    args.push_back(mintValueForExp(params[i]));
+                    continue;
+                }
+                args.push_back(generateExp(params[i]));
+            }
+            return args;
         }
 
         [[nodiscard]] koopa_ir::Value generatePolyConstructFromCast(
@@ -1766,11 +1844,8 @@ namespace {
                         throw std::runtime_error("call target is missing a "
                                                  "lowered function binding");
                     }
-                    std::vector<koopa_ir::Value> args;
-                    args.reserve(expAlt.params.size());
-                    for (const auto arg_nn : expAlt.params) {
-                        args.push_back(generateExp(arg_nn));
-                    }
+                    std::vector<koopa_ir::Value> args
+                        = generateCallArgs(symbol.function(), expAlt.params);
                     return emitCall(functionIt->second, std::move(args), true);
                 },
                 [&](Exp::LVal expAlt) -> koopa_ir::Value {
@@ -2025,11 +2100,8 @@ namespace {
                         throw std::runtime_error("call target is missing a "
                                                  "lowered function binding");
                     }
-                    std::vector<koopa_ir::Value> args;
-                    args.reserve(expAlt.params.size());
-                    for (const auto arg_nn : expAlt.params) {
-                        args.push_back(generateExp(arg_nn));
-                    }
+                    std::vector<koopa_ir::Value> args
+                        = generateCallArgs(symbol.function(), expAlt.params);
                     return emitCall(functionIt->second, std::move(args),
                         symbol.function().m_returnType.kind
                             != SemanticTypeKind::voidType);
@@ -2183,17 +2255,21 @@ namespace {
             if (lhsType.has_value() && isMintType(*lhsType)) {
                 switch (binaryExp.op) {
                 case BinaryOpKeyword::plus:
-                    return emitBinary(koopa_ir::BinaryOp::add, std::move(lhs),
-                        std::move(rhs));
+                    return emitBinary(koopa_ir::BinaryOp::add,
+                        mintBinaryOperand(std::move(lhs)),
+                        mintBinaryOperand(std::move(rhs)));
                 case BinaryOpKeyword::minus:
-                    return emitBinary(koopa_ir::BinaryOp::sub, std::move(lhs),
-                        std::move(rhs));
+                    return emitBinary(koopa_ir::BinaryOp::sub,
+                        mintBinaryOperand(std::move(lhs)),
+                        mintBinaryOperand(std::move(rhs)));
                 case BinaryOpKeyword::star:
-                    return emitBinary(koopa_ir::BinaryOp::mul, std::move(lhs),
-                        std::move(rhs));
+                    return emitBinary(koopa_ir::BinaryOp::mul,
+                        mintBinaryOperand(std::move(lhs)),
+                        mintBinaryOperand(std::move(rhs)));
                 case BinaryOpKeyword::slash:
-                    return emitBinary(koopa_ir::BinaryOp::div, std::move(lhs),
-                        std::move(rhs));
+                    return emitBinary(koopa_ir::BinaryOp::div,
+                        mintBinaryOperand(std::move(lhs)),
+                        mintBinaryOperand(std::move(rhs)));
                 case BinaryOpKeyword::less:
                 case BinaryOpKeyword::greater:
                 case BinaryOpKeyword::lessEqual:

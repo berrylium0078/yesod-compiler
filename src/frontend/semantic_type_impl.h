@@ -73,6 +73,8 @@ private:
         bool& hasRemainingWarning);
     [[nodiscard]] bool typesMatchForCall(
         const SemanticType& paramType, const SemanticType& argType) const;
+    [[nodiscard]] bool typesMatchForAssignment(
+        const SemanticType& targetType, const AnalyzedExp& rhs) const;
     [[nodiscard]] std::optional<int32_t> resolvedSymbolId(
         Ref<Identifier> identifier) const;
     [[nodiscard]] SemanticSymbol makeObjectSymbol(int32_t symbolId,
