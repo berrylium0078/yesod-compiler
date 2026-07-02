@@ -88,14 +88,19 @@ void writeTextFile(const fs::path& path, const std::string& contents)
 struct TempFile {
     explicit TempFile(const std::string& suffix)
     {
-        std::string pattern = "/tmp/compiler_llvm_test_XXXXXX" + suffix;
+        const char* tmpDir = std::getenv("TMPDIR");
+        if (!tmpDir || tmpDir[0] == '\0') {
+            tmpDir = "/tmp";
+        }
+        std::string pattern
+            = std::string(tmpDir) + "/compiler_llvm_test_XXXXXX" + suffix;
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
 
         const int fileDescriptor
             = ::mkstemps(buffer.data(), static_cast<int>(suffix.size()));
-        require(
-            fileDescriptor != -1, "failed to create temporary file under /tmp");
+        require(fileDescriptor != -1,
+            "failed to create temporary file in " + std::string(tmpDir));
         ::close(fileDescriptor);
         m_path = buffer.data();
     }

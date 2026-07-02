@@ -41,6 +41,127 @@ namespace {
         return montgomeryReduceConst(static_cast<int64_t>(value) * MONT_R2);
     }
 
+    // ─── Minified name allocator ──────────────────────────────────────────
+
+    class NameAllocator {
+      public:
+        // Characters valid for the first position, in ASCII order.
+        // First-char rule: if it's a digit, the entire name must be digits.
+        // If it's a letter/$/_/., the rest can be any valid char.
+        static constexpr std::string_view kFirstChars
+            = "$.0123456789"
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+              "_"
+              "abcdefghijklmnopqrstuvwxyz";
+
+        // Characters valid for non-first positions.
+        static constexpr std::string_view kRestChars
+            = "$.0123456789"
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+              "_"
+              "abcdefghijklmnopqrstuvwxyz";
+
+        void reserve(const std::string& name) { m_used.insert(name); }
+
+        // Check if a name should be skipped (e.g. reserved names like "main")
+        bool isReserved(const std::string& name) const
+        {
+            return m_reservedSet.contains(name);
+        }
+
+        void reservePermanent(const std::string& name)
+        {
+            m_reservedSet.insert(name);
+            m_used.insert(name);
+        }
+
+        std::string allocate()
+        {
+            if (m_next.empty()) {
+                m_next = std::string(1, kFirstChars[0]); // "$"
+            }
+            while (m_used.count(m_next)) {
+                m_next = advance(m_next);
+            }
+            m_used.insert(m_next);
+            const std::string result = m_next;
+            m_next = advance(m_next);
+            return result;
+        }
+
+        bool isMinified() const { return true; }
+
+      private:
+        std::set<std::string> m_used;
+        std::set<std::string> m_reservedSet;
+        std::string m_next;
+
+        static bool isAllDigits(const std::string& s)
+        {
+            return !s.empty()
+                && std::isdigit(static_cast<unsigned char>(s[0]))
+                && std::all_of(
+                    s.begin(), s.end(), [](char c) -> bool {
+                        return std::isdigit(static_cast<unsigned char>(c));
+                    });
+        }
+
+        static std::string advance(const std::string& name)
+        {
+            if (name.empty()) {
+                return std::string(1, kFirstChars[0]);
+            }
+
+            const int len = static_cast<int>(name.size());
+
+            if (isAllDigits(name)) {
+                std::string s = name;
+                int i = len - 1;
+                while (i >= 0 && s[i] == '9') {
+                    s[i] = '0';
+                    --i;
+                }
+                if (i >= 0) {
+                    s[i] = s[i] + 1;
+                    return s;
+                }
+                // All-9s overflow → transition to 'A'-prefixed identifier
+                return std::string(1, 'A')
+                    + std::string(len - 1, kRestChars[0]);
+            }
+
+            // Identifier-style name
+            std::string s = name;
+            int i = len - 1;
+            while (i >= 0) {
+                const auto& charSet
+                    = (i == 0) ? kFirstChars : kRestChars;
+                const char c = s[i];
+                const auto pos = charSet.find(c);
+                if (pos != std::string_view::npos
+                    && pos + 1 < charSet.size()) {
+                    s[i] = charSet[pos + 1];
+                    for (int j = i + 1; j < len; ++j) {
+                        s[j] = kRestChars[0];
+                    }
+                    return s;
+                }
+                --i;
+            }
+            // All positions at max → move to next length
+            return std::string(len + 1, kFirstChars[0]);
+        }
+    };
+
+    class NullNameAllocator {
+      public:
+        void reserve(const std::string&) { }
+        bool isReserved(const std::string&) const { return false; }
+        void reservePermanent(const std::string&) { }
+        std::string allocate() { return {}; }
+        static constexpr bool isMinified() { return false; }
+    };
+
     // ─── Name helpers ─────────────────────────────────────────────────────
 
     std::string stripPrefix(const std::string& spelling)
@@ -583,11 +704,15 @@ namespace {
     }
 
     struct LlvmNameGenerator {
+        NameAllocator* allocator = nullptr;
         int32_t helperTempId = 0;
 
-        std::string nextHelperName(const std::string& stem)
+        std::string nextHelperName(const std::string& /*stem*/)
         {
-            return "%" + stem + "_" + std::to_string(helperTempId++);
+            if (allocator) {
+                return "%" + allocator->allocate();
+            }
+            return "%" + std::to_string(helperTempId++);
         }
     };
 
@@ -1243,9 +1368,12 @@ namespace {
         output << ")\n";
     }
 
+    using NameResolver
+        = std::function<std::string(const std::string& spelling)>;
+
     void emitFunctionSignature(const koopa_ir::FunctionDef& function,
         const koopa_ir::Program& program, const std::string& name,
-        std::ostream& output)
+        std::ostream& output, const NameResolver& resolveName = nullptr)
     {
         std::string retType = "void";
         if (function.returnType.has_value()) {
@@ -1258,8 +1386,12 @@ namespace {
                 output << ", ";
             }
             const auto& param = program[function.params[i]];
-            output << emitType(param.type, program) << " "
-                   << llvmValueName(param.symbol.spelling);
+            output << emitType(param.type, program) << " ";
+            if (resolveName) {
+                output << resolveName(param.symbol.spelling);
+            } else {
+                output << llvmValueName(param.symbol.spelling);
+            }
         }
         output << ") {\n";
     }
@@ -1429,7 +1561,7 @@ namespace {
     public:
         FunctionEmitter(const koopa_ir::FunctionDef& function,
             const koopa_ir::Program& program, const FuncSigMap& sigs,
-            std::ostream& output)
+            std::ostream& output, NameAllocator* alloc = nullptr)
             : m_function(function)
             , m_program(program)
             , m_sigs(sigs)
@@ -1442,6 +1574,8 @@ namespace {
             , m_logicalPointees(m_typeContext.logicalPointees)
             , m_localPolyAllocations(m_typeContext.localPolyAllocations)
             , m_globalPolyAllocations(m_typeContext.globalPolyAllocations)
+            , m_alloc(alloc)
+            , m_nameGenerator { alloc }
             , m_mintEmitter { m_output, m_nameGenerator }
             , m_polyEmitter { m_output, m_nameGenerator }
         {
@@ -1451,10 +1585,81 @@ namespace {
         {
             // ── Collect phi edges ──────────────────────────────────────────
             collectPhiEdges(m_function, m_program, m_incoming, m_blockLabels);
+            // Minify block labels if needed — use a separate counter so
+            // block labels are always non-numeric (llvm-cbe rejects numeric
+            // labels).  We must also update the incoming edge labels to
+            // match the new block label names.
+            if (m_alloc) {
+                BlockLabelMap oldLabels = m_blockLabels;
+                // Build old-label → new-label mapping
+                std::unordered_map<std::string, std::string> labelMap;
+                int labelId = 0;
+                for (const auto& [orig, oldLabel] : oldLabels) {
+                    labelMap[oldLabel] = "L" + std::to_string(labelId++);
+                }
+                // Remap m_blockLabels
+                BlockLabelMap minified;
+                for (const auto& [orig, oldLabel] : oldLabels) {
+                    minified[orig] = labelMap[oldLabel];
+                }
+                m_blockLabels = std::move(minified);
+                // Remap incoming edge predLabels
+                for (auto& [targetLabel, slots] : m_incoming) {
+                    for (auto& slot : slots) {
+                        for (auto& edge : slot) {
+                            // edge.predLabel might be a raw label or
+                            // "edgeBlockLabel(oldLabel, suffix)"
+                            // Reconstruct the new predLabel.
+                            auto it = labelMap.find(edge.predLabel);
+                            if (it != labelMap.end()) {
+                                edge.predLabel = it->second;
+                                continue;
+                            }
+                            // Check if it's an edge block label
+                            const std::string prefix = "__ssa_edge_";
+                            if (edge.predLabel.rfind(prefix, 0) == 0) {
+                                std::string rest
+                                    = edge.predLabel.substr(prefix.size());
+                                // rest is "oldLabel_suffix"
+                                auto uscore = rest.rfind('_');
+                                if (uscore != std::string::npos) {
+                                    std::string oldLabelPart
+                                        = rest.substr(0, uscore);
+                                    std::string suffix
+                                        = rest.substr(uscore + 1);
+                                    auto lit = labelMap.find(oldLabelPart);
+                                    if (lit != labelMap.end()) {
+                                        edge.predLabel = "__ssa_edge_"
+                                            + lit->second + "_" + suffix;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             m_ownership = analyzeOwnership(
                 m_function, m_program, m_sigs, m_pointees, m_valueTypes);
+            // ── Pre-allocate names for params and symbols ──────────────────
+            if (m_alloc) {
+                // Pre-bind all param names so resolveName finds them
+                for (const auto& paramRef : m_function.params) {
+                    const auto& param = m_program[paramRef];
+                    const std::string minified = m_alloc->allocate();
+                    m_nameCache[stripPrefix(param.symbol.spelling)] = minified;
+                }
+            }
             // ── Function signature ─────────────────────────────────────────
-            emitFunctionSignature(m_function, m_program, m_name, m_output);
+            if (m_alloc) {
+                auto resolver = [this](const std::string& spelling) {
+                    return resolveName(spelling);
+                };
+                emitFunctionSignature(
+                    m_function, m_program, m_name, m_output, resolver);
+            } else {
+                emitFunctionSignature(
+                    m_function, m_program, m_name, m_output);
+            }
 
             // ── Build edge plans ─────────────────────────────────────────
             buildEdgePlans();
@@ -1484,6 +1689,8 @@ namespace {
         std::vector<std::pair<std::string, koopa_ir::Type>>&
             m_globalPolyAllocations;
 
+        NameAllocator* m_alloc;
+        mutable std::unordered_map<std::string, std::string> m_nameCache;
         LlvmNameGenerator m_nameGenerator;
         MintIrEmitter m_mintEmitter;
         PolyIrEmitter m_polyEmitter;
@@ -1492,6 +1699,30 @@ namespace {
         BlockLabelMap m_blockLabels;
         OwnershipAnalysis m_ownership;
         EdgePlanMap m_edgePlans;
+
+        // ── Name resolution ──────────────────────────────────────────
+        std::string resolveName(const std::string& spelling)
+        {
+            if (!m_alloc) return spelling;
+
+            // spelling already includes @ or % prefix (or none for block labels)
+            const char prefix = (!spelling.empty()
+                                   && (spelling[0] == '@' || spelling[0] == '%'))
+                ? spelling[0]
+                : '\0';
+            const std::string bare
+                = prefix ? spelling.substr(1) : spelling;
+
+            auto it = m_nameCache.find(bare);
+            if (it != m_nameCache.end()) {
+                if (prefix) return prefix + it->second;
+                return it->second;
+            }
+            std::string minified = m_alloc->allocate();
+            m_nameCache[bare] = minified;
+            if (prefix) return prefix + minified;
+            return minified;
+        }
 
         // ── Helper methods (replacing lambdas) ────────────────────────
         std::string nextHelperName(const std::string& stem)
@@ -1548,16 +1779,26 @@ namespace {
             return "int";
         }
 
+        // Resolve names in Values: Symbol names get minified
+        std::string emitValueOperandResolved(
+            const koopa_ir::Value& value)
+        {
+            if (const auto* sym = std::get_if<koopa_ir::Symbol>(&value)) {
+                return resolveName(sym->spelling);
+            }
+            return emitValueOperand(value, m_program);
+        }
+
         std::string emitMintOperand(const koopa_ir::Value& value)
         {
             if (logicalTypeOf(value) == "mint") {
-                return emitValueOperand(value, m_program);
+                return emitValueOperandResolved(value);
             }
             if (const auto* literal
                 = std::get_if<koopa_ir::IntegerLiteral>(&value)) {
                 return std::to_string(intToMontgomeryConst(literal->value));
             }
-            return emitIntToMint(emitValueOperand(value, m_program));
+            return emitIntToMint(emitValueOperandResolved(value));
         }
 
         // ── Poly emitter delegates ────────────────────────────────────
@@ -1625,7 +1866,7 @@ namespace {
                 || !isOwnedTypeString(typeIt->second)) {
                 return;
             }
-            emitOwnedValueDropByType(typeIt->second, llvmValueName(symbolName));
+            emitOwnedValueDropByType(typeIt->second, resolveName(symbolName));
         }
 
         void emitOwnedValueDrops(const SymbolSet& values)
@@ -1667,12 +1908,12 @@ namespace {
         {
             for (const auto& allocation : m_localPolyAllocations) {
                 emitStorageDrop(
-                    allocation.second, llvmValueName(allocation.first));
+                    allocation.second, resolveName(allocation.first));
             }
             if (m_name == "main") {
                 for (const auto& allocation : m_globalPolyAllocations) {
                     emitStorageDrop(
-                        allocation.second, llvmValueName(allocation.first));
+                        allocation.second, resolveName(allocation.first));
                 }
             }
         }
@@ -1708,7 +1949,7 @@ namespace {
             }
             for (size_t i = 0; i < values.size(); ++i) {
                 const std::string operand
-                    = emitValueOperand(values[i], m_program);
+                    = emitValueOperandResolved(values[i]);
                 if (i >= types.size() || !isOwnedTypeString(types[i])) {
                     plan.operands.push_back(operand);
                     continue;
@@ -1849,7 +2090,7 @@ namespace {
                         return emitMintOperand(leaf.value);
                     }
                     const std::string pv
-                        = emitValueOperand(leaf.value, m_program);
+                        = emitValueOperandResolved(leaf.value);
                     const std::string values = nextHelperName("pv_values");
                     m_output << "  " << values << " = extractvalue " << PV_TYPE
                              << " " << pv << ", 0\n";
@@ -1921,7 +2162,7 @@ namespace {
             for (size_t pi = 0; pi < block.params.size(); ++pi) {
                 const auto& bp = m_program[block.params[pi]];
                 const std::string paramType = emitType(bp.type, m_program);
-                const std::string paramName = llvmValueName(bp.symbol.spelling);
+                const std::string paramName = resolveName(bp.symbol.spelling);
 
                 m_output << "  " << paramName << " = phi " << paramType;
                 for (size_t ei = 0; ei < slots[pi].size(); ++ei) {
@@ -1929,7 +2170,7 @@ namespace {
                     if (ei != 0) {
                         m_output << ",";
                     }
-                    m_output << " [ " << emitValueOperand(edge.arg, m_program)
+                    m_output << " [ " << emitValueOperandResolved(edge.arg)
                              << ", %" << edge.predLabel << " ]";
                 }
                 m_output << "\n";
@@ -2017,12 +2258,12 @@ namespace {
             WITH(
                 [&](const yesod::Ref<koopa_ir::MemoryDeclaration>& memRef) {
                     const auto& mem = m_program[memRef];
-                    m_output << "  " << llvmValueName(sname) << " = alloca "
+                    m_output << "  " << resolveName(sname) << " = alloca "
                              << emitType(mem.allocType, m_program) << "\n";
                     if (typeContainsPoly(mem.allocType, m_program)) {
                         m_output
                             << "  store " << emitType(mem.allocType, m_program)
-                            << " zeroinitializer, ptr " << llvmValueName(sname)
+                            << " zeroinitializer, ptr " << resolveName(sname)
                             << "\n";
                     }
                 },
@@ -2033,15 +2274,15 @@ namespace {
                         = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
                     if (elemTy == POLY_TYPE) {
                         const std::string rawName
-                            = llvmValueName(sname) + "_raw";
+                            = resolveName(sname) + "_raw";
                         m_output << "  " << rawName << " = load " << elemTy
                                  << ", ptr "
-                                 << llvmValueName(ld.source.spelling) << "\n";
-                        emitPolyCloneTo(llvmValueName(sname), rawName);
+                                 << resolveName(ld.source.spelling) << "\n";
+                        emitPolyCloneTo(resolveName(sname), rawName);
                     } else {
-                        m_output << "  " << llvmValueName(sname) << " = load "
+                        m_output << "  " << resolveName(sname) << " = load "
                                  << elemTy << ", ptr "
-                                 << llvmValueName(ld.source.spelling) << "\n";
+                                 << resolveName(ld.source.spelling) << "\n";
                     }
                 },
                 [&](const yesod::Ref<koopa_ir::GetPointerExpr>& getptrRef) {
@@ -2049,10 +2290,10 @@ namespace {
                     const auto ptIt = m_pointees.find(gp.source.spelling);
                     const std::string gepElemTy
                         = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
-                    m_output << "  " << llvmValueName(sname)
+                    m_output << "  " << resolveName(sname)
                              << " = getelementptr " << gepElemTy << ", ptr "
-                             << llvmValueName(gp.source.spelling) << ", i32 "
-                             << emitValueOperand(gp.index, m_program) << "\n";
+                             << resolveName(gp.source.spelling) << ", i32 "
+                             << emitValueOperandResolved(gp.index) << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::GetElementPointerExpr>&
                         gelemRef) {
@@ -2061,11 +2302,11 @@ namespace {
                     const std::string gepTy = (ptIt != m_pointees.end())
                         ? ptIt->second
                         : "[0 x i32]";
-                    m_output << "  " << llvmValueName(sname)
+                    m_output << "  " << resolveName(sname)
                              << " = getelementptr " << gepTy << ", ptr "
-                             << llvmValueName(ge.source.spelling)
+                             << resolveName(ge.source.spelling)
                              << ", i32 0, i32 "
-                             << emitValueOperand(ge.index, m_program) << "\n";
+                             << emitValueOperandResolved(ge.index) << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::BinaryExpr>& binRef) {
                     emitBinaryExprImpl(m_program[binRef], sname);
@@ -2097,7 +2338,7 @@ namespace {
                     emitArgumentPlanClones(argPlan);
                     movedValuesInStatement.insert(
                         argPlan.movedValues.begin(), argPlan.movedValues.end());
-                    m_output << "  " << llvmValueName(sname) << " = call "
+                    m_output << "  " << resolveName(sname) << " = call "
                              << callRetTy << " @" << callee << "(";
                     for (size_t ai = 0; ai < argPlan.operands.size(); ++ai) {
                         if (ai != 0) {
@@ -2110,24 +2351,24 @@ namespace {
                 [&](const yesod::Ref<koopa_ir::ConversionExpr>& convRef) {
                     const auto& conv = m_program[convRef];
                     const std::string input
-                        = emitValueOperand(conv.value, m_program);
+                        = emitValueOperandResolved(conv.value);
                     const std::string converted
                         = conv.op == koopa_ir::ConversionOp::int2mint
                         ? emitIntToMint(input)
                         : emitMintToInt(input);
-                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                    m_output << "  " << resolveName(sname) << " = add i32 "
                              << converted << ", 0\n";
                 },
                 [&](const yesod::Ref<koopa_ir::CopyExpr>& copyRef) {
                     const auto& copy = m_program[copyRef];
                     const std::string copyValueType = valueTypeOf(copy.value);
                     if (copyValueType == POLY_TYPE) {
-                        emitPolyCloneTo(llvmValueName(sname),
-                            emitValueOperand(copy.value, m_program));
+                        emitPolyCloneTo(resolveName(sname),
+                            emitValueOperandResolved(copy.value));
                     } else {
-                        m_output << "  " << llvmValueName(sname)
+                        m_output << "  " << resolveName(sname)
                                  << " = add i32 "
-                                 << emitValueOperand(copy.value, m_program)
+                                 << emitValueOperandResolved(copy.value)
                                  << ", 0\n";
                     }
                 },
@@ -2138,9 +2379,9 @@ namespace {
                         : getAttr.attr == koopa_ir::PolyAttr::addr ? 1
                         : getAttr.attr == koopa_ir::PolyAttr::l    ? 3
                                                                    : 4;
-                    m_output << "  " << llvmValueName(sname)
+                    m_output << "  " << resolveName(sname)
                              << " = extractvalue " << POLY_TYPE << " "
-                             << emitValueOperand(getAttr.value, m_program)
+                             << emitValueOperandResolved(getAttr.value)
                              << ", " << index << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::SetAttrExpr>& setAttrRef) {
@@ -2150,9 +2391,9 @@ namespace {
                         movedValuesInStatement.insert(symbol->spelling);
                     }
                     const std::string input
-                        = emitValueOperand(setAttr.value, m_program);
+                        = emitValueOperandResolved(setAttr.value);
                     const std::string value
-                        = emitValueOperand(setAttr.attrValue, m_program);
+                        = emitValueOperandResolved(setAttr.attrValue);
                     const int32_t index
                         = setAttr.attr == koopa_ir::PolyAttr::base ? 0
                         : setAttr.attr == koopa_ir::PolyAttr::addr ? 1
@@ -2163,7 +2404,7 @@ namespace {
                               || setAttr.attr == koopa_ir::PolyAttr::addr)
                         ? "ptr"
                         : "i32";
-                    m_output << "  " << llvmValueName(sname)
+                    m_output << "  " << resolveName(sname)
                              << " = insertvalue " << POLY_TYPE << " " << input
                              << ", " << valueType << " " << value << ", "
                              << index << "\n";
@@ -2174,46 +2415,46 @@ namespace {
                         = valueTypeOf(select.trueValue);
                     const std::string cond = nextHelperName("select_cond");
                     m_output << "  " << cond << " = icmp ne i32 "
-                             << emitValueOperand(select.condition, m_program)
+                             << emitValueOperandResolved(select.condition)
                              << ", 0\n";
                     const std::string raw = resultType == POLY_TYPE
                         ? nextHelperName("select_poly")
-                        : llvmValueName(sname);
+                        : resolveName(sname);
                     m_output << "  " << raw << " = select i1 " << cond << ", "
                              << resultType << " "
-                             << emitValueOperand(select.trueValue, m_program)
+                             << emitValueOperandResolved(select.trueValue)
                              << ", " << resultType << " "
-                             << emitValueOperand(select.falseValue, m_program)
+                             << emitValueOperandResolved(select.falseValue)
                              << "\n";
                     if (resultType == POLY_TYPE) {
-                        emitPolyCloneTo(llvmValueName(sname), raw);
+                        emitPolyCloneTo(resolveName(sname), raw);
                     }
                 },
                 [&](const yesod::Ref<koopa_ir::NextPow2Expr>& nextPow2Ref) {
                     const auto& nextPow2 = m_program[nextPow2Ref];
-                    m_output << "  " << llvmValueName(sname)
+                    m_output << "  " << resolveName(sname)
                              << " = call i32 @__yesod_next_pow2(i32 "
-                             << emitValueOperand(nextPow2.value, m_program)
+                             << emitValueOperandResolved(nextPow2.value)
                              << ")\n";
                 },
                 [&](const yesod::Ref<koopa_ir::NttExpr>& nttRef) {
                     const auto& ntt = m_program[nttRef];
                     const PolyFields input = emitPolyFields(
-                        emitValueOperand(ntt.value, m_program));
+                        emitValueOperandResolved(ntt.value));
                     const std::string length
-                        = emitValueOperand(ntt.length, m_program);
+                        = emitValueOperandResolved(ntt.length);
                     const std::string values = nextHelperName("pv_ntt_values");
                     m_output << "  " << values
                              << " = call ptr @__yesod_poly_ntt_data(ptr "
                              << input.coeffs << ", i32 " << input.l << ", i32 "
                              << input.r << ", i32 " << length << ")\n";
-                    emitPvFromFields(llvmValueName(sname),
+                    emitPvFromFields(resolveName(sname),
                         PvFields { .values = values, .len = length });
                 },
                 [&](const yesod::Ref<koopa_ir::PointwiseExpr>& pointwiseRef) {
                     const auto& pointwise = m_program[pointwiseRef];
                     const std::string length
-                        = emitValueOperand(pointwise.length, m_program);
+                        = emitValueOperandResolved(pointwise.length);
                     const std::string outputPv = nextHelperName("pv_fused");
                     const std::string outputValues
                         = nextHelperName("pv_values");
@@ -2258,9 +2499,9 @@ namespace {
                     m_output << "  br label %" << condLabel << "\n";
                     m_output << endLabel << ":\n";
                     const std::string activeL
-                        = emitValueOperand(pointwise.activeL, m_program);
+                        = emitValueOperandResolved(pointwise.activeL);
                     const std::string activeR
-                        = emitValueOperand(pointwise.activeR, m_program);
+                        = emitValueOperandResolved(pointwise.activeR);
                     const std::string resultAddr
                         = nextHelperName("poly_from_pv_addr");
                     m_output
@@ -2287,7 +2528,7 @@ namespace {
                              << ", i32 0, i32 " << rawN << "\n";
                     const std::string resultCoeffs
                         = emitPolyCoeffPtrForAddr(resultAddr, activeL, isEmpty);
-                    emitPolyFromFields(llvmValueName(sname),
+                    emitPolyFromFields(resolveName(sname),
                         PolyFields { .coeffs = resultCoeffs,
                             .addr = resultAddr,
                             .n = resultN,
@@ -2303,19 +2544,19 @@ namespace {
                 [&](const yesod::Ref<koopa_ir::GetCoeffExpr>& getCoeffRef) {
                     const auto& getCoeff = m_program[getCoeffRef];
                     const PolyFields input = emitPolyFields(
-                        emitValueOperand(getCoeff.value, m_program));
-                    m_output << "  " << llvmValueName(sname)
+                        emitValueOperandResolved(getCoeff.value));
+                    m_output << "  " << resolveName(sname)
                              << " = call i32 @__yesod_poly_getcoeff_data(ptr "
                              << input.coeffs << ", i32 " << input.l << ", i32 "
                              << input.r << ", i32 "
-                             << emitValueOperand(getCoeff.index, m_program)
+                             << emitValueOperandResolved(getCoeff.index)
                              << ")\n";
                 },
                 [&](const yesod::Ref<koopa_ir::PolyConstructExpr>&
                         constructRef) {
                     const auto& construct = m_program[constructRef];
                     if (construct.elements.empty()) {
-                        emitPolyZeroTo(llvmValueName(sname));
+                        emitPolyZeroTo(resolveName(sname));
                         return;
                     }
                     const std::string count
@@ -2341,7 +2582,7 @@ namespace {
                     while (constructN < construct.elements.size()) {
                         constructN <<= 1;
                     }
-                    emitPolyFromFields(llvmValueName(sname),
+                    emitPolyFromFields(resolveName(sname),
                         PolyFields { .coeffs = addr,
                             .addr = addr,
                             .n = std::to_string(constructN),
@@ -2366,7 +2607,7 @@ namespace {
             MATCH(store.value)
             WITH(
                 [&](const koopa_ir::Symbol& sv) {
-                    storeValue = llvmValueName(sv.spelling);
+                    storeValue = resolveName(sv.spelling);
                     const auto logicalIt = m_logicalTypes.find(sv.spelling);
                     storeLogicalType = logicalIt == m_logicalTypes.end()
                         ? "int"
@@ -2386,7 +2627,7 @@ namespace {
                 const std::string oldValue = nextHelperName("poly_store_old");
                 m_output << "  " << oldValue << " = load " << POLY_TYPE
                          << ", ptr "
-                         << llvmValueName(store.destination.spelling) << "\n";
+                         << resolveName(store.destination.spelling) << "\n";
                 emitOwnedValueDropByType(std::string(POLY_TYPE), oldValue);
                 storeValue = emitPolyCloneValue(storeValue);
             } else {
@@ -2405,7 +2646,7 @@ namespace {
                 }
             }
             m_output << "  store " << elemTy << " " << storeValue << ", ptr "
-                     << llvmValueName(store.destination.spelling) << "\n";
+                     << resolveName(store.destination.spelling) << "\n";
         }
 
         void emitCallStmtImpl(const koopa_ir::CallExpr& call, size_t blockIndex,
@@ -2443,9 +2684,9 @@ namespace {
             const koopa_ir::BinaryExpr& bin, const std::string& sname)
         {
             const std::string lhs_typed
-                = "i32 " + emitValueOperand(bin.lhs, m_program);
-            const std::string lhs_bare = emitValueOperand(bin.lhs, m_program);
-            const std::string rhs_bare = emitValueOperand(bin.rhs, m_program);
+                = "i32 " + emitValueOperandResolved(bin.lhs);
+            const std::string lhs_bare = emitValueOperandResolved(bin.lhs);
+            const std::string rhs_bare = emitValueOperandResolved(bin.rhs);
             const bool lhsIsMint = logicalTypeOf(bin.lhs) == "mint";
             const bool rhsIsMint = logicalTypeOf(bin.rhs) == "mint";
             const bool isMintBinary = lhsIsMint || rhsIsMint;
@@ -2461,10 +2702,10 @@ namespace {
                 if (isMintBinary) {
                     const std::string result
                         = emitMintAddSub(lhs_mint, rhs_mint, false);
-                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                    m_output << "  " << resolveName(sname) << " = add i32 "
                              << result << ", 0\n";
                 } else {
-                    m_output << "  " << llvmValueName(sname) << " = add "
+                    m_output << "  " << resolveName(sname) << " = add "
                              << lhs_typed << ", " << rhs_bare << "\n";
                 }
                 break;
@@ -2472,20 +2713,20 @@ namespace {
                 if (isMintBinary) {
                     const std::string result
                         = emitMintAddSub(lhs_mint, rhs_mint, true);
-                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                    m_output << "  " << resolveName(sname) << " = add i32 "
                              << result << ", 0\n";
                 } else {
-                    m_output << "  " << llvmValueName(sname) << " = sub "
+                    m_output << "  " << resolveName(sname) << " = sub "
                              << lhs_typed << ", " << rhs_bare << "\n";
                 }
                 break;
             case BOp::mul:
                 if (isMintBinary) {
                     const std::string result = emitMintMul(lhs_mint, rhs_mint);
-                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                    m_output << "  " << resolveName(sname) << " = add i32 "
                              << result << ", 0\n";
                 } else {
-                    m_output << "  " << llvmValueName(sname) << " = mul "
+                    m_output << "  " << resolveName(sname) << " = mul "
                              << lhs_typed << ", " << rhs_bare << "\n";
                 }
                 break;
@@ -2494,46 +2735,46 @@ namespace {
                     const std::string inverse
                         = emitMintPowConst(rhs_mint, MINT_MOD - 2);
                     const std::string result = emitMintMul(lhs_mint, inverse);
-                    m_output << "  " << llvmValueName(sname) << " = add i32 "
+                    m_output << "  " << resolveName(sname) << " = add i32 "
                              << result << ", 0\n";
                 } else {
-                    m_output << "  " << llvmValueName(sname) << " = sdiv "
+                    m_output << "  " << resolveName(sname) << " = sdiv "
                              << lhs_typed << ", " << rhs_bare << "\n";
                 }
                 break;
             case BOp::mod:
-                m_output << "  " << llvmValueName(sname) << " = srem "
+                m_output << "  " << resolveName(sname) << " = srem "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitAnd:
-                m_output << "  " << llvmValueName(sname) << " = and "
+                m_output << "  " << resolveName(sname) << " = and "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitOr:
-                m_output << "  " << llvmValueName(sname) << " = or "
+                m_output << "  " << resolveName(sname) << " = or "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitXor:
-                m_output << "  " << llvmValueName(sname) << " = xor "
+                m_output << "  " << resolveName(sname) << " = xor "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::shl:
-                m_output << "  " << llvmValueName(sname) << " = shl "
+                m_output << "  " << resolveName(sname) << " = shl "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::shr:
-                m_output << "  " << llvmValueName(sname) << " = lshr "
+                m_output << "  " << resolveName(sname) << " = lshr "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::sar:
-                m_output << "  " << llvmValueName(sname) << " = ashr "
+                m_output << "  " << resolveName(sname) << " = ashr "
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::eq: {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp eq " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2541,7 +2782,7 @@ namespace {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp ne " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2549,7 +2790,7 @@ namespace {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp sgt " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2557,7 +2798,7 @@ namespace {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp slt " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2565,7 +2806,7 @@ namespace {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp sge " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2573,7 +2814,7 @@ namespace {
                 const std::string cn = sname + "_cmp";
                 m_output << "  " << cn << " = icmp sle " << lhs_typed << ", "
                          << rhs_bare << "\n";
-                m_output << "  " << llvmValueName(sname) << " = zext i1 " << cn
+                m_output << "  " << resolveName(sname) << " = zext i1 " << cn
                          << " to i32\n";
                 break;
             }
@@ -2616,7 +2857,7 @@ namespace {
                     scaleLiteral != nullptr && scaleLiteral->value == 0) {
                     continue;
                 }
-                const std::string src = emitValueOperand(term.value, m_program);
+                const std::string src = emitValueOperandResolved(term.value);
                 const std::string srcCoeffs
                     = nextHelperName("combine_src_coeffs");
                 m_output << "  " << srcCoeffs << " = extractvalue " << POLY_TYPE
@@ -2634,9 +2875,9 @@ namespace {
                 m_output << "  " << srcR << " = extractvalue " << POLY_TYPE
                          << " " << src << ", 4\n";
                 const std::string start
-                    = emitValueOperand(term.start, m_program);
+                    = emitValueOperandResolved(term.start);
                 const std::string endValue = term.end.has_value()
-                    ? emitValueOperand(*term.end, m_program)
+                    ? emitValueOperandResolved(*term.end)
                     : std::to_string(INF_END);
                 const std::string endBeforeSrcR
                     = nextHelperName("combine_end_before_src_r");
@@ -2656,7 +2897,7 @@ namespace {
                 m_output << "  " << hasTerm << " = icmp slt i32 " << lower
                          << ", " << upper << "\n";
                 const std::string shift
-                    = emitValueOperand(term.shift, m_program);
+                    = emitValueOperandResolved(term.shift);
                 const std::string termL = nextHelperName("combine_term_l");
                 m_output << "  " << termL << " = sub i32 " << lower << ", "
                          << shift << "\n";
@@ -2733,7 +2974,7 @@ namespace {
                 });
             }
             if (termStates.empty()) {
-                emitPolyZeroTo(llvmValueName(sname));
+                emitPolyZeroTo(resolveName(sname));
                 return;
             }
             const std::string resultLen = nextHelperName("combine_result_len");
@@ -2983,7 +3224,7 @@ namespace {
                     = emitPolyCoeffPtrForAddr(resultAddr, resultL, resultEmpty);
                 resultOwnedN = resultN;
             }
-            emitPolyFromFields(llvmValueName(sname),
+            emitPolyFromFields(resolveName(sname),
                 PolyFields { .coeffs = resultCoeffs,
                     .addr = resultAddr,
                     .n = resultOwnedN,
@@ -3117,7 +3358,7 @@ namespace {
             const std::string condName
                 = "_cond_bool_" + stripPrefix(block.label.spelling);
             m_output << "  %" << condName << " = icmp ne i32 "
-                     << emitValueOperand(br.condition, m_program) << ", 0\n";
+                     << emitValueOperandResolved(br.condition) << ", 0\n";
             const auto truePlanIt = m_edgePlans.find({ blockIndex, "true" });
             const auto falsePlanIt = m_edgePlans.find({ blockIndex, "false" });
             const SymbolSet trueReleases = truePlanIt == m_edgePlans.end()
@@ -3190,7 +3431,7 @@ namespace {
             if (ret.value.has_value()) {
                 const std::string valueType = valueTypeOf(*ret.value);
                 m_output << "  ret " << valueType << " "
-                         << emitValueOperand(*ret.value, m_program) << "\n";
+                         << emitValueOperandResolved(*ret.value) << "\n";
             } else {
                 m_output << "  ret void\n";
             }
@@ -3199,9 +3440,9 @@ namespace {
 
     void emitFunctionDef(const koopa_ir::FunctionDef& function,
         const koopa_ir::Program& program, const FuncSigMap& sigs,
-        std::ostream& output)
+        std::ostream& output, NameAllocator* alloc = nullptr)
     {
-        FunctionEmitter emitter(function, program, sigs, output);
+        FunctionEmitter emitter(function, program, sigs, output, alloc);
         emitter.emit();
     }
 
@@ -3214,6 +3455,36 @@ void LlvmGenerator::generate(
 {
     emitModuleHeader(output);
     const FuncSigMap sigs = buildFuncSigMap(program);
+
+    // In minified mode, build a single shared name allocator.
+    NameAllocator nameAlloc;
+    NameAllocator* alloc = m_minify ? &nameAlloc : nullptr;
+
+    if (alloc) {
+        // Reserve externally-visible names (function names, global names)
+        // so they are not reused as minified local names.
+        for (const auto& item : program.items) {
+            std::visit(
+                [&](auto itemRef) {
+                    using Item
+                        = std::remove_cvref_t<decltype(program[itemRef])>;
+                    if constexpr (std::same_as<Item,
+                                      koopa_ir::GlobalMemoryDef>) {
+                        alloc->reservePermanent(
+                            stripPrefix(program[itemRef].name.spelling));
+                    } else if constexpr (std::same_as<Item,
+                                             koopa_ir::FunctionDecl>) {
+                        alloc->reservePermanent(
+                            stripPrefix(program[itemRef].name.spelling));
+                    } else if constexpr (std::same_as<Item,
+                                             koopa_ir::FunctionDef>) {
+                        alloc->reservePermanent(
+                            stripPrefix(program[itemRef].name.spelling));
+                    }
+                },
+                item);
+        }
+    }
 
     // Emit globals and function declarations first.
     for (const auto& item : program.items) {
@@ -3236,7 +3507,8 @@ void LlvmGenerator::generate(
             [&](auto itemRef) {
                 using Item = std::remove_cvref_t<decltype(program[itemRef])>;
                 if constexpr (std::same_as<Item, koopa_ir::FunctionDef>) {
-                    emitFunctionDef(program[itemRef], program, sigs, output);
+                    emitFunctionDef(
+                        program[itemRef], program, sigs, output, alloc);
                 }
             },
             item);

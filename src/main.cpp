@@ -129,14 +129,20 @@ bool writeTextFile(const std::string& path, const std::string& contents)
 struct TempFile {
     explicit TempFile(const std::string& suffix)
     {
-        std::string pattern = "/tmp/yesod_compiler_XXXXXX" + suffix;
+        const char* tmpDir = std::getenv("TMPDIR");
+        if (!tmpDir || tmpDir[0] == '\0') {
+            tmpDir = "/tmp";
+        }
+        std::string pattern
+            = std::string(tmpDir) + "/yesod_compiler_XXXXXX" + suffix;
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
 
         const int fd
             = ::mkstemps(buffer.data(), static_cast<int>(suffix.size()));
         if (fd == -1) {
-            throw std::runtime_error("failed to create temporary file");
+            throw std::runtime_error(
+                "failed to create temporary file in " + std::string(tmpDir));
         }
         ::close(fd);
         m_path = buffer.data();
@@ -479,10 +485,12 @@ bool writeKoopaProgramToFile(
 }
 
 bool writeLlvmProgramToFile(
-    const koopa_ir::Program& program, const std::string& path)
+    const koopa_ir::Program& program, const std::string& path,
+    bool minify = false)
 {
     std::ostringstream output;
     yesod::backend::LlvmGenerator generator;
+    generator.setMinify(minify);
     generator.generate(program, output);
     auto llvmModule = output.str();
 
@@ -504,13 +512,139 @@ bool writeLlvmProgramToFile(
     return writeTextFile(path, llvmModule);
 }
 
+// ─── C export helpers ────────────────────────────────────────────────
+
+constexpr std::string_view kSysyBuiltinSource = R"(#include <stdio.h>
+#include <stdlib.h>
+
+int getint() {
+    int x;
+    if (scanf("%d", &x) != 1) return 0;
+    return x;
+}
+
+int getch() {
+    int c = getchar();
+    return c == EOF ? -1 : c;
+}
+
+int getarray(int a[]) {
+    int n;
+    scanf("%d", &n);
+    for (int i = 0; i < n; ++i) {
+        scanf("%d", &a[i]);
+    }
+    return n;
+}
+
+void putint(int x) {
+    printf("%d", x);
+}
+
+void putch(int x) {
+    putchar(x);
+}
+
+void putarray(int n, int a[]) {
+    for (int i = 0; i < n; ++i) {
+        if (i != 0) putchar(' ');
+        printf("%d", a[i]);
+    }
+}
+
+void starttime() {}
+void stoptime() {}
+)";
+
+bool exportCProgram(const koopa_ir::Program& program,
+    const std::string& outputPath)
+{
+    // Step 1: Generate minified LLVM IR to a temp file
+    TempFile llvmFile(".ll");
+    if (!writeLlvmProgramToFile(program, llvmFile.path(), true)) {
+        std::cerr << "failed to generate minified LLVM IR" << std::endl;
+        return false;
+    }
+
+    // Step 2: Decompile to C using llvm-cbe
+    TempFile cFile(".cbe.c");
+    const std::string decompileCmd = "llvm-cbe " + llvmFile.path() + " -o "
+        + cFile.path();
+    if (!runCommand(decompileCmd)) {
+        std::cerr << "llvm-cbe failed" << std::endl;
+        return false;
+    }
+
+    // Step 3: Read the decompiled C code and strip conflicting declarations
+    std::string cCode = readTextFile(cFile.path());
+    {
+        // llvm-cbe may redeclare our builtin functions with different types.
+        // Strip those redeclarations and the `typedef bool` (conflicts with C23).
+        std::istringstream input(cCode);
+        std::ostringstream cleaned;
+        std::string line;
+        while (std::getline(input, line)) {
+            // Strip the problematic `typedef unsigned char bool;`
+            if (line.find("typedef unsigned char bool") != std::string::npos) {
+                continue;
+            }
+            // Skip the sysy builtin redeclarations from llvm-cbe
+            if (line.rfind("void putint(") == 0
+                || line.rfind("void putch(") == 0
+                || line.rfind("uint32_t getint") == 0
+                || line.rfind("uint32_t getch") == 0
+                || line.rfind("uint32_t getarray") == 0
+                || line.rfind("void putarray(") == 0
+                || line.rfind("void starttime(") == 0
+                || line.rfind("void stoptime(") == 0) {
+                continue;
+            }
+            cleaned << line << '\n';
+        }
+        cCode = cleaned.str();
+        // Remove the now-empty `#ifndef __cplusplus` ... `#endif` block
+        // left behind after stripping the bool typedef
+        {
+            const std::string marker = "#ifndef __cplusplus\n#endif";
+            for (auto pos = cCode.find(marker); pos != std::string::npos;
+                 pos = cCode.find(marker)) {
+                cCode.erase(pos, marker.size());
+            }
+        }
+    }
+
+    // Step 4: Build the output with runtime headers prepended
+    std::ostringstream output;
+
+    // SysY builtin functions
+    output << kSysyBuiltinSource << "\n\n";
+
+    // Mint runtime (if needed)
+    if (programUsesMintRuntime(program)) {
+        output << "// ── Mint runtime ─────────────────────────────────\n";
+        output << kMintRuntimeSource << "\n\n";
+    }
+
+    // Poly runtime (if needed)
+    if (programUsesPolyRuntime(program)) {
+        output << "// ── Poly runtime ─────────────────────────────────\n";
+        output << yesod::backend::LLVM_POLY_RUNTIME_SOURCE << "\n\n";
+    }
+
+    // The decompiled C code
+    output << cCode;
+
+    return writeTextFile(outputPath, output.str());
+}
+
 } // namespace
 
 int main(int argc, const char* argv[])
 {
     if (argc != 5 || std::string(argv[3]) != "-o") {
         std::cerr << "Usage: " << argv[0] << " <mode> <input> -o <output>"
-                  << std::endl;
+                  << std::endl
+                  << "Modes: -koopa, -llvm, -llvm-mini, -c" << std::endl;
         return 1;
     }
 
@@ -518,7 +652,8 @@ int main(int argc, const char* argv[])
     const std::string inputPath = argv[2];
     const std::string outputPath = argv[4];
 
-    if (mode != "-koopa" && mode != "-llvm") {
+    if (mode != "-koopa" && mode != "-llvm" && mode != "-llvm-mini"
+        && mode != "-c") {
         std::cerr << "unsupported mode: " << mode << std::endl;
         return 1;
     }
@@ -578,11 +713,28 @@ int main(int argc, const char* argv[])
                 std::cerr << "failed to generate koopa IR" << std::endl;
                 return 1;
             }
+        } else if (mode == "-llvm-mini") {
+            Generator generator;
+            auto program = generator.generateIr(semanticOutput.m_ast,
+                semanticOutput.m_root, semanticOutput.m_info);
+            if (!writeLlvmProgramToFile(*program, outputPath, true)) {
+                std::cerr << "failed to generate minified LLVM IR"
+                          << std::endl;
+                return 1;
+            }
+        } else if (mode == "-c") {
+            Generator generator;
+            auto program = generator.generateIr(semanticOutput.m_ast,
+                semanticOutput.m_root, semanticOutput.m_info);
+            if (!exportCProgram(*program, outputPath)) {
+                std::cerr << "failed to export C program" << std::endl;
+                return 1;
+            }
         } else {
             Generator generator;
             auto program = generator.generateIr(semanticOutput.m_ast,
                 semanticOutput.m_root, semanticOutput.m_info);
-            if (!writeLlvmProgramToFile(*program, outputPath)) {
+            if (!writeLlvmProgramToFile(*program, outputPath, false)) {
                 std::cerr << "failed to generate LLVM IR" << std::endl;
                 return 1;
             }

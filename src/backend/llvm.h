@@ -13,8 +13,14 @@ class LlvmGenerator {
   public:
     LlvmGenerator() = default;
 
+    void setMinify(bool v) { m_minify = v; }
+    bool isMinify() const { return m_minify; }
+
     void generate(const yesod::koopa::ir::Program& program,
         std::ostream& output);
+
+  private:
+    bool m_minify = false;
 };
 
 } // namespace yesod::backend
