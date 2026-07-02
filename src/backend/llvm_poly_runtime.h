@@ -97,7 +97,7 @@ static int __yesod_rt_mint_inv(int value) {
     return __yesod_rt_mint_pow(value, MOD - 2);
 }
 
-static int *__yesod_rt_alloc_ints(int count) {
+__attribute__((used)) int *__yesod_rt_alloc_ints(int count) {
     if (count <= 0) {
         return (int *)0;
     }

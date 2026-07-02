@@ -692,28 +692,6 @@ namespace {
                 });
         }
 
-        [[nodiscard]] koopa_ir::Value emitPointwise(
-            Ref<koopa_ir::PointwiseNode> root)
-        {
-            const auto activeInterval = emitPointwiseInterval(root);
-            const auto nonzeroInterval = activeInterval;
-            const auto length
-                = emitPointwiseLength(nonzeroInterval, activeInterval);
-            const auto loweredRoot = emitNttPointwiseNode(root, length);
-            auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
-                koopa_ir::PointwiseExpr {
-                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
-                    .length = length,
-                    .activeL = activeInterval.l,
-                    .activeR = activeInterval.r,
-                    .root = loweredRoot,
-                    .annotations = { },
-                });
-            return attachPolyIntervals(
-                emitNamedRhs(rhsRef, makeTempName(m_nextTempId)),
-                nonzeroInterval, activeInterval);
-        }
-
         struct PolyInterval {
             koopa_ir::Value l;
             koopa_ir::Value r;
@@ -846,6 +824,17 @@ namespace {
             return selectInterval(lhsEmpty, rhs, merged);
         }
 
+        [[nodiscard]] PolyInterval intersectIntervals(
+            const PolyInterval& lhs, const PolyInterval& rhs)
+        {
+            auto intersection = PolyInterval {
+                .l = emitIntMax(lhs.l, rhs.l),
+                .r = emitIntMin(lhs.r, rhs.r),
+            };
+            return selectInterval(
+                emitIntervalEmpty(intersection), emptyInterval(), intersection);
+        }
+
         [[nodiscard]] PolyInterval mulIntervals(
             const PolyInterval& lhs, const PolyInterval& rhs)
         {
@@ -861,6 +850,30 @@ namespace {
             };
             return selectInterval(
                 std::move(eitherEmpty), emptyInterval(), product);
+        }
+
+        [[nodiscard]] PolyInterval lhsIntervalForProduct(
+            const PolyInterval& activeInterval, const PolyInterval& rhs)
+        {
+            auto needed = PolyInterval {
+                .l = emitIntSub(
+                    emitIntAdd(activeInterval.l, intLiteral(1)), rhs.r),
+                .r = emitIntSub(activeInterval.r, rhs.l),
+            };
+            return selectInterval(
+                emitIntervalEmpty(needed), emptyInterval(), needed);
+        }
+
+        [[nodiscard]] PolyInterval rhsIntervalForProduct(
+            const PolyInterval& activeInterval, const PolyInterval& lhs)
+        {
+            auto needed = PolyInterval {
+                .l = emitIntSub(
+                    emitIntAdd(activeInterval.l, intLiteral(1)), lhs.r),
+                .r = emitIntSub(activeInterval.r, lhs.l),
+            };
+            return selectInterval(
+                emitIntervalEmpty(needed), emptyInterval(), needed);
         }
 
         [[nodiscard]] koopa_ir::Value emitPointwiseLength(
@@ -930,8 +943,99 @@ namespace {
                 });
         }
 
+        [[nodiscard]] PolyInterval emitPointwiseEffectiveInterval(
+            Ref<koopa_ir::PointwiseNode> nodeRef,
+            const std::optional<PolyInterval>& requiredInterval)
+        {
+            const auto& node = (*m_program)[nodeRef];
+            return MATCH(node.kind) WITH(
+                [&](const koopa_ir::PointwiseLeaf& leaf) -> PolyInterval {
+                    if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
+                        return emptyInterval();
+                    }
+                    const auto fullInterval = polyActiveInterval(leaf.value);
+                    if (!requiredInterval.has_value()) {
+                        return fullInterval;
+                    }
+                    return intersectIntervals(fullInterval, *requiredInterval);
+                },
+                [&](const koopa_ir::PointwiseBinary& binary) -> PolyInterval {
+                    const auto lhsFullInterval
+                        = emitPointwiseInterval(binary.lhs);
+                    if (binary.op == koopa_ir::PvBinaryOp::times) {
+                        const auto lhsRequiredInterval
+                            = requiredInterval.has_value()
+                            ? std::optional<PolyInterval> { intersectIntervals(
+                                  lhsFullInterval, *requiredInterval) }
+                            : std::nullopt;
+                        return emitPointwiseEffectiveInterval(
+                            binary.lhs, lhsRequiredInterval);
+                    }
+
+                    const auto rhsFullInterval
+                        = emitPointwiseInterval(binary.rhs);
+                    std::optional<PolyInterval> lhsRequiredInterval
+                        = std::nullopt;
+                    std::optional<PolyInterval> rhsRequiredInterval
+                        = std::nullopt;
+                    if (requiredInterval.has_value()) {
+                        switch (binary.op) {
+                        case koopa_ir::PvBinaryOp::add:
+                        case koopa_ir::PvBinaryOp::sub:
+                            break;
+                        case koopa_ir::PvBinaryOp::mul:
+                            lhsRequiredInterval
+                                = intersectIntervals(lhsFullInterval,
+                                    lhsIntervalForProduct(
+                                        *requiredInterval, rhsFullInterval));
+                            rhsRequiredInterval
+                                = intersectIntervals(rhsFullInterval,
+                                    rhsIntervalForProduct(
+                                        *requiredInterval, lhsFullInterval));
+                            break;
+                        case koopa_ir::PvBinaryOp::times:
+                            break;
+                        }
+                    }
+
+                    const auto lhsEffectiveInterval
+                        = emitPointwiseEffectiveInterval(
+                            binary.lhs, lhsRequiredInterval);
+                    const auto rhsEffectiveInterval
+                        = emitPointwiseEffectiveInterval(
+                            binary.rhs, rhsRequiredInterval);
+                    switch (binary.op) {
+                    case koopa_ir::PvBinaryOp::add:
+                    case koopa_ir::PvBinaryOp::sub:
+                        return addIntervals(
+                            lhsEffectiveInterval, rhsEffectiveInterval);
+                    case koopa_ir::PvBinaryOp::mul:
+                        return mulIntervals(
+                            lhsEffectiveInterval, rhsEffectiveInterval);
+                    case koopa_ir::PvBinaryOp::times:
+                        return lhsEffectiveInterval;
+                    }
+                    return emptyInterval();
+                });
+        }
+
+        [[nodiscard]] koopa_ir::Value emitPolySliceForInterval(
+            koopa_ir::Value value, const PolyInterval& interval)
+        {
+            return emitCombine({ koopa_ir::CombineTerm {
+                .value = std::move(value),
+                .start = interval.l,
+                .end = interval.r,
+                .shift
+                = koopa_ir::IntegerLiteral { .sourcePos = { }, .value = 0 },
+                .scale
+                = koopa_ir::IntegerLiteral { .sourcePos = { }, .value = 1 },
+            } });
+        }
+
         [[nodiscard]] Ref<koopa_ir::PointwiseNode> emitNttPointwiseNode(
-            Ref<koopa_ir::PointwiseNode> nodeRef, const koopa_ir::Value& length)
+            Ref<koopa_ir::PointwiseNode> nodeRef, const koopa_ir::Value& length,
+            const std::optional<PolyInterval>& requiredInterval)
         {
             const auto& node = (*m_program)[nodeRef];
             return MATCH(node.kind) WITH(
@@ -941,15 +1045,94 @@ namespace {
                         return makePointwiseLeaf(
                             leaf.value, koopa_ir::PointwiseLeafKind::mint);
                     }
-                    return makePointwiseLeaf(emitNtt(leaf.value, length),
+                    koopa_ir::Value value = leaf.value;
+                    if (requiredInterval.has_value()) {
+                        value = emitPolySliceForInterval(
+                            std::move(value), *requiredInterval);
+                    }
+                    return makePointwiseLeaf(emitNtt(std::move(value), length),
                         koopa_ir::PointwiseLeafKind::pointValue);
                 },
                 [&](const koopa_ir::PointwiseBinary& binary)
                     -> Ref<koopa_ir::PointwiseNode> {
+                    const auto lhsFullInterval
+                        = emitPointwiseInterval(binary.lhs);
+                    if (binary.op == koopa_ir::PvBinaryOp::times) {
+                        const auto lhsRequiredInterval
+                            = requiredInterval.has_value()
+                            ? std::optional<PolyInterval> { intersectIntervals(
+                                  lhsFullInterval, *requiredInterval) }
+                            : std::nullopt;
+                        return makePointwiseBinary(binary.op,
+                            emitNttPointwiseNode(
+                                binary.lhs, length, lhsRequiredInterval),
+                            emitNttPointwiseNode(
+                                binary.rhs, length, std::nullopt));
+                    }
+
+                    const auto rhsFullInterval
+                        = emitPointwiseInterval(binary.rhs);
+                    std::optional<PolyInterval> lhsRequiredInterval
+                        = std::nullopt;
+                    std::optional<PolyInterval> rhsRequiredInterval
+                        = std::nullopt;
+                    if (requiredInterval.has_value()) {
+                        switch (binary.op) {
+                        case koopa_ir::PvBinaryOp::add:
+                        case koopa_ir::PvBinaryOp::sub:
+                            break;
+                        case koopa_ir::PvBinaryOp::mul:
+                            lhsRequiredInterval
+                                = intersectIntervals(lhsFullInterval,
+                                    lhsIntervalForProduct(
+                                        *requiredInterval, rhsFullInterval));
+                            rhsRequiredInterval
+                                = intersectIntervals(rhsFullInterval,
+                                    rhsIntervalForProduct(
+                                        *requiredInterval, lhsFullInterval));
+                            break;
+                        case koopa_ir::PvBinaryOp::times:
+                            break;
+                        }
+                    }
                     return makePointwiseBinary(binary.op,
-                        emitNttPointwiseNode(binary.lhs, length),
-                        emitNttPointwiseNode(binary.rhs, length));
+                        emitNttPointwiseNode(
+                            binary.lhs, length, lhsRequiredInterval),
+                        emitNttPointwiseNode(
+                            binary.rhs, length, rhsRequiredInterval));
                 });
+        }
+
+        [[nodiscard]] koopa_ir::Value emitPointwise(
+            Ref<koopa_ir::PointwiseNode> root,
+            std::optional<PolyInterval> requestedInterval = std::nullopt)
+        {
+            const auto nonzeroInterval = emitPointwiseInterval(root);
+            const auto activeInterval = requestedInterval.has_value()
+                ? intersectIntervals(nonzeroInterval, *requestedInterval)
+                : nonzeroInterval;
+            const auto effectiveNonzeroInterval
+                = emitPointwiseEffectiveInterval(root, requestedInterval);
+            const auto length
+                = emitPointwiseLength(effectiveNonzeroInterval, activeInterval);
+            const auto loweredRequiredInterval = requestedInterval.has_value()
+                ? std::optional<PolyInterval> { intersectIntervals(
+                      nonzeroInterval, *requestedInterval) }
+                : std::nullopt;
+            const auto loweredRoot
+                = emitNttPointwiseNode(root, length, loweredRequiredInterval);
+            auto rhsRef = m_program->alloc<koopa_ir::PointwiseExpr>(
+                koopa_ir::PointwiseExpr {
+                    .sourcePos = koopa_ir::SourcePos { m_currentExpressionId },
+                    .length = length,
+                    .activeL = activeInterval.l,
+                    .activeR = activeInterval.r,
+                    .root = loweredRoot,
+                    .annotations = { },
+                });
+            return attachPolyIntervals(
+                emitNamedRhs(rhsRef, makeTempName(m_nextTempId)),
+                nonzeroInterval, activeInterval);
         }
 
         [[nodiscard]] koopa_ir::Value attachPolyIntervals(koopa_ir::Value value,
@@ -1540,6 +1723,21 @@ namespace {
                 generatePointwiseNode(binaryExp.rhs)));
         }
 
+        [[nodiscard]] bool isPointwiseExpression(Ref<Exp> exp) const
+        {
+            const auto& parsedExp = exp(m_ast);
+            if (canBuildPointwise(exp)) {
+                return true;
+            }
+            if (const auto* binary = std::get_if<Exp::Binary>(&parsedExp.kind);
+                binary != nullptr && binary->op == BinaryOpKeyword::star
+                && expHasType(binary->lhs, SemanticTypeKind::poly)
+                && expHasType(binary->rhs, SemanticTypeKind::poly)) {
+                return true;
+            }
+            return false;
+        }
+
         [[nodiscard]] koopa_ir::Value generatePolyBaseValue(Ref<Exp> exp)
         {
             const auto& parsedExp = exp(m_ast);
@@ -1590,12 +1788,21 @@ namespace {
                 [&](Exp::Slice expAlt) -> koopa_ir::Value {
                     const int32_t previousExpressionId = m_currentExpressionId;
                     m_currentExpressionId = 0;
-                    auto baseValue = generatePolyExpression(expAlt.base);
+                    auto start = generateExp(expAlt.start);
+                    auto end = generateExp(expAlt.end);
+                    std::optional<PolyInterval> requestedInterval
+                        = std::nullopt;
+                    if (isPointwiseExpression(expAlt.base)) {
+                        requestedInterval
+                            = PolyInterval { .l = start, .r = end };
+                    }
+                    auto baseValue = generatePolyExpression(
+                        expAlt.base, requestedInterval);
                     m_currentExpressionId = m_nextExpressionId++;
                     auto result = emitCombine({ koopa_ir::CombineTerm {
                         .value = std::move(baseValue),
-                        .start = generateExp(expAlt.start),
-                        .end = generateExp(expAlt.end),
+                        .start = std::move(start),
+                        .end = std::move(end),
                         .shift = koopa_ir::IntegerLiteral { .sourcePos = { },
                             .value = 0 },
                         .scale = koopa_ir::IntegerLiteral { .sourcePos = { },
@@ -1709,7 +1916,8 @@ namespace {
                 });
         }
 
-        [[nodiscard]] koopa_ir::Value generatePolyExpression(Ref<Exp> exp)
+        [[nodiscard]] koopa_ir::Value generatePolyExpression(Ref<Exp> exp,
+            std::optional<PolyInterval> requestedInterval = std::nullopt)
         {
             const bool ownsExpressionScope = m_currentExpressionId == 0;
             const int32_t previousExpressionId = m_currentExpressionId;
@@ -1718,7 +1926,7 @@ namespace {
                 m_currentExpressionId = m_nextExpressionId++;
             }
 
-            auto result = generatePolyExpressionBody(exp);
+            auto result = generatePolyExpressionBody(exp, requestedInterval);
             if (ownsExpressionScope) {
                 koopa_ir::simplifyLocalValues(*m_program, currentBlock(),
                     firstStatementIndex, { result });
@@ -1727,17 +1935,23 @@ namespace {
             return result;
         }
 
-        [[nodiscard]] koopa_ir::Value generatePolyExpressionBody(Ref<Exp> exp)
+        [[nodiscard]] koopa_ir::Value generatePolyExpressionBody(
+            Ref<Exp> exp, const std::optional<PolyInterval>& requestedInterval)
         {
             const auto& parsedExp = exp(m_ast);
             if (canBuildPointwise(exp)) {
-                return emitPointwise(generatePointwiseNode(exp));
+                return emitPointwise(
+                    generatePointwiseNode(exp), requestedInterval);
             }
             if (const auto* binary = std::get_if<Exp::Binary>(&parsedExp.kind);
                 binary != nullptr && binary->op == BinaryOpKeyword::star
                 && expHasType(binary->lhs, SemanticTypeKind::poly)
                 && expHasType(binary->rhs, SemanticTypeKind::poly)) {
-                return generatePolyConvolution(*binary);
+                return emitPointwise(
+                    makePointwiseBinary(koopa_ir::PvBinaryOp::mul,
+                        generatePointwiseNode(binary->lhs),
+                        generatePointwiseNode(binary->rhs)),
+                    requestedInterval);
             }
             if (std::holds_alternative<Exp::Cast>(parsedExp.kind)
                 || std::holds_alternative<Exp::Call>(parsedExp.kind)

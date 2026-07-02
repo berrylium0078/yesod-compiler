@@ -2595,6 +2595,7 @@ namespace {
                 std::string scale;
                 std::string sourceSymbol;
                 bool reuseCandidate = false;
+                int reuseCandidateId = -1;
             };
             std::map<std::string, int> sourceUseCounts;
             for (const auto& term : combine.terms) {
@@ -2608,7 +2609,7 @@ namespace {
             std::string resultL = "0";
             std::string resultR = "0";
             std::string hasAny = "false";
-            int reuseCandidateIndex = -1;
+            int nextReuseCandidateId = 0;
             for (const auto& term : combine.terms) {
                 if (const auto* scaleLiteral
                     = std::get_if<koopa_ir::IntegerLiteral>(&term.scale);
@@ -2716,9 +2717,8 @@ namespace {
                         && !m_ownership.liveAfterStmt[blockIndex][stmtIndex]
                                 .contains(sourceSymbol);
                 }
-                if (canBeReuseCandidate && reuseCandidateIndex < 0) {
-                    reuseCandidateIndex = static_cast<int>(termStates.size());
-                }
+                const int reuseCandidateId
+                    = canBeReuseCandidate ? nextReuseCandidateId++ : -1;
                 termStates.push_back(CombineTermState {
                     .srcCoeffs = srcCoeffs,
                     .srcAddr = srcAddr,
@@ -2728,9 +2728,8 @@ namespace {
                     .shift = shift,
                     .scale = emitMintOperand(term.scale),
                     .sourceSymbol = sourceSymbol,
-                    .reuseCandidate = canBeReuseCandidate
-                        && reuseCandidateIndex
-                            == static_cast<int>(termStates.size()),
+                    .reuseCandidate = canBeReuseCandidate,
+                    .reuseCandidateId = reuseCandidateId,
                 });
             }
             if (termStates.empty()) {
@@ -2790,26 +2789,15 @@ namespace {
             std::string resultCoeffs;
             std::string resultOwnedN;
             std::string reusedCandidateFlag = "false";
-            if (reuseCandidateIndex >= 0) {
-                const CombineTermState& candidate
-                    = termStates[static_cast<size_t>(reuseCandidateIndex)];
-                movedValuesInStatement.insert(candidate.sourceSymbol);
-                const std::string coeffsInt
-                    = nextHelperName("combine_reuse_coeffs_i");
-                const std::string addrInt
-                    = nextHelperName("combine_reuse_addr_i");
-                m_output << "  " << coeffsInt << " = ptrtoint ptr "
-                         << candidate.srcCoeffs << " to i64\n";
-                m_output << "  " << addrInt << " = ptrtoint ptr "
-                         << candidate.srcAddr << " to i64\n";
-                const std::string byteOffset
-                    = nextHelperName("combine_reuse_byte_offset");
-                m_output << "  " << byteOffset << " = sub i64 " << coeffsInt
-                         << ", " << addrInt << "\n";
-                const std::string elemOffset
-                    = nextHelperName("combine_reuse_elem_offset");
-                m_output << "  " << elemOffset << " = sdiv i64 " << byteOffset
-                         << ", 4\n";
+            std::string selectedCandidateId = "-1";
+            std::vector<const CombineTermState*> reuseCandidates;
+            for (const auto& term : termStates) {
+                if (term.reuseCandidate) {
+                    reuseCandidates.push_back(&term);
+                    movedValuesInStatement.insert(term.sourceSymbol);
+                }
+            }
+            if (!reuseCandidates.empty()) {
                 const std::string resultL64
                     = nextHelperName("combine_reuse_l64");
                 m_output << "  " << resultL64 << " = sext i32 " << resultL
@@ -2818,48 +2806,150 @@ namespace {
                     = nextHelperName("combine_reuse_r64");
                 m_output << "  " << resultR64 << " = sext i32 " << resultR
                          << " to i64\n";
-                const std::string resultBeginOffset
-                    = nextHelperName("combine_reuse_begin");
-                m_output << "  " << resultBeginOffset << " = add i64 "
-                         << elemOffset << ", " << resultL64 << "\n";
-                const std::string resultEndOffset
-                    = nextHelperName("combine_reuse_end");
-                m_output << "  " << resultEndOffset << " = add i64 "
-                         << elemOffset << ", " << resultR64 << "\n";
-                const std::string srcN64 = nextHelperName("combine_reuse_n64");
-                m_output << "  " << srcN64 << " = sext i32 " << candidate.srcN
-                         << " to i64\n";
-                const std::string beginInBounds
-                    = nextHelperName("combine_reuse_begin_ok");
-                m_output << "  " << beginInBounds << " = icmp sge i64 "
-                         << resultBeginOffset << ", 0\n";
-                const std::string endInBounds
-                    = nextHelperName("combine_reuse_end_ok");
-                m_output << "  " << endInBounds << " = icmp sle i64 "
-                         << resultEndOffset << ", " << srcN64 << "\n";
-                const std::string capacityOk
-                    = nextHelperName("combine_reuse_capacity");
-                m_output << "  " << capacityOk << " = and i1 " << beginInBounds
-                         << ", " << endInBounds << "\n";
                 const std::string notEmpty
                     = nextHelperName("combine_reuse_not_empty");
                 m_output << "  " << notEmpty << " = icmp slt i32 " << resultL
                          << ", " << resultR << "\n";
-                const std::string canReuse
-                    = nextHelperName("combine_can_reuse");
-                m_output << "  " << canReuse << " = and i1 " << capacityOk
-                         << ", " << notEmpty << "\n";
+
+                std::string bestLength = "0";
+                std::string selectedAddr = reuseCandidates.front()->srcAddr;
+                std::string selectedCoeffs = reuseCandidates.front()->srcCoeffs;
+                std::string selectedN = reuseCandidates.front()->srcN;
+                std::string selectedLower = reuseCandidates.front()->lower;
+                std::string selectedUpper = reuseCandidates.front()->upper;
+                for (const CombineTermState* candidate : reuseCandidates) {
+                    const std::string coeffsInt
+                        = nextHelperName("combine_reuse_coeffs_i");
+                    const std::string addrInt
+                        = nextHelperName("combine_reuse_addr_i");
+                    m_output << "  " << coeffsInt << " = ptrtoint ptr "
+                             << candidate->srcCoeffs << " to i64\n";
+                    m_output << "  " << addrInt << " = ptrtoint ptr "
+                             << candidate->srcAddr << " to i64\n";
+                    const std::string byteOffset
+                        = nextHelperName("combine_reuse_byte_offset");
+                    m_output << "  " << byteOffset << " = sub i64 " << coeffsInt
+                             << ", " << addrInt << "\n";
+                    const std::string elemOffset
+                        = nextHelperName("combine_reuse_elem_offset");
+                    m_output << "  " << elemOffset << " = sdiv i64 "
+                             << byteOffset << ", 4\n";
+                    const std::string resultBeginOffset
+                        = nextHelperName("combine_reuse_begin");
+                    m_output << "  " << resultBeginOffset << " = add i64 "
+                             << elemOffset << ", " << resultL64 << "\n";
+                    const std::string resultEndOffset
+                        = nextHelperName("combine_reuse_end");
+                    m_output << "  " << resultEndOffset << " = add i64 "
+                             << elemOffset << ", " << resultR64 << "\n";
+                    const std::string srcN64
+                        = nextHelperName("combine_reuse_n64");
+                    m_output << "  " << srcN64 << " = sext i32 "
+                             << candidate->srcN << " to i64\n";
+                    const std::string beginInBounds
+                        = nextHelperName("combine_reuse_begin_ok");
+                    m_output << "  " << beginInBounds << " = icmp sge i64 "
+                             << resultBeginOffset << ", 0\n";
+                    const std::string endInBounds
+                        = nextHelperName("combine_reuse_end_ok");
+                    m_output << "  " << endInBounds << " = icmp sle i64 "
+                             << resultEndOffset << ", " << srcN64 << "\n";
+                    const std::string capacityOk
+                        = nextHelperName("combine_reuse_capacity");
+                    m_output << "  " << capacityOk << " = and i1 "
+                             << beginInBounds << ", " << endInBounds << "\n";
+                    const std::string activeLength
+                        = nextHelperName("combine_reuse_active_len");
+                    m_output << "  " << activeLength << " = sub i32 "
+                             << candidate->upper << ", " << candidate->lower
+                             << "\n";
+                    const std::string hasActive
+                        = nextHelperName("combine_reuse_has_active");
+                    m_output << "  " << hasActive << " = icmp sgt i32 "
+                             << activeLength << ", 0\n";
+                    const std::string capacityAndNotEmpty
+                        = nextHelperName("combine_reuse_nonempty_capacity");
+                    m_output << "  " << capacityAndNotEmpty << " = and i1 "
+                             << capacityOk << ", " << notEmpty << "\n";
+                    const std::string canReuse
+                        = nextHelperName("combine_can_reuse");
+                    m_output << "  " << canReuse << " = and i1 "
+                             << capacityAndNotEmpty << ", " << hasActive
+                             << "\n";
+                    const std::string longer
+                        = nextHelperName("combine_reuse_longer");
+                    m_output << "  " << longer << " = icmp sgt i32 "
+                             << activeLength << ", " << bestLength << "\n";
+                    const std::string shouldSelect
+                        = nextHelperName("combine_reuse_select");
+                    m_output << "  " << shouldSelect << " = and i1 " << canReuse
+                             << ", " << longer << "\n";
+
+                    const std::string nextSelectedId
+                        = nextHelperName("combine_selected_id");
+                    m_output << "  " << nextSelectedId << " = select i1 "
+                             << shouldSelect << ", i32 "
+                             << candidate->reuseCandidateId << ", i32 "
+                             << selectedCandidateId << "\n";
+                    selectedCandidateId = nextSelectedId;
+                    const std::string nextBestLength
+                        = nextHelperName("combine_reuse_best_len");
+                    m_output << "  " << nextBestLength << " = select i1 "
+                             << shouldSelect << ", i32 " << activeLength
+                             << ", i32 " << bestLength << "\n";
+                    bestLength = nextBestLength;
+
+                    const std::string selectedThis
+                        = nextHelperName("combine_reuse_selected_this");
+                    m_output << "  " << selectedThis << " = icmp eq i32 "
+                             << selectedCandidateId << ", "
+                             << candidate->reuseCandidateId << "\n";
+                    const std::string nextSelectedAddr
+                        = nextHelperName("combine_selected_addr");
+                    m_output << "  " << nextSelectedAddr << " = select i1 "
+                             << selectedThis << ", ptr " << candidate->srcAddr
+                             << ", ptr " << selectedAddr << "\n";
+                    selectedAddr = nextSelectedAddr;
+                    const std::string nextSelectedCoeffs
+                        = nextHelperName("combine_selected_coeffs");
+                    m_output << "  " << nextSelectedCoeffs << " = select i1 "
+                             << selectedThis << ", ptr " << candidate->srcCoeffs
+                             << ", ptr " << selectedCoeffs << "\n";
+                    selectedCoeffs = nextSelectedCoeffs;
+                    const std::string nextSelectedN
+                        = nextHelperName("combine_selected_n");
+                    m_output << "  " << nextSelectedN << " = select i1 "
+                             << selectedThis << ", i32 " << candidate->srcN
+                             << ", i32 " << selectedN << "\n";
+                    selectedN = nextSelectedN;
+                    const std::string nextSelectedLower
+                        = nextHelperName("combine_selected_lower");
+                    m_output << "  " << nextSelectedLower << " = select i1 "
+                             << selectedThis << ", i32 " << candidate->lower
+                             << ", i32 " << selectedLower << "\n";
+                    selectedLower = nextSelectedLower;
+                    const std::string nextSelectedUpper
+                        = nextHelperName("combine_selected_upper");
+                    m_output << "  " << nextSelectedUpper << " = select i1 "
+                             << selectedThis << ", i32 " << candidate->upper
+                             << ", i32 " << selectedUpper << "\n";
+                    selectedUpper = nextSelectedUpper;
+                }
+
+                reusedCandidateFlag = nextHelperName("combine_reused");
+                m_output << "  " << reusedCandidateFlag << " = icmp sge i32 "
+                         << selectedCandidateId << ", 0\n";
                 const std::string reuseLabel = nextLabelName("combine_reuse");
                 const std::string allocLabel = nextLabelName("combine_alloc");
                 const std::string afterLabel
                     = nextLabelName("combine_after_alloc");
-                m_output << "  br i1 " << canReuse << ", label %" << reuseLabel
-                         << ", label %" << allocLabel << "\n";
+                m_output << "  br i1 " << reusedCandidateFlag << ", label %"
+                         << reuseLabel << ", label %" << allocLabel << "\n";
                 m_output << reuseLabel << ":\n";
-                std::string reuseExitLabel = emitZeroRange(
-                    candidate.srcCoeffs, resultL, candidate.lower);
-                reuseExitLabel = emitZeroRange(
-                    candidate.srcCoeffs, candidate.upper, resultR);
+                std::string reuseExitLabel
+                    = emitZeroRange(selectedCoeffs, resultL, selectedLower);
+                reuseExitLabel
+                    = emitZeroRange(selectedCoeffs, selectedUpper, resultR);
                 m_output << "  br label %" << afterLabel << "\n";
                 m_output << allocLabel << ":\n";
                 const std::string allocAddr
@@ -2874,22 +2964,16 @@ namespace {
                 resultAddr = nextHelperName("combine_result_addr_phi");
                 resultCoeffs = nextHelperName("combine_result_coeffs_phi");
                 resultOwnedN = nextHelperName("combine_result_n_phi");
-                reusedCandidateFlag = nextHelperName("combine_reused_phi");
                 m_output << "  " << resultAddr << " = phi ptr [ "
-                         << candidate.srcAddr << ", %" << reuseExitLabel
-                         << " ], [ " << allocAddr << ", %" << allocLabel
-                         << " ]\n";
+                         << selectedAddr << ", %" << reuseExitLabel << " ], [ "
+                         << allocAddr << ", %" << allocLabel << " ]\n";
                 m_output << "  " << resultCoeffs << " = phi ptr [ "
-                         << candidate.srcCoeffs << ", %" << reuseExitLabel
+                         << selectedCoeffs << ", %" << reuseExitLabel
                          << " ], [ " << allocCoeffs << ", %" << allocLabel
                          << " ]\n";
-                m_output << "  " << resultOwnedN << " = phi i32 [ "
-                         << candidate.srcN << ", %" << reuseExitLabel
-                         << " ], [ " << resultN << ", %" << allocLabel
-                         << " ]\n";
-                m_output << "  " << reusedCandidateFlag << " = phi i1 [ true, %"
-                         << reuseExitLabel << " ], [ false, %" << allocLabel
-                         << " ]\n";
+                m_output << "  " << resultOwnedN << " = phi i32 [ " << selectedN
+                         << ", %" << reuseExitLabel << " ], [ " << resultN
+                         << ", %" << allocLabel << " ]\n";
             } else {
                 resultAddr = nextHelperName("combine_result_addr");
                 m_output << "  " << resultAddr
@@ -2924,7 +3008,12 @@ namespace {
                 const std::string bodyLabel = nextLabelName("combine_body");
                 const std::string endLabel = nextLabelName("combine_end");
                 if (term.reuseCandidate) {
-                    m_output << "  br i1 " << reusedCandidateFlag << ", label %"
+                    const std::string termSelected
+                        = nextHelperName("combine_term_selected");
+                    m_output << "  " << termSelected << " = icmp eq i32 "
+                             << selectedCandidateId << ", "
+                             << term.reuseCandidateId << "\n";
+                    m_output << "  br i1 " << termSelected << ", label %"
                              << endLabel << ", label %" << preheaderLabel
                              << "\n";
                 } else {
@@ -2976,14 +3065,20 @@ namespace {
                 m_output << "  br label %" << condLabel << "\n";
                 m_output << endLabel << ":\n";
             }
-            if (reuseCandidateIndex >= 0) {
-                const CombineTermState& candidate
-                    = termStates[static_cast<size_t>(reuseCandidateIndex)];
+            for (const CombineTermState& candidate : termStates) {
+                if (!candidate.reuseCandidate) {
+                    continue;
+                }
+                const std::string keepCandidate
+                    = nextHelperName("combine_keep_candidate");
+                m_output << "  " << keepCandidate << " = icmp eq i32 "
+                         << selectedCandidateId << ", "
+                         << candidate.reuseCandidateId << "\n";
                 const std::string dropOldLabel
                     = nextLabelName("combine_drop_old");
                 const std::string doneLabel
                     = nextLabelName("combine_drop_done");
-                m_output << "  br i1 " << reusedCandidateFlag << ", label %"
+                m_output << "  br i1 " << keepCandidate << ", label %"
                          << doneLabel << ", label %" << dropOldLabel << "\n";
                 m_output << dropOldLabel << ":\n";
                 m_output << "  call void @__yesod_rt_free_ints(ptr "

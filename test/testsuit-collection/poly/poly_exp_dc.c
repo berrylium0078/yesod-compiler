@@ -19,6 +19,7 @@ poly set_coeff(poly g, int pos, mint val)
 poly derivative(poly f, int n)
 {
     int i = 1;
+    mint mi = mint(1);
     while (i < n) {
         f = set_coeff(f, i - 1, f[i] * mint(i));
         i = i + 1;
@@ -48,6 +49,7 @@ poly poly_exp_dc(poly f, int n)
         int len = lowbit(i);
         // accumulate contributions
         g = g + (g[i - len, i] * h)[i, i + len];
+        // g = g + (g[i - len, i] * h[0, len * 2])[i, i + len];
     }
 
     g = g[0, n];

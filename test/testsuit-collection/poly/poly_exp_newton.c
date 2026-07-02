@@ -15,15 +15,6 @@ poly set_coeff(poly g, int pos, mint val)
 {
     return g + (poly(val - g[pos]) << pos);
 }
-poly derivative(poly f, int n)
-{
-    int i = 1;
-    while (i < n) {
-        f = set_coeff(f, i - 1, f[i] * mint(i));
-        i = i + 1;
-    }
-    return f;
-}
 poly poly_inv(poly f, int n)
 {
     poly g = poly(mint(1) / f[0]);
@@ -34,6 +25,15 @@ poly poly_inv(poly f, int n)
         k = k * 2;
     }
     return g;
+}
+poly derivative(poly f, int n)
+{
+    int i = 1;
+    while (i < n) {
+        f = set_coeff(f, i - 1, f[i] * mint(i));
+        i = i + 1;
+    }
+    return f;
 }
 poly integral(poly f, int n)
 {

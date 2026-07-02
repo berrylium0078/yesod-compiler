@@ -158,3 +158,23 @@ add_test(
     "${CMAKE_CURRENT_SOURCE_DIR}/testsuit-collection/poly"
     --timeout-seconds 60
 )
+
+# Large-scale polynomial stress test (n=10^5).
+# Disabled by default because it takes minutes and consumes significant memory.
+# Enable with: ctest -R poly_stress -V
+add_executable(poly_stress_test poly_stress_test.cpp)
+target_link_libraries(poly_stress_test core)
+add_dependencies(poly_stress_test compiler)
+target_compile_definitions(poly_stress_test
+  PRIVATE YESOD_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+add_test(
+  NAME poly_stress_test
+  COMMAND poly_stress_test
+)
+set_tests_properties(poly_stress_test
+  PROPERTIES
+    DISABLED ON
+    TIMEOUT 600
+    LABELS "stress;poly;manual"
+)

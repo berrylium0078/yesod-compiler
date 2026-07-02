@@ -294,7 +294,7 @@ bool buildMintRuntimeLlvmPrelude(std::string& prelude)
     if (!writeTextFile(runtimeSource.path(), std::string(kMintRuntimeSource))) {
         return false;
     }
-    if (!runCommand("clang -S -emit-llvm -O0 -target "
+    if (!runCommand("clang -S -emit-llvm -O2 -target "
                     "x86_64-pc-linux-gnu "
             + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
         return false;
@@ -311,7 +311,7 @@ bool buildPolyRuntimeLlvmPrelude(std::string& prelude)
             std::string(yesod::backend::LLVM_POLY_RUNTIME_SOURCE))) {
         return false;
     }
-    if (!runCommand("clang -S -emit-llvm -O0 -target "
+    if (!runCommand("clang -S -emit-llvm -O2 -target "
                     "x86_64-pc-linux-gnu "
             + runtimeSource.path() + " -o " + runtimeLlvm.path())) {
         return false;
