@@ -94,12 +94,18 @@ void writeTextFile(const fs::path& path, const std::string& contents)
 struct TempFile {
     explicit TempFile(const std::string& suffix)
     {
-        std::string pattern = "/tmp/poly_stress_XXXXXX" + suffix;
+        const char* tmpDir = std::getenv("TMPDIR");
+        if (!tmpDir || tmpDir[0] == '\0') {
+            tmpDir = "/tmp";
+        }
+        std::string pattern
+            = std::string(tmpDir) + "/poly_stress_XXXXXX" + suffix;
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
         const int fd = ::mkstemps(
             buffer.data(), static_cast<int>(suffix.size()));
-        require(fd != -1, "failed to create temporary file under /tmp");
+        require(fd != -1,
+            "failed to create temporary file in " + std::string(tmpDir));
         ::close(fd);
         m_path = buffer.data();
     }

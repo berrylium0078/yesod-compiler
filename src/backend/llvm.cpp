@@ -44,17 +44,18 @@ namespace {
     // ─── Minified name allocator ──────────────────────────────────────────
 
     class NameAllocator {
-      public:
+    public:
         // Characters valid for the first position, in ASCII order.
         // First-char rule: if it's a digit, the entire name must be digits.
         // If it's a letter/$/_/., the rest can be any valid char.
+        // First-position chars: only `[a-zA-Z$._]` — no digits.
         static constexpr std::string_view kFirstChars
-            = "$.0123456789"
+            = "$."
               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
               "_"
               "abcdefghijklmnopqrstuvwxyz";
 
-        // Characters valid for non-first positions.
+        // Non-first-position chars: `[a-zA-Z$._0-9]`.
         static constexpr std::string_view kRestChars
             = "$.0123456789"
               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -63,7 +64,6 @@ namespace {
 
         void reserve(const std::string& name) { m_used.insert(name); }
 
-        // Check if a name should be skipped (e.g. reserved names like "main")
         bool isReserved(const std::string& name) const
         {
             return m_reservedSet.contains(name);
@@ -91,20 +91,10 @@ namespace {
 
         bool isMinified() const { return true; }
 
-      private:
+    private:
         std::set<std::string> m_used;
         std::set<std::string> m_reservedSet;
         std::string m_next;
-
-        static bool isAllDigits(const std::string& s)
-        {
-            return !s.empty()
-                && std::isdigit(static_cast<unsigned char>(s[0]))
-                && std::all_of(
-                    s.begin(), s.end(), [](char c) -> bool {
-                        return std::isdigit(static_cast<unsigned char>(c));
-                    });
-        }
 
         static std::string advance(const std::string& name)
         {
@@ -114,32 +104,13 @@ namespace {
 
             const int len = static_cast<int>(name.size());
 
-            if (isAllDigits(name)) {
-                std::string s = name;
-                int i = len - 1;
-                while (i >= 0 && s[i] == '9') {
-                    s[i] = '0';
-                    --i;
-                }
-                if (i >= 0) {
-                    s[i] = s[i] + 1;
-                    return s;
-                }
-                // All-9s overflow → transition to 'A'-prefixed identifier
-                return std::string(1, 'A')
-                    + std::string(len - 1, kRestChars[0]);
-            }
-
-            // Identifier-style name
             std::string s = name;
             int i = len - 1;
             while (i >= 0) {
-                const auto& charSet
-                    = (i == 0) ? kFirstChars : kRestChars;
+                const auto& charSet = (i == 0) ? kFirstChars : kRestChars;
                 const char c = s[i];
                 const auto pos = charSet.find(c);
-                if (pos != std::string_view::npos
-                    && pos + 1 < charSet.size()) {
+                if (pos != std::string_view::npos && pos + 1 < charSet.size()) {
                     s[i] = charSet[pos + 1];
                     for (int j = i + 1; j < len; ++j) {
                         s[j] = kRestChars[0];
@@ -154,11 +125,11 @@ namespace {
     };
 
     class NullNameAllocator {
-      public:
+    public:
         void reserve(const std::string&) { }
         bool isReserved(const std::string&) const { return false; }
         void reservePermanent(const std::string&) { }
-        std::string allocate() { return {}; }
+        std::string allocate() { return { }; }
         static constexpr bool isMinified() { return false; }
     };
 
@@ -712,7 +683,7 @@ namespace {
             if (allocator) {
                 return "%" + allocator->allocate();
             }
-            return "%" + std::to_string(helperTempId++);
+            return "%v" + std::to_string(helperTempId++);
         }
     };
 
@@ -1601,6 +1572,7 @@ namespace {
                 BlockLabelMap minified;
                 for (const auto& [orig, oldLabel] : oldLabels) {
                     minified[orig] = labelMap[oldLabel];
+                    m_alloc->reservePermanent(minified[orig]);
                 }
                 m_blockLabels = std::move(minified);
                 // Remap incoming edge predLabels
@@ -1613,6 +1585,7 @@ namespace {
                             auto it = labelMap.find(edge.predLabel);
                             if (it != labelMap.end()) {
                                 edge.predLabel = it->second;
+                                m_alloc->reservePermanent(edge.predLabel);
                                 continue;
                             }
                             // Check if it's an edge block label
@@ -1631,6 +1604,8 @@ namespace {
                                     if (lit != labelMap.end()) {
                                         edge.predLabel = "__ssa_edge_"
                                             + lit->second + "_" + suffix;
+                                        m_alloc->reservePermanent(
+                                            edge.predLabel);
                                     }
                                 }
                             }
@@ -1657,8 +1632,7 @@ namespace {
                 emitFunctionSignature(
                     m_function, m_program, m_name, m_output, resolver);
             } else {
-                emitFunctionSignature(
-                    m_function, m_program, m_name, m_output);
+                emitFunctionSignature(m_function, m_program, m_name, m_output);
             }
 
             // ── Build edge plans ─────────────────────────────────────────
@@ -1703,24 +1677,28 @@ namespace {
         // ── Name resolution ──────────────────────────────────────────
         std::string resolveName(const std::string& spelling)
         {
-            if (!m_alloc) return spelling;
+            if (!m_alloc)
+                return spelling;
 
-            // spelling already includes @ or % prefix (or none for block labels)
-            const char prefix = (!spelling.empty()
-                                   && (spelling[0] == '@' || spelling[0] == '%'))
+            // spelling already includes @ or % prefix (or none for block
+            // labels)
+            const char prefix
+                = (!spelling.empty()
+                      && (spelling[0] == '@' || spelling[0] == '%'))
                 ? spelling[0]
                 : '\0';
-            const std::string bare
-                = prefix ? spelling.substr(1) : spelling;
+            const std::string bare = prefix ? spelling.substr(1) : spelling;
 
             auto it = m_nameCache.find(bare);
             if (it != m_nameCache.end()) {
-                if (prefix) return prefix + it->second;
+                if (prefix)
+                    return prefix + it->second;
                 return it->second;
             }
             std::string minified = m_alloc->allocate();
             m_nameCache[bare] = minified;
-            if (prefix) return prefix + minified;
+            if (prefix)
+                return prefix + minified;
             return minified;
         }
 
@@ -1732,7 +1710,11 @@ namespace {
 
         std::string nextLabelName(const std::string& stem)
         {
-            return stripPrefix(nextHelperName(stem));
+            std::string label = stripPrefix(nextHelperName(stem));
+            if (!label.empty() && label[0] >= '0' && label[0] <= '9') {
+                label = "L" + label;
+            }
+            return label;
         }
 
         std::string emitIntToMint(const std::string& value)
@@ -1780,8 +1762,7 @@ namespace {
         }
 
         // Resolve names in Values: Symbol names get minified
-        std::string emitValueOperandResolved(
-            const koopa_ir::Value& value)
+        std::string emitValueOperandResolved(const koopa_ir::Value& value)
         {
             if (const auto* sym = std::get_if<koopa_ir::Symbol>(&value)) {
                 return resolveName(sym->spelling);
@@ -1948,8 +1929,7 @@ namespace {
                 }
             }
             for (size_t i = 0; i < values.size(); ++i) {
-                const std::string operand
-                    = emitValueOperandResolved(values[i]);
+                const std::string operand = emitValueOperandResolved(values[i]);
                 if (i >= types.size() || !isOwnedTypeString(types[i])) {
                     plan.operands.push_back(operand);
                     continue;
@@ -2089,8 +2069,7 @@ namespace {
                     if (leaf.kind == koopa_ir::PointwiseLeafKind::mint) {
                         return emitMintOperand(leaf.value);
                     }
-                    const std::string pv
-                        = emitValueOperandResolved(leaf.value);
+                    const std::string pv = emitValueOperandResolved(leaf.value);
                     const std::string values = nextHelperName("pv_values");
                     m_output << "  " << values << " = extractvalue " << PV_TYPE
                              << " " << pv << ", 0\n";
@@ -2273,11 +2252,10 @@ namespace {
                     const std::string elemTy
                         = (ptIt != m_pointees.end()) ? ptIt->second : "i32";
                     if (elemTy == POLY_TYPE) {
-                        const std::string rawName
-                            = resolveName(sname) + "_raw";
+                        const std::string rawName = resolveName(sname) + "_raw";
                         m_output << "  " << rawName << " = load " << elemTy
-                                 << ", ptr "
-                                 << resolveName(ld.source.spelling) << "\n";
+                                 << ", ptr " << resolveName(ld.source.spelling)
+                                 << "\n";
                         emitPolyCloneTo(resolveName(sname), rawName);
                     } else {
                         m_output << "  " << resolveName(sname) << " = load "
@@ -2302,11 +2280,11 @@ namespace {
                     const std::string gepTy = (ptIt != m_pointees.end())
                         ? ptIt->second
                         : "[0 x i32]";
-                    m_output << "  " << resolveName(sname)
-                             << " = getelementptr " << gepTy << ", ptr "
-                             << resolveName(ge.source.spelling)
-                             << ", i32 0, i32 "
-                             << emitValueOperandResolved(ge.index) << "\n";
+                    m_output
+                        << "  " << resolveName(sname) << " = getelementptr "
+                        << gepTy << ", ptr " << resolveName(ge.source.spelling)
+                        << ", i32 0, i32 " << emitValueOperandResolved(ge.index)
+                        << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::BinaryExpr>& binRef) {
                     emitBinaryExprImpl(m_program[binRef], sname);
@@ -2366,8 +2344,7 @@ namespace {
                         emitPolyCloneTo(resolveName(sname),
                             emitValueOperandResolved(copy.value));
                     } else {
-                        m_output << "  " << resolveName(sname)
-                                 << " = add i32 "
+                        m_output << "  " << resolveName(sname) << " = add i32 "
                                  << emitValueOperandResolved(copy.value)
                                  << ", 0\n";
                     }
@@ -2379,10 +2356,10 @@ namespace {
                         : getAttr.attr == koopa_ir::PolyAttr::addr ? 1
                         : getAttr.attr == koopa_ir::PolyAttr::l    ? 3
                                                                    : 4;
-                    m_output << "  " << resolveName(sname)
-                             << " = extractvalue " << POLY_TYPE << " "
-                             << emitValueOperandResolved(getAttr.value)
-                             << ", " << index << "\n";
+                    m_output << "  " << resolveName(sname) << " = extractvalue "
+                             << POLY_TYPE << " "
+                             << emitValueOperandResolved(getAttr.value) << ", "
+                             << index << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::SetAttrExpr>& setAttrRef) {
                     const auto& setAttr = m_program[setAttrRef];
@@ -2404,10 +2381,9 @@ namespace {
                               || setAttr.attr == koopa_ir::PolyAttr::addr)
                         ? "ptr"
                         : "i32";
-                    m_output << "  " << resolveName(sname)
-                             << " = insertvalue " << POLY_TYPE << " " << input
-                             << ", " << valueType << " " << value << ", "
-                             << index << "\n";
+                    m_output << "  " << resolveName(sname) << " = insertvalue "
+                             << POLY_TYPE << " " << input << ", " << valueType
+                             << " " << value << ", " << index << "\n";
                 },
                 [&](const yesod::Ref<koopa_ir::SelectExpr>& selectRef) {
                     const auto& select = m_program[selectRef];
@@ -2439,8 +2415,8 @@ namespace {
                 },
                 [&](const yesod::Ref<koopa_ir::NttExpr>& nttRef) {
                     const auto& ntt = m_program[nttRef];
-                    const PolyFields input = emitPolyFields(
-                        emitValueOperandResolved(ntt.value));
+                    const PolyFields input
+                        = emitPolyFields(emitValueOperandResolved(ntt.value));
                     const std::string length
                         = emitValueOperandResolved(ntt.length);
                     const std::string values = nextHelperName("pv_ntt_values");
@@ -2626,8 +2602,8 @@ namespace {
             if (elemTy == POLY_TYPE) {
                 const std::string oldValue = nextHelperName("poly_store_old");
                 m_output << "  " << oldValue << " = load " << POLY_TYPE
-                         << ", ptr "
-                         << resolveName(store.destination.spelling) << "\n";
+                         << ", ptr " << resolveName(store.destination.spelling)
+                         << "\n";
                 emitOwnedValueDropByType(std::string(POLY_TYPE), oldValue);
                 storeValue = emitPolyCloneValue(storeValue);
             } else {
@@ -2747,20 +2723,20 @@ namespace {
                          << lhs_typed << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitAnd:
-                m_output << "  " << resolveName(sname) << " = and "
-                         << lhs_typed << ", " << rhs_bare << "\n";
+                m_output << "  " << resolveName(sname) << " = and " << lhs_typed
+                         << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitOr:
-                m_output << "  " << resolveName(sname) << " = or "
-                         << lhs_typed << ", " << rhs_bare << "\n";
+                m_output << "  " << resolveName(sname) << " = or " << lhs_typed
+                         << ", " << rhs_bare << "\n";
                 break;
             case BOp::bitXor:
-                m_output << "  " << resolveName(sname) << " = xor "
-                         << lhs_typed << ", " << rhs_bare << "\n";
+                m_output << "  " << resolveName(sname) << " = xor " << lhs_typed
+                         << ", " << rhs_bare << "\n";
                 break;
             case BOp::shl:
-                m_output << "  " << resolveName(sname) << " = shl "
-                         << lhs_typed << ", " << rhs_bare << "\n";
+                m_output << "  " << resolveName(sname) << " = shl " << lhs_typed
+                         << ", " << rhs_bare << "\n";
                 break;
             case BOp::shr:
                 m_output << "  " << resolveName(sname) << " = lshr "
@@ -2874,8 +2850,7 @@ namespace {
                 const std::string srcR = nextHelperName("combine_src_r");
                 m_output << "  " << srcR << " = extractvalue " << POLY_TYPE
                          << " " << src << ", 4\n";
-                const std::string start
-                    = emitValueOperandResolved(term.start);
+                const std::string start = emitValueOperandResolved(term.start);
                 const std::string endValue = term.end.has_value()
                     ? emitValueOperandResolved(*term.end)
                     : std::to_string(INF_END);
@@ -2896,8 +2871,7 @@ namespace {
                 const std::string hasTerm = nextHelperName("combine_has_term");
                 m_output << "  " << hasTerm << " = icmp slt i32 " << lower
                          << ", " << upper << "\n";
-                const std::string shift
-                    = emitValueOperandResolved(term.shift);
+                const std::string shift = emitValueOperandResolved(term.shift);
                 const std::string termL = nextHelperName("combine_term_l");
                 m_output << "  " << termL << " = sub i32 " << lower << ", "
                          << shift << "\n";
