@@ -31,16 +31,10 @@ static const int MONT_R = 301989884;
 static const int MONT_R2 = 932051910;
 static const int MONT_U = 998244351;
 static const int YESOD_MAX_LOGN = 23;
-static const int YESOD_NTT_ROOTS[24] = { 301989884, -301989884, -306948983,
-    -109640866, 54518517, -429836493, 232329203, 34051923, 5152499, -252999103,
-    -173318384, -181472998, -224654934, 272471756, -326751991, 269053879,
-    50676799, 280400066, -343413670, 441361737, 219694500, 173964571,
-    260083352, -216872702 };
-static const int YESOD_NTT_IROOTS[24] = { 301989884, -301989884, 306948983,
-    307583142, -49870511, -83114827, 188046825, 307336038, -336865748,
-    -138951703, 446928399, 99752712, -405289730, 154089990, -249951332,
-    -137071299, 266982935, -150170224, -312576529, 255387832, 323328994,
-    -335667732, -447228759, -41915020 };
+static const int YESOD_PRIMITIVE_ROOT = 3;
+static int *yesodNttRoots = (int *)0;
+static int yesodNttRootCapacity = 0;
+static int yesodNttNextRootLim = 1;
 
 static int __yesod_rt_mont_reduce(i64 value) {
     int q = (int)value * MONT_U;
@@ -95,6 +89,47 @@ static int __yesod_rt_mint_inv(int value) {
         return 0;
     }
     return __yesod_rt_mint_pow(value, MOD - 2);
+}
+
+static void __yesod_rt_reserve_ntt_roots(int count) {
+    if (yesodNttRootCapacity >= count) {
+        return;
+    }
+    int newCapacity = 1;
+    while (newCapacity < count) {
+        newCapacity <<= 1;
+    }
+    int *newRoots = (int *)malloc((usize)newCapacity * sizeof(int));
+    for (int i = 0; i < newCapacity; ++i) {
+        newRoots[i] = 0;
+    }
+    for (int i = 0; i < yesodNttRootCapacity; ++i) {
+        newRoots[i] = yesodNttRoots[i];
+    }
+    if (yesodNttRoots != (int *)0) {
+        free(yesodNttRoots);
+    }
+    yesodNttRoots = newRoots;
+    yesodNttRootCapacity = newCapacity;
+    yesodNttRoots[0] = MONT_R;
+}
+
+static void __yesod_rt_prepare_ntt_roots(int targetLim) {
+    __yesod_rt_reserve_ntt_roots(1);
+    if (targetLim < 1 || yesodNttNextRootLim > targetLim) {
+        return;
+    }
+    __yesod_rt_reserve_ntt_roots(targetLim << 1);
+    int root = __yesod_rt_mint_from_int(YESOD_PRIMITIVE_ROOT);
+    while (yesodNttNextRootLim <= targetLim) {
+        int step = __yesod_rt_mint_pow(
+            root, (MOD >> 2) / yesodNttNextRootLim);
+        for (int i = 0; i < yesodNttNextRootLim; ++i) {
+            yesodNttRoots[yesodNttNextRootLim + i]
+                = __yesod_rt_mint_mul(yesodNttRoots[i], step);
+        }
+        yesodNttNextRootLim <<= 1;
+    }
 }
 
 __attribute__((used)) int *__yesod_rt_alloc_ints(int count) {
@@ -200,56 +235,56 @@ static void __yesod_rt_transform(int *out, const int *in, int length, int invers
         return;
     }
 
+    __yesod_rt_prepare_ntt_roots(length >> 2);
+
     if (inverse == 0) {
-        int k = logn;
-        int len = length;
-        int half = length / 2;
-        while (k >= 1) {
-            int wlen = YESOD_NTT_ROOTS[k];
+        int mid = length >> 1;
+        while (mid > 0) {
+            int w = 0;
             int i = 0;
             while (i < length) {
-                int w = MONT_R;
+                int root = yesodNttRoots[w];
                 int j = 0;
-                while (j < half) {
-                    int u = out[i + j];
-                    int v = out[i + j + half];
-                    out[i + j] = __yesod_rt_mint_add(u, v);
-                    out[i + j + half]
-                        = __yesod_rt_mint_mul(__yesod_rt_mint_sub(u, v), w);
-                    w = __yesod_rt_mint_mul(w, wlen);
+                while (j < mid) {
+                    int left = out[i + j];
+                    int right = __yesod_rt_mint_mul(root, out[i + mid + j]);
+                    out[i + j] = __yesod_rt_mint_add(left, right);
+                    out[i + mid + j] = __yesod_rt_mint_sub(left, right);
                     ++j;
                 }
-                i += len;
+                i += mid << 1;
+                ++w;
             }
-            len = half;
-            half /= 2;
-            --k;
+            mid >>= 1;
         }
         return;
     }
 
-    int k = 1;
-    int len = 2;
-    int half = 1;
-    while (k <= logn) {
-        int wlen = YESOD_NTT_IROOTS[k];
+    int mid = 1;
+    while (mid < length) {
+        int w = 0;
         int i = 0;
         while (i < length) {
-            int w = MONT_R;
             int j = 0;
-            while (j < half) {
-                int u = out[i + j];
-                int v = __yesod_rt_mint_mul(out[i + j + half], w);
-                out[i + j] = __yesod_rt_mint_add(u, v);
-                out[i + j + half] = __yesod_rt_mint_sub(u, v);
-                w = __yesod_rt_mint_mul(w, wlen);
+            int root = yesodNttRoots[w];
+            while (j < mid) {
+                int left = out[i + j];
+                int right = out[i + mid + j];
+                out[i + j] = __yesod_rt_mint_add(left, right);
+                out[i + mid + j]
+                    = __yesod_rt_mint_mul(root, __yesod_rt_mint_sub(left, right));
                 ++j;
             }
-            i += len;
+            i += mid << 1;
+            ++w;
         }
-        ++k;
-        half = len;
-        len += len;
+        mid <<= 1;
+    }
+
+    for (int left = 1, right = length - 1; left < right; ++left, --right) {
+        int tmp = out[left];
+        out[left] = out[right];
+        out[right] = tmp;
     }
 
     int invLength = __yesod_rt_mint_inv(__yesod_rt_mint_from_int(length));

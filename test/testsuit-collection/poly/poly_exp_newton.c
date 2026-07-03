@@ -35,12 +35,24 @@ poly derivative(poly f, int n)
     }
     return f;
 }
+
+mint tmp[1000000];
 poly integral(poly f, int n)
 {
-    int i = n;
+    int i = 0;
+    mint m1 = mint(1), mi = mint(0), mifac = mint(1);
+    while (i < n) {
+        tmp[i] = mifac;
+        mi = mi + m1;
+        i = i + 1;
+        mifac = mifac * mi;
+    }
+    mifac = m1 / mifac;
     while (i > 0) {
-        f = set_coeff(f, i, f[i - 1] / mint(i));
+        f = set_coeff(f, i, f[i - 1] * mifac * tmp[i - 1]);
+        mifac = mifac * mi;
         i = i - 1;
+        mi = mi - m1;
     }
     f = set_coeff(f, 0, mint(0));
     return f;

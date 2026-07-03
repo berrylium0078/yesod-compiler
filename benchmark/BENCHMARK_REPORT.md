@@ -6,15 +6,15 @@ n = 131072  |  Runs per contestant: 10
 
 | Test Case | Contestant | Avg (ms) | StdDev (ms) | Min (ms) | Max (ms) |
 |-----------|------------|---------:|------------:|---------:|---------:|
-| poly_div  | compiler (SysY→LLVM→-O2)     |     119.5 |       3.3 |     115.8 |     126.9 |
-|           | std (reference C++)          |      55.7 |       4.5 |      53.3 |      68.3 |
-|           | baseline (author C++)        |     208.3 |       1.1 |     206.5 |     209.7 |
-| poly_exp_dc | compiler (SysY→LLVM→-O2)     |     170.2 |       1.4 |     168.1 |     172.0 |
-|           | std (reference C++)          |     435.4 |      11.3 |     424.2 |     453.1 |
-|           | baseline (author C++)        |     222.2 |       5.2 |     212.3 |     230.8 |
-| poly_exp_newton | compiler (SysY→LLVM→-O2)     |     183.9 |       3.0 |     180.1 |     188.3 |
-|           | std (reference C++)          |      76.0 |       0.8 |      74.9 |      77.0 |
-|           | baseline (author C++)        |     229.1 |       1.5 |     227.0 |     231.7 |
+| poly_div  | compiler (SysY→LLVM→-O2)     |      83.3 |       5.5 |      78.1 |      96.8 |
+|           | std (reference C++)          |      57.2 |       1.5 |      56.0 |      60.9 |
+|           | baseline (author C++)        |      88.2 |       1.3 |      87.1 |      91.3 |
+| poly_exp_dc | compiler (SysY→LLVM→-O2)     |     133.6 |       2.6 |     130.2 |     139.4 |
+|           | std (reference C++)          |     449.5 |       7.9 |     440.2 |     463.6 |
+|           | baseline (author C++)        |      84.7 |       1.5 |      83.2 |      88.1 |
+| poly_exp_newton | compiler (SysY→LLVM→-O2)     |     110.9 |       6.4 |     106.9 |     128.5 |
+|           | std (reference C++)          |      80.9 |       1.9 |      78.8 |      84.4 |
+|           | baseline (author C++)        |     109.6 |       2.0 |     107.2 |     113.1 |
 
 ---
-*Benchmark executed on 2026-07-03 00:04:24*
+*Benchmark executed on 2026-07-03 12:45:31*
